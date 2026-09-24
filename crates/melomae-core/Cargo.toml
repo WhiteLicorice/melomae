@@ -1,0 +1,8 @@
+[package]
+name = "melomae-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dev-dependencies]
+cargo_metadata = "0.23.1"
