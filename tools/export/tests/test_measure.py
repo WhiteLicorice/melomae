@@ -1,4 +1,8 @@
-from export.measure import peak_working_set_bytes
+import pytest
+
+pytest.importorskip("torch")
+
+from export.measure import peak_working_set_bytes  # noqa: E402
 
 
 def test_peak_working_set_reports_a_real_value():

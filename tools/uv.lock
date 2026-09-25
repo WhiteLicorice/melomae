@@ -412,7 +412,12 @@ wheels = [
 name = "melomae-tools"
 version = "0.1.0"
 source = { virtual = "." }
-dependencies = [
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+export = [
     { name = "huggingface-hub" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
@@ -428,13 +433,11 @@ dependencies = [
     { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
 [package.metadata]
-requires-dist = [
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.0" }]
+export = [
     { name = "huggingface-hub", specifier = ">=0.24" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "omegaconf", specifier = ">=2.3" },
@@ -445,9 +448,6 @@ requires-dist = [
     { name = "soundfile", specifier = ">=0.12" },
     { name = "torch", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cpu" },
 ]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.0" }]
 
 [[package]]
 name = "ml-dtypes"

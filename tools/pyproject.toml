@@ -3,7 +3,13 @@ name = "melomae-tools"
 version = "0.1.0"
 description = "Model export and build tooling for Melomae."
 requires-python = ">=3.10"
-dependencies = [
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+# The ONNX export and its tests. CI sets UV_NO_GROUP=export to skip the
+# torch install. The export tests then skip.
+export = [
     "huggingface-hub>=0.24",
     "numpy>=1.26",
     "omegaconf>=2.3",
@@ -15,11 +21,9 @@ dependencies = [
     "torch==2.11.0",
 ]
 
-[dependency-groups]
-dev = ["pytest>=8.0"]
-
 [tool.uv]
 package = false
+default-groups = ["dev", "export"]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

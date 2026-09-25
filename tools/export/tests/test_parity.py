@@ -1,6 +1,10 @@
-import numpy as np
 import pytest
-import torch
+
+# CI skips the export group (UV_NO_GROUP=export), so torch is absent there.
+pytest.importorskip("torch")
+
+import numpy as np  # noqa: E402
+import torch  # noqa: E402
 
 from export.export import (
     build_onnx_session,
