@@ -19,12 +19,15 @@ from pathlib import Path
 
 import torch
 
-try:
-    from .real_dsp import RealApollo
-except ImportError:  # Run as a script: the package context is absent.
-    from real_dsp import RealApollo
-
 HERE = Path(__file__).resolve().parent
+# Import the wrapper by its package path on every entry path. The exporter
+# writes the module path into node metadata, so a script-relative import
+# changes the ONNX file bytes.
+if str(HERE.parent) not in sys.path:
+    sys.path.insert(0, str(HERE.parent))
+
+from export.real_dsp import RealApollo  # noqa: E402
+
 VENDOR = HERE / "vendor"
 CACHE = HERE / ".cache"
 if str(VENDOR) not in sys.path:
