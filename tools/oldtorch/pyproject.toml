@@ -1,0 +1,23 @@
+[project]
+name = "melomae-oldtorch"
+version = "0.1.0"
+description = "Stock Apollo on torch 2.0.0, for the task 01 old-against-new torch comparison."
+requires-python = "==3.10.*"
+dependencies = [
+    "huggingface-hub>=0.24",
+    "numpy<2",
+    "omegaconf>=2.3",
+    "soundfile>=0.12",
+    "torch==2.0.0",
+]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
