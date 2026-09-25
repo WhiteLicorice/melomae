@@ -13,6 +13,7 @@ import argparse
 import json
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -58,11 +59,19 @@ def peak_working_set_bytes() -> int:
     return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024)
 
 
-def run_ort_once(seconds: float) -> dict:
+def run_ort_once(seconds: float, channels: int = CHANNELS) -> dict:
+    baseline = peak_working_set_bytes()
     session = build_onnx_session(ARTIFACT)
-    audio = load_segment(seconds)
+    audio = load_segment(seconds)[:, :channels]
+    loaded = peak_working_set_bytes()
     session.run(None, {"audio": audio.numpy()})
-    return {"seconds": seconds, "peak_working_set_bytes": peak_working_set_bytes()}
+    return {
+        "seconds": seconds,
+        "channels": channels,
+        "before_session_bytes": baseline,
+        "after_session_bytes": loaded,
+        "peak_working_set_bytes": peak_working_set_bytes(),
+    }
 
 
 def time_ort(session, audio: torch.Tensor) -> float:
@@ -78,9 +87,86 @@ def time_torch(model, audio: torch.Tensor) -> float:
         return time.perf_counter() - start
 
 
-def measure(checkpoint: Path) -> dict:
-    torch.set_num_threads(physical_cores())
+def measure_realtime(apollo, session, rounds: int, channels: int) -> dict:
+    """Time torch and ONNX Runtime in alternating rounds and report medians.
+
+    Each round runs both engines once. The order flips every round, so a
+    thermal or background-load drift affects both engines equally. The
+    ratio is the median of the per-round ratios.
+
+    Stereo at 6 s pages on a 15 GB machine, because the ONNX Runtime arena
+    keeps its 7 GB peak while torch allocates. Mono is the shipped path
+    (Stack §C) and does not page.
+    """
+    realtime = {}
+    for seconds in (1.0, 3.0, 6.0):
+        audio = load_segment(seconds)[:, :channels]
+        torch_times, ort_times = [], []
+        for index in range(rounds):
+            if index % 2 == 0:
+                torch_times.append(time_torch(apollo, audio))
+                ort_times.append(time_ort(session, audio))
+            else:
+                ort_times.append(time_ort(session, audio))
+                torch_times.append(time_torch(apollo, audio))
+        ratios = [o / t for o, t in zip(ort_times, torch_times)]
+        realtime[str(seconds)] = {
+            "rounds": rounds,
+            "torch_rtf_median": float(np.median(torch_times)) / seconds,
+            "onnx_rtf_median": float(np.median(ort_times)) / seconds,
+            "ratio_median": float(np.median(ratios)),
+            "ratio_min": float(min(ratios)),
+            "ratio_max": float(max(ratios)),
+        }
+    return realtime
+
+
+def channel_independence(audio: torch.Tensor, threads: int) -> dict:
+    session = build_onnx_session(ARTIFACT, intra_op_threads=threads)
+    stereo = session.run(None, {"audio": audio.numpy()})[0]
+    left = session.run(None, {"audio": audio[:, :1].numpy()})[0]
+    right = session.run(None, {"audio": audio[:, 1:].numpy()})[0]
+    return {
+        "left_max_abs": float(np.abs(stereo[:, :1] - left).max()),
+        "right_max_abs": float(np.abs(stereo[:, 1:] - right).max()),
+    }
+
+
+def shipped_path_parity(stock: np.ndarray, session, audio: torch.Tensor) -> dict:
+    """Compare stock torch on stereo with ONNX Runtime on one channel at a time.
+
+    The engine runs one channel at a time (Stack §C), so this is the output
+    that ships.
+    """
+    left = session.run(None, {"audio": audio[:, :1].numpy()})[0]
+    right = session.run(None, {"audio": audio[:, 1:].numpy()})[0]
+    difference = np.abs(stock - np.concatenate([left, right], axis=1))
+    return {
+        "max_abs": float(difference.max()),
+        "rmse": float(np.sqrt(np.mean(difference**2))),
+    }
+
+
+def peak_in_subprocess(seconds: float, channels: int) -> dict:
+    raw = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--peak-seconds",
+            str(seconds),
+            "--peak-channels",
+            str(channels),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(raw.stdout.strip().splitlines()[-1])
+
+
+def measure(checkpoint: Path, rounds: int) -> dict:
     threads = physical_cores()
+    torch.set_num_threads(threads)
     apollo = load_apollo(checkpoint)
     session = build_onnx_session(ARTIFACT)
 
@@ -89,19 +175,10 @@ def measure(checkpoint: Path) -> dict:
     warm = load_segment(1.0)
     time_torch(apollo, warm)
     session.run(None, {"audio": warm.numpy()})
-
-    realtime = {}
-    for seconds in (1.0, 3.0, 6.0):
-        audio = load_segment(seconds)
-        torch_seconds = time_torch(apollo, audio)
-        ort_seconds = time_ort(session, audio)
-        realtime[str(seconds)] = {
-            "torch_rtf": torch_seconds / seconds,
-            "onnx_rtf": ort_seconds / seconds,
-            "torch_wall_seconds": torch_seconds,
-            "onnx_wall_seconds": ort_seconds,
-        }
-    results["realtime"] = realtime
+    results["realtime"] = {
+        "mono": measure_realtime(apollo, session, rounds, 1),
+        "stereo": measure_realtime(apollo, session, rounds, CHANNELS),
+    }
 
     audio = load_segment(6.0)
     with torch.no_grad():
@@ -113,41 +190,34 @@ def measure(checkpoint: Path) -> dict:
         "rmse": float(np.sqrt(np.mean(difference**2))),
     }
 
-    stereo = session.run(None, {"audio": audio.numpy()})[0]
-    left = session.run(None, {"audio": audio[:, :1].numpy()})[0]
-    right = session.run(None, {"audio": audio[:, 1:].numpy()})[0]
     results["channel_independence_6s"] = {
-        "left_max_abs": float(np.abs(stereo[:, :1] - left).max()),
-        "right_max_abs": float(np.abs(stereo[:, 1:] - right).max()),
+        str(count): channel_independence(audio, count) for count in sorted({1, 4, threads})
     }
+    results["shipped_path_6s"] = shipped_path_parity(stock, session, audio)
 
     peaks = {}
-    for seconds in (2.0, 6.0):
-        raw = subprocess.run(
-            [sys.executable, str(Path(__file__).resolve()), "--peak-seconds", str(seconds)],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        peaks[str(seconds)] = json.loads(raw.stdout)
-    slope = (peaks["6.0"]["peak_working_set_bytes"] - peaks["2.0"]["peak_working_set_bytes"]) / (
-        (6.0 - 2.0) * CHANNELS
-    )
-    results["peak_working_set"] = {
-        "at_2s_bytes": peaks["2.0"]["peak_working_set_bytes"],
-        "at_6s_bytes": peaks["6.0"]["peak_working_set_bytes"],
-        "bytes_per_channel_second": slope,
-    }
+    for channels in (1, CHANNELS):
+        points = [peak_in_subprocess(seconds, channels) for seconds in (1.0, 2.0, 4.0, 6.0)]
+        first, last = points[0], points[-1]
+        peaks[f"{channels}ch"] = {
+            "points": points,
+            "bytes_per_channel_second": (
+                last["peak_working_set_bytes"] - first["peak_working_set_bytes"]
+            )
+            / ((last["seconds"] - first["seconds"]) * channels),
+        }
+    results["peak_working_set"] = peaks
     return results
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--rounds", type=int, default=7)
     parser.add_argument("--peak-seconds", type=float, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--peak-channels", type=int, default=CHANNELS, help=argparse.SUPPRESS)
     arguments = parser.parse_args()
     if arguments.peak_seconds is not None:
-        ARTIFACT.parent.mkdir(parents=True, exist_ok=True)
-        print(json.dumps(run_ort_once(arguments.peak_seconds)))
+        print(json.dumps(run_ort_once(arguments.peak_seconds, arguments.peak_channels)))
         return 0
 
     checkpoint = ensure_checkpoint()
@@ -160,15 +230,16 @@ def main() -> int:
         "bytes": ARTIFACT.stat().st_size,
         "sha256": sha256_file(ARTIFACT),
     }
-    report.update(measure(checkpoint))
+    report.update(measure(checkpoint, arguments.rounds))
 
-    replay = Path(r"C:\Users\Ren\AppData\Local\Temp\opencode\apollo_replay.onnx")
-    export_to(replay, checkpoint=checkpoint)
-    report["determinism"] = {
-        "first_sha256": sha256_file(ARTIFACT),
-        "second_sha256": sha256_file(replay),
-        "identical": sha256_file(ARTIFACT) == sha256_file(replay),
-    }
+    with tempfile.TemporaryDirectory() as scratch:
+        replay = Path(scratch) / "apollo_replay.onnx"
+        export_to(replay, checkpoint=checkpoint)
+        report["determinism"] = {
+            "first_sha256": report["artifact_metadata"]["sha256"],
+            "second_sha256": sha256_file(replay),
+            "identical": report["artifact_metadata"]["sha256"] == sha256_file(replay),
+        }
     print(json.dumps(report, indent=2))
     return 0
 
