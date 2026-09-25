@@ -1,12 +1,12 @@
 # 01 — Prove the ONNX export against stock Apollo
 
-**Status:** TODO
+**Status:** IN PROGRESS
 **Phase:** 0 — Foundation and go/no-go spikes
 **Depends on:** 00
 **SRS:** §6, §12
 **Stack:** §C, §K
 **Assigned to:** Agent
-**Started:** —
+**Started:** 2026-09-25 — Base commit 2c4ddcb, clean tree. Baseline gate: `python tasks/validate_board.py` prints "Task board valid: 41 records."; `python -m unittest discover -s tasks -p "test_*.py"` prints 9 passed.
 **Outcome:** —
 
 This task is a spike. It ends with `GO` or `NO-GO`.

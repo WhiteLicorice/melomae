@@ -91,7 +91,7 @@ The validator rejects any other status value.
 | # | Task | Status | Depends on |
 | --- | --- | --- | --- |
 | 00 | [Bootstrap the Tauri workspace and the verify gate](mvp/00-bootstrap-the-tauri-workspace-and-the-verify-gate.md) | DONE | — |
-| 01 | [Prove the ONNX export against stock Apollo](mvp/01-prove-the-onnx-export-against-stock-apollo.md) | TODO | 00 |
+| 01 | [Prove the ONNX export against stock Apollo](mvp/01-prove-the-onnx-export-against-stock-apollo.md) | IN PROGRESS | 00 |
 | 02 | [Prove YouTube Music search and download through yt-dlp](mvp/02-prove-youtube-music-search-and-download-through-yt-dlp.md) | TODO | 00 |
 
 ## Phase 1 — Restoration engine

@@ -3,10 +3,28 @@ name = "melomae-tools"
 version = "0.1.0"
 description = "Model export and build tooling for Melomae."
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "huggingface-hub>=0.24",
+    "numpy>=1.26",
+    "omegaconf>=2.3",
+    "onnx>=1.16",
+    "onnxruntime>=1.20",
+    "onnxscript>=0.2",
+    "psutil>=5.9",
+    "soundfile>=0.12",
+    "torch==2.11.0",
+]
 
 [dependency-groups]
 dev = ["pytest>=8.0"]
 
 [tool.uv]
 package = false
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
