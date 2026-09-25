@@ -12,7 +12,7 @@ from export.export import (
 
 SAMPLE_RATE = 44100
 PARITY_SECONDS = 6.0
-CHANNEL_SECONDS = 1.0
+CHANNEL_SECONDS = 6.0
 
 
 def _fixture(seconds, seed=0):
@@ -86,10 +86,29 @@ def test_onnx_matches_torch_within_tolerance(apollo, ort_session):
     assert rmse <= 1e-4, f"rmse {rmse}"
 
 
-def test_channel_independence(ort_session):
+def test_model_is_channel_independent(onnx_path):
+    # One thread fixes the reduction order. At 6 or more threads, ONNX
+    # Runtime changes the output by about 1.6e-5 even for one channel, so a
+    # multi-thread comparison measures the thread count, not the model.
+    session = build_onnx_session(onnx_path, intra_op_threads=1)
     audio = _fixture(CHANNEL_SECONDS)
-    stereo = _run_ort(ort_session, audio)
-    left = _run_ort(ort_session, audio[:, :1])
-    right = _run_ort(ort_session, audio[:, 1:])
+    stereo = _run_ort(session, audio)
+    left = _run_ort(session, audio[:, :1])
+    right = _run_ort(session, audio[:, 1:])
     assert np.abs(stereo[:, :1] - left).max() <= 1e-6
     assert np.abs(stereo[:, 1:] - right).max() <= 1e-6
+
+
+def test_shipped_path_matches_stock_stereo(apollo, ort_session):
+    # The engine runs one channel at a time (Stack §C).
+    audio = _fixture(PARITY_SECONDS)
+    with torch.no_grad():
+        stock = apollo(audio).numpy()
+    shipped = np.concatenate(
+        [_run_ort(ort_session, audio[:, :1]), _run_ort(ort_session, audio[:, 1:])], axis=1
+    )
+    diff = np.abs(stock - shipped)
+    max_abs = float(diff.max())
+    rmse = float(np.sqrt(np.mean(diff**2)))
+    assert max_abs <= 1e-3, f"max abs {max_abs}"
+    assert rmse <= 1e-4, f"rmse {rmse}"
