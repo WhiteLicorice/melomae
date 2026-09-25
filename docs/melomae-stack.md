@@ -33,7 +33,9 @@ This document defines how Melomae is built. `docs/melomae-srs.md` defines what i
 - `tools/export` (a uv Python project) builds `apollo.onnx` from the official checkpoint. It vendors the upstream model files `look2hear/models/apollo.py` and `base_model.py` unmodified from `JusperLee/Apollo@e84bcac`.
 - Checkpoint: `JusperLee/Apollo` `pytorch_model.bin`, 66,541,845 bytes, SHA-256 `99d9af7f1ff20e63c393035513a655392818d66b4d7fc23d658175c1f15e8d76`. The export verifies this hash.
 - Model constants: `sr=44100`, `win=20` ms (882 samples), hop 441, 80 bands, `feature_dim=256`, 6 layers (`apollo.py:207-247`).
-- The model is channel-independent. `apollo.py:251-253,292,296` fold channels into the batch. The engine runs one channel at a time to halve peak memory. Ticket 01 confirms this numerically.
+- The model is channel-independent. `apollo.py:251-253,292,296` fold channels into the batch. The engine runs one channel at a time to halve peak memory. Ticket 01 confirms this numerically (`docs/evidence/01-onnx-spike.md`).
+- Known limitation, accepted by the owner on 2026-09-25: the output is bit-exact on one machine with one thread count, but not across machines. ONNX Runtime CPU output moves by up to 3.4e-5 with the intra-op thread count, which is set to the physical core count. It can also move with the CPU instruction set (inferred). GPU output differs from CPU by up to 7.2e-4 (§K). Tests compare with a tolerance, never a byte hash.
+- ONNX Runtime peak memory is about 0.36 GB plus 0.58 GB per channel-second (ticket 01). This is about 2.2 times the torch figure in §K.
 - The chunking algorithm is a port of `C:\Lab\Apollo\inference.py:86-221`: padded chunks, a padded-start clamp at the file end, linear crossfades, and normalized overlap-add.
 - GPU: ticket 08 picks the execution provider for each OS. Candidates: DirectML (in maintenance mode, WinML is its successor), CUDA, and WinML.
 - Fallback: if spike 01 returns NO-GO, a Python sidecar (standalone Python plus a CPU torch wheel) replaces ONNX Runtime. A board amendment must define it first.

@@ -1,13 +1,13 @@
 # 01 — Prove the ONNX export against stock Apollo
 
-**Status:** IN PROGRESS
+**Status:** DONE
 **Phase:** 0 — Foundation and go/no-go spikes
 **Depends on:** 00
 **SRS:** §6, §12
 **Stack:** §C, §K
 **Assigned to:** Agent
 **Started:** 2026-09-25 — Base commit 2c4ddcb, clean tree. Baseline gate: `python tasks/validate_board.py` prints "Task board valid: 41 records."; `python -m unittest discover -s tasks -p "test_*.py"` prints 9 passed.
-**Outcome:** —
+**Outcome:** GO, DONE 2026-09-25. Evidence: `docs/evidence/01-onnx-spike.md`. Variant: in-graph real-arithmetic DSP. Artifact: 77,649,552 bytes, SHA-256 `fdf62f6c…78b9`, opset 20, ONNX Runtime 1.30.0. Two exports are byte-identical. Criterion 1: max abs 3.611e-4, RMSE 1.982e-5 on the 6 s WAV. One channel at a time gives 3.611e-4 and 1.978e-5. Criterion 2: ORT/torch RTF ratio medians over 7 alternating rounds, one channel at a time: 0.925 (1 s), 0.941 (3 s), 0.973 (6 s). Stereo batch: 1.023, 1.038, and 1.202 at 6 s. That last run paged and does not measure compute. Criterion 3: the owner chose the model reading on 2026-09-25. Stock torch gives 4.2e-7, and ORT gives 4.2e-7 at 1 thread and 2.8e-7 at 4 threads. ORT at 8 threads gives 1.55e-5, and a single channel moves by the same amount when only the thread count changes. The owner accepted the cross-machine variation as a known limitation (Stack §C). Criterion 4: `RealApollo` reuses `BN`, `net`, and `output`. Peak working set: about 0.36 GB plus 0.58 GB per channel-second. Torch 2.0.0 against 2.11.0: max abs 3.58e-7. Gate: `pnpm verify` exit 0. Board 41 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 1 passed, pytest 8 passed in 377 s. Red-first: `test_parity.py` failed with `ModuleNotFoundError: No module named 'export.export'`. `test_measure.py` failed with a peak of 0. `test_determinism.py` got `real_dsp` where it expected `export.real_dsp`. The torch-free CI run failed collection on the missing numpy. CI: the owner chose to skip the export tests in CI. The export dependencies are in the `export` uv group, and CI sets `UV_NO_GROUP=export`. The workflow also caches Rust, uv, and apt. No GitHub run exercised these changes yet.
 
 This task is a spike. It ends with `GO` or `NO-GO`.
 
@@ -47,10 +47,10 @@ Prove that Apollo, exported to ONNX and run by ONNX Runtime on CPU, matches stoc
 
 All four must hold:
 
-- [ ] ONNX Runtime CPU output vs torch CPU on the 6 s fixture: max abs ≤ 1e-3 and RMSE ≤ 1e-4.
-- [ ] ONNX Runtime CPU RTF ≤ 1.2 × torch CPU RTF, measured in the same session.
-- [ ] Stereo batch vs separate channels: max abs ≤ 1e-6.
-- [ ] The export changes no model math. Only the STFT and iSTFT change their form.
+- [x] ONNX Runtime CPU output vs torch CPU on the 6 s fixture: max abs ≤ 1e-3 and RMSE ≤ 1e-4.
+- [x] ONNX Runtime CPU RTF ≤ 1.2 × torch CPU RTF, measured in the same session.
+- [x] Stereo batch vs separate channels: max abs ≤ 1e-6.
+- [x] The export changes no model math. Only the STFT and iSTFT change their form.
 
 ## NO-GO path
 
@@ -69,10 +69,10 @@ Set task 04 to `BLOCKED`. Write a board amendment for the Python sidecar. Stop a
 
 ## Acceptance criteria
 
-- [ ] `Outcome` records `GO` or `NO-GO` with the measured numbers.
-- [ ] `docs/evidence/01-onnx-spike.md` holds every measurement in the scope.
-- [ ] The new tests failed first for the expected reason.
-- [ ] `pnpm verify` passes.
+- [x] `Outcome` records `GO` or `NO-GO` with the measured numbers.
+- [x] `docs/evidence/01-onnx-spike.md` holds every measurement in the scope.
+- [x] The new tests failed first for the expected reason.
+- [x] `pnpm verify` passes.
 
 ## Verify
 
