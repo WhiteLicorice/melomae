@@ -12,6 +12,7 @@ target/
 # Model artifacts
 *.onnx
 *.bin
+tools/export/.cache/
 
 # Python and uv
 .venv/
