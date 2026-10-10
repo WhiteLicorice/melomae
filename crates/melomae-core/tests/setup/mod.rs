@@ -136,6 +136,56 @@ impl Fixtures {
         read_f32le(&target)
     }
 
+    /// The raw little-endian f32 reference for one file, decoded by ffmpeg's first audio track.
+    ///
+    /// The decoder selects `-map 0:a:0`, so this is the oracle for the selected track. Pass
+    /// `Some("libopus")` to decode Opus with libopus, matching the task's reference decoder.
+    pub fn reference_for(
+        &self,
+        source: &Path,
+        rate: u32,
+        channels: usize,
+        decoder: Option<&str>,
+    ) -> Vec<f32> {
+        let target = self.dir.join("selected.reference.f32");
+        decode_reference(source, &target, rate, channels, decoder);
+        read_f32le(&target)
+    }
+
+    /// A two-track WebM: track 1 is the default, track 2 is low-delay, as the reviewer built it.
+    pub fn two_track_webm(&self, source: &Path) -> PathBuf {
+        let target = self.dir.join("two-tracks.webm");
+        run(&[
+            "-i",
+            &source.display().to_string(),
+            "-map",
+            "0:a:0",
+            "-map",
+            "0:a:0",
+            "-c:a",
+            "libopus",
+            "-application:a:1",
+            "lowdelay",
+            &target.display().to_string(),
+        ]);
+        target
+    }
+
+    /// A WebM written with the live muxer option, so its clusters have unknown size.
+    pub fn live_webm(&self, source: &Path) -> PathBuf {
+        let target = self.dir.join("live.webm");
+        run(&[
+            "-i",
+            &source.display().to_string(),
+            "-c:a",
+            "libopus",
+            "-live",
+            "1",
+            &target.display().to_string(),
+        ]);
+        target
+    }
+
     fn encode_all(&self) {
         for (name, rate, channels) in INPUTS {
             let source = self.source_wav(*rate);
@@ -308,6 +358,190 @@ fn decode_reference(
     ]);
     let borrowed: Vec<&str> = full.iter().map(String::as_str).collect();
     run(&borrowed);
+}
+
+// --- Builders for the hostile and edge-case WebM inputs of the task 03 fix round ---------------
+
+/// How to rewrite a WebM's `SimpleBlock`s into padded `BlockGroup`s.
+#[derive(Clone, Copy)]
+pub enum Padding {
+    /// Every `SimpleBlock` becomes a `BlockGroup` whose `DiscardPadding` is `i64::MAX`
+    /// nanoseconds, the hostile input from `rev03_inputs.py`.
+    Hostile,
+    /// The first block of the first cluster becomes a `BlockGroup` with this padding, in
+    /// nanoseconds; every other block keeps its form.
+    Interior(i64),
+}
+
+/// Rewrite `source` into `target`, porting the reviewer's `rev03_inputs.py` packing: the EBML
+/// header, the Segment's metadata elements, the rewritten clusters, and an empty Cues element.
+///
+/// ffmpeg writes ordinary audio as `SimpleBlock`s, which carry no padding, so a hostile or
+/// interior `DiscardPadding` has to be inserted by rewriting the block into a `BlockGroup`.
+pub fn rewrite_webm_padding(source: &Path, target: &Path, padding: Padding) {
+    let data = fs::read(source).expect("read the source WebM");
+    let top = ebml_elements(&data);
+    let header = element_body(&top, 0x1A45_DFA3);
+    let segment = element_body(&top, 0x1853_8067);
+
+    let mut metadata: Vec<(u64, Vec<u8>)> = Vec::new();
+    let mut clusters: Vec<Vec<u8>> = Vec::new();
+    for (id, body) in ebml_elements(&segment) {
+        if id == 0x1F43_B675 {
+            clusters.push(rewrite_cluster(&body, padding, clusters.is_empty()));
+        } else if id != 0x114D_9B74 && id != 0x1C53_BB6B {
+            metadata.push((id, body));
+        }
+    }
+
+    let mut body = Vec::new();
+    for (id, element) in &metadata {
+        body.extend_from_slice(&encode_element(*id, element));
+    }
+    for cluster in &clusters {
+        body.extend_from_slice(&encode_element(0x1F43_B675, cluster));
+    }
+    body.extend_from_slice(&encode_element(0x1C53_BB6B, &[]));
+
+    let mut out = encode_element(0x1A45_DFA3, &header);
+    out.extend_from_slice(&encode_element(0x1853_8067, &body));
+    fs::write(target, out).expect("write the rewritten WebM");
+}
+
+/// Rewrite the `SimpleBlock`s of one cluster. `Padding::Hostile` rewrites every block;
+/// `Padding::Interior` rewrites only the first block of the first cluster.
+fn rewrite_cluster(cluster: &[u8], padding: Padding, first_cluster: bool) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut applied = false;
+    for (id, body) in ebml_elements(cluster) {
+        let rewrite = id == 0xA3
+            && match padding {
+                Padding::Hostile => true,
+                Padding::Interior(_) => first_cluster && !applied,
+            };
+        if rewrite {
+            let value = match padding {
+                Padding::Hostile => i64::MAX,
+                Padding::Interior(nanoseconds) => nanoseconds,
+            };
+            let mut group = encode_element(0xA1, &body);
+            group.extend_from_slice(&encode_element(0x75A2, &value.to_be_bytes()));
+            out.extend_from_slice(&encode_element(0xA0, &group));
+            applied = true;
+        } else {
+            out.extend_from_slice(&encode_element(id, &body));
+        }
+    }
+    out
+}
+
+/// Parse an EBML document into its (element id, body) pairs.
+fn ebml_elements(data: &[u8]) -> Vec<(u64, Vec<u8>)> {
+    let mut elements = Vec::new();
+    let mut pos = 0usize;
+    while pos < data.len() {
+        let Some(id) = read_vint(data, &mut pos) else {
+            break;
+        };
+        let Some((size, unknown)) = read_vint_size(data, &mut pos) else {
+            break;
+        };
+        // An unknown size runs to the end of the containing data.
+        let size = if unknown || size == 0 {
+            data.len().saturating_sub(pos)
+        } else {
+            match usize::try_from(size) {
+                Ok(size) => size,
+                Err(_) => break,
+            }
+        };
+        let Some(end) = pos.checked_add(size) else {
+            break;
+        };
+        let Some(body) = data.get(pos..end) else {
+            break;
+        };
+        elements.push((id, body.to_vec()));
+        pos = end;
+    }
+    elements
+}
+
+/// The body of the first element with `id`.
+fn element_body(elements: &[(u64, Vec<u8>)], id: u64) -> Vec<u8> {
+    elements
+        .iter()
+        .find(|(element_id, _)| *element_id == id)
+        .expect("the element is present")
+        .1
+        .clone()
+}
+
+/// Read an EBML element id, marker included.
+fn read_vint(data: &[u8], pos: &mut usize) -> Option<u64> {
+    let first = *data.get(*pos)?;
+    if first == 0 {
+        return None;
+    }
+    let len = first.leading_zeros() as usize + 1;
+    let mut value = 0u64;
+    for offset in 0..len {
+        value = (value << 8) | u64::from(*data.get(*pos + offset)?);
+    }
+    *pos += len;
+    Some(value)
+}
+
+/// Read an EBML element size, with the marker bits removed. The flag reports the unknown-size
+/// marker (every value bit set), which means "to the end of the containing data".
+fn read_vint_size(data: &[u8], pos: &mut usize) -> Option<(u64, bool)> {
+    let first = *data.get(*pos)?;
+    if first == 0 {
+        return None;
+    }
+    let len = first.leading_zeros() as usize + 1;
+    if len > 8 {
+        return None;
+    }
+    let marker = (1u16 << (8 - len)) - 1;
+    let mut value = u64::from(first) & u64::from(marker as u8);
+    let mut all_ones = value == u64::from(marker as u8);
+    for offset in 1..len {
+        let byte = *data.get(*pos + offset)?;
+        value = (value << 8) | u64::from(byte);
+        if byte != 0xFF {
+            all_ones = false;
+        }
+    }
+    *pos += len;
+    Some((value, all_ones))
+}
+
+/// Encode an EBML element id.
+fn encode_id(id: u64) -> Vec<u8> {
+    let bytes = id.to_be_bytes();
+    let first = bytes.iter().position(|byte| *byte != 0).unwrap_or(7);
+    bytes[first..].to_vec()
+}
+
+/// Encode an EBML element size with the shortest vint that fits.
+fn encode_size(len: usize) -> Vec<u8> {
+    for width in 1..=8u32 {
+        let max = (1u128 << (7 * width)) - 1;
+        if (len as u128) < max {
+            let value = (1u128 << (7 * width)) | len as u128;
+            return value.to_be_bytes()[(16 - width as usize)..].to_vec();
+        }
+    }
+    panic!("the element is too large to encode");
+}
+
+/// Encode an EBML element with a known size.
+fn encode_element(id: u64, body: &[u8]) -> Vec<u8> {
+    let mut out = encode_id(id);
+    out.extend_from_slice(&encode_size(body.len()));
+    out.extend_from_slice(body);
+    out
 }
 
 /// Low-level noise from a fixed seed, so the source is deterministic. Amplitude is +/-0.01.
