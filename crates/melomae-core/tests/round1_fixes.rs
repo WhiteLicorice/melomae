@@ -58,26 +58,37 @@ fn f1_hostile_padding_returns_a_typed_error() {
 #[test]
 fn f3_selected_track_matches_its_own_oracle() {
     let fixtures = Fixtures::build();
-    let two_tracks = fixtures.two_track_webm(&fixtures.path("opus_48000.webm"));
-    let decoded = decode_file_native(&two_tracks).expect("decode the two-track WebM");
-    let reference = fixtures.reference_for(&two_tracks, 48_000, 2, Some("libopus"));
+    let source = fixtures.path("opus_48000.webm");
+    // Both orders: the selected (first) track ordinary with the low-delay track after it, and the
+    // reverse. The decoder must always use the selected track's own trim.
+    for low_delay in [1u32, 0u32] {
+        let two_tracks = fixtures.two_track_webm(&source, low_delay);
+        let decoded = decode_file_native(&two_tracks).expect("decode the two-track WebM");
+        let reference = fixtures.reference_for(&two_tracks, 48_000, 2, Some("libopus"));
 
-    let ours = common::interleave(decoded.channels());
-    assert_eq!(ours.len(), reference.len(), "decoded and reference lengths");
-    let max = common::max_abs_diff(&ours, &reference);
-    assert!(
-        max <= 1.0e-4,
-        "the selected track differs from its oracle by {max}"
-    );
+        let ours = common::interleave(decoded.channels());
+        assert_eq!(
+            ours.len(),
+            reference.len(),
+            "decoded and reference lengths (low-delay index {low_delay})"
+        );
+        let max = common::max_abs_diff(&ours, &reference);
+        assert!(
+            max <= 1.0e-4,
+            "the selected track differs from its oracle by {max} (low-delay index {low_delay})"
+        );
+    }
 }
 
-/// F4: a negative interior `DiscardPadding` discards from that block's start. The old reader added
-/// it to the absolute end total, so a negative value made the decode *longer*. It must never
-/// lengthen the audio.
+/// F4: a positive interior `DiscardPadding` trims its own block's end, a negative one trims that
+/// block's start. At 48 kHz, 1 ms is 48 samples, so both decode to `unpadded - 48`, and the
+/// `CodecDelay` pre-skip is applied once, not twice.
 #[test]
-fn f4_negative_interior_padding_does_not_lengthen_the_audio() {
+fn f4_signed_interior_padding_trims_exactly_its_block() {
     let fixtures = Fixtures::build();
     let source = fixtures.path("opus_48000.webm");
+    let baseline = decode_file_native(&source).expect("decode the baseline").frames();
+
     let positive = fixtures.dir().join("interior-positive.webm");
     let negative = fixtures.dir().join("interior-negative.webm");
     setup::rewrite_webm_padding(&source, &positive, Padding::Interior(1_000_000));
@@ -85,9 +96,15 @@ fn f4_negative_interior_padding_does_not_lengthen_the_audio() {
 
     let positive_frames = decode_file_native(&positive).expect("positive padding").frames();
     let negative_frames = decode_file_native(&negative).expect("negative padding").frames();
-    assert!(
-        negative_frames <= positive_frames,
-        "negative interior padding lengthened the audio: {negative_frames} > {positive_frames}"
+    assert_eq!(
+        positive_frames,
+        baseline - 48,
+        "positive padding must trim 48 samples from the block end"
+    );
+    assert_eq!(
+        negative_frames,
+        baseline - 48,
+        "negative padding must trim 48 samples from the block start"
     );
 }
 
@@ -99,4 +116,21 @@ fn f5_live_webm_decodes_at_clean_eof() {
     let live = fixtures.live_webm(&fixtures.path("opus_48000.webm"));
     let decoded = decode_file_native(&live).expect("decode the live WebM at a clean end of file");
     assert!(decoded.frames() > 0, "the live WebM decoded no frames");
+}
+
+/// F5: a WebM cut in the middle of a cluster is a truncation, not a clean end of file. It must
+/// return an error, not decode a partial stream.
+#[test]
+fn f5_a_truncated_webm_is_not_a_clean_eof() {
+    let fixtures = Fixtures::build();
+    let bytes = std::fs::read(fixtures.path("opus_48000.webm")).expect("read the source WebM");
+    let truncated = fixtures.dir().join("truncated.webm");
+    std::fs::write(&truncated, &bytes[..bytes.len() - 500]).expect("write the truncated WebM");
+
+    let result = std::panic::catch_unwind(|| decode_file(&truncated));
+    assert!(result.is_ok(), "a truncated file must not panic");
+    assert!(
+        result.unwrap().is_err(),
+        "a WebM cut inside a cluster must return an error"
+    );
 }

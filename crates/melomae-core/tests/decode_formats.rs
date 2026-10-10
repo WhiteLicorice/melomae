@@ -196,9 +196,19 @@ fn decode_resampled_sweep_matches_an_analytic_reference_above_80_db() {
 
     let ours = resampled.channel(0).unwrap();
     let frames = ours.len().min(reference.len());
+    // Trim only the measured transients: the resampler's start-up, and its short stop transient.
+    // The old test removed 4000 frames from the end too, which cut the top 3.7 kHz of the sweep.
     let skip = 4_000;
-    let snr = snr_db(&reference[skip..frames - skip], &ours[skip..frames - skip]);
-    eprintln!("measured: analytic sweep SNR (20 Hz - 20 kHz) = {snr:.1} dB");
+    let end_skip = 200;
+    let end = frames - end_skip;
+    let snr = snr_db(&reference[skip..end], &ours[skip..end]);
+    let top_time = end as f64 / f64::from(TARGET_SAMPLE_RATE);
+    let scored_top = 20.0 * (20_000.0f64 / 20.0).powf(top_time / seconds);
+    eprintln!("measured: analytic sweep SNR (20 Hz - {scored_top:.0} Hz) = {snr:.1} dB");
+    assert!(
+        scored_top >= 19_000.0,
+        "the scored sweep only reaches {scored_top:.0} Hz, short of the required 20 kHz band"
+    );
     assert!(
         snr >= 80.0,
         "resampled sweep SNR against the analytic reference is {snr:.1} dB, below 80 dB"

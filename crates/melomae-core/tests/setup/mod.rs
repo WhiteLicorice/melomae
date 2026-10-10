@@ -152,9 +152,10 @@ impl Fixtures {
         read_f32le(&target)
     }
 
-    /// A two-track WebM: track 1 is the default, track 2 is low-delay, as the reviewer built it.
-    pub fn two_track_webm(&self, source: &Path) -> PathBuf {
-        let target = self.dir.join("two-tracks.webm");
+    /// A two-track WebM. `low_delay` is the output index that is encoded in low-delay mode, so the
+    /// other track is ordinary. The first output track is the default one the decoder selects.
+    pub fn two_track_webm(&self, source: &Path, low_delay: u32) -> PathBuf {
+        let target = self.dir.join(&format!("two-tracks-{low_delay}.webm"));
         run(&[
             "-i",
             &source.display().to_string(),
@@ -164,7 +165,7 @@ impl Fixtures {
             "0:a:0",
             "-c:a",
             "libopus",
-            "-application:a:1",
+            &format!("-application:a:{low_delay}"),
             "lowdelay",
             &target.display().to_string(),
         ]);
