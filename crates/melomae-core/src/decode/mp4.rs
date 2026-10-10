@@ -11,6 +11,8 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
+use super::{DecodeError, DecodeErrorKind};
+
 /// The largest `moov` box this reader buffers. A larger one is metadata that cannot be trusted.
 const MAX_MOOV_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -23,19 +25,55 @@ pub(crate) struct EditListTrim {
     pub duration: usize,
 }
 
-/// Read the audio track's edit list, or `None` when the file is not an ISO base media file or has
-/// no edit list.
-pub(crate) fn edit_list_trim(path: &Path, sample_rate: u32) -> Option<EditListTrim> {
-    let mut file = File::open(path).ok()?;
-    edit_list_trim_reader(&mut file, sample_rate)
+/// A malformed `moov` or `elst` box: the reader cannot trust it.
+fn malformed(path: &Path, reason: &str) -> DecodeError {
+    DecodeError::new(DecodeErrorKind::Malformed, path, reason)
+}
+
+/// An edit list the reader understands, but whose sequence is outside the supported contract.
+fn unsupported(path: &Path, reason: impl Into<String>) -> DecodeError {
+    DecodeError::new(DecodeErrorKind::UnsupportedFormat, path, reason)
+}
+
+/// Read the edit list of the audio track whose `tkhd` track ID is `track_id`, or `Ok(None)` when
+/// the file is not an ISO base media file, holds no such track, or has no edit list.
+///
+/// A malformed `moov` or `elst` is a `Malformed` error. An edit list whose sequence is not initial
+/// empty edits followed by one contiguous unit-rate media range is an `UnsupportedFormat` error, so
+/// the caller never silently falls back to an incorrect trim.
+pub(crate) fn edit_list_trim(
+    path: &Path,
+    track_id: u32,
+    sample_rate: u32,
+) -> Result<Option<EditListTrim>, DecodeError> {
+    let mut file =
+        File::open(path).map_err(|e| DecodeError::new(DecodeErrorKind::Io, path, e.to_string()))?;
+    edit_list_trim_reader(path, &mut file, track_id, sample_rate)
 }
 
 /// Read the audio track's edit list from an open reader, so a test can count the bytes read.
-fn edit_list_trim_reader<R: Read + Seek>(reader: &mut R, sample_rate: u32) -> Option<EditListTrim> {
-    let moov = read_moov(reader)?;
-    let movie_timescale = find_box(&moov, b"mvhd").and_then(read_mvhd_timescale)?;
+fn edit_list_trim_reader<R: Read + Seek>(
+    path: &Path,
+    reader: &mut R,
+    track_id: u32,
+    sample_rate: u32,
+) -> Result<Option<EditListTrim>, DecodeError> {
+    let Some(moov) = read_moov(reader) else {
+        return Ok(None);
+    };
+    let movie_timescale = find_box(&moov, b"mvhd")
+        .and_then(read_mvhd_timescale)
+        .ok_or_else(|| malformed(path, "the movie header has no usable timescale"))?;
 
     for trak in find_boxes(&moov, b"trak") {
+        // Select the reader's track by its `tkhd` identity, not by the first audio handler, so a
+        // file whose selected track is not the first audio track uses the right edit list.
+        let Some(tkhd) = find_box(trak, b"tkhd") else {
+            continue;
+        };
+        if read_tkhd_track_id(tkhd) != Some(track_id) {
+            continue;
+        }
         let Some(mdia) = find_box(trak, b"mdia") else {
             continue;
         };
@@ -46,36 +84,96 @@ fn edit_list_trim_reader<R: Read + Seek>(reader: &mut R, sample_rate: u32) -> Op
         if hdlr.get(8..12) != Some(b"soun") {
             continue;
         }
-        let media_timescale = find_box(mdia, b"mdhd").and_then(read_mdhd_timescale)?;
-        let elst = find_box(trak, b"edts").and_then(|edts| find_box(edts, b"elst"))?;
-
-        let edits = read_edits(elst)?;
-
-        // Skip initial empty edits: they carry no media, and the presentation starts at the first
-        // edit that does.
-        let mut media_time = None;
-        let mut movie_duration: u128 = 0;
-        for edit in edits {
-            if edit.media_time < 0 {
-                continue;
-            }
-            media_time.get_or_insert(edit.media_time);
-            movie_duration = movie_duration.checked_add(u128::from(edit.segment_duration))?;
-        }
-        let media_time = u128::try_from(media_time?).ok()?;
-
-        let start = media_time
-            .checked_mul(u128::from(sample_rate))?
-            .checked_div(u128::from(media_timescale))?;
-        let duration = movie_duration
-            .checked_mul(u128::from(sample_rate))?
-            .checked_div(u128::from(movie_timescale))?;
-        return Some(EditListTrim {
-            start: usize::try_from(start).ok()?,
-            duration: usize::try_from(duration).ok()?,
-        });
+        let media_timescale = find_box(mdia, b"mdhd")
+            .and_then(read_mdhd_timescale)
+            .ok_or_else(|| malformed(path, "the media header has no usable timescale"))?;
+        let Some(elst) = find_box(trak, b"edts").and_then(|edts| find_box(edts, b"elst")) else {
+            return Ok(None);
+        };
+        let edits =
+            read_edits(elst).ok_or_else(|| malformed(path, "the edit list is malformed"))?;
+        return trim_from_edits(path, edits, media_timescale, movie_timescale, sample_rate);
     }
-    None
+    Ok(None)
+}
+
+/// Turn a validated edit list into the trim the decoder applies.
+///
+/// Initial empty edits are skipped. Every media edit must use the unit rate and start where the
+/// previous one ended, so the sequence is one contiguous media range. Anything else is an
+/// `UnsupportedFormat` error: a fallback trim would decode the wrong audio.
+fn trim_from_edits(
+    path: &Path,
+    edits: Vec<Edit>,
+    media_timescale: u32,
+    movie_timescale: u32,
+    sample_rate: u32,
+) -> Result<Option<EditListTrim>, DecodeError> {
+    let mut media_time: Option<i64> = None;
+    let mut next_media_time: Option<u64> = None;
+    let mut seen_media = false;
+    let mut movie_duration: u128 = 0;
+
+    for edit in edits {
+        if edit.media_time < 0 {
+            if seen_media {
+                return Err(unsupported(path, "an empty edit follows a media edit"));
+            }
+            continue;
+        }
+        seen_media = true;
+        if !edit.is_unit_rate() {
+            return Err(unsupported(
+                path,
+                format!(
+                    "the edit list media rate {}.{} is not the unit rate",
+                    edit.media_rate_integer, edit.media_rate_fraction
+                ),
+            ));
+        }
+        let start = u64::try_from(edit.media_time)
+            .map_err(|_| unsupported(path, "an edit list media time is out of range"))?;
+        if let Some(expected) = next_media_time {
+            if start != expected {
+                return Err(unsupported(
+                    path,
+                    "the edit list media ranges are not contiguous",
+                ));
+            }
+        }
+        // The media range runs for `segment_duration` movie ticks; convert to media samples.
+        let range = u128::from(edit.segment_duration)
+            .checked_mul(u128::from(media_timescale))
+            .and_then(|scaled| scaled.checked_div(u128::from(movie_timescale)))
+            .and_then(|samples| u64::try_from(samples).ok())
+            .ok_or_else(|| unsupported(path, "an edit list duration is out of range"))?;
+        next_media_time = Some(
+            start
+                .checked_add(range)
+                .ok_or_else(|| unsupported(path, "an edit list duration is out of range"))?,
+        );
+        media_time.get_or_insert(edit.media_time);
+        movie_duration = movie_duration
+            .checked_add(u128::from(edit.segment_duration))
+            .ok_or_else(|| unsupported(path, "an edit list duration is out of range"))?;
+    }
+
+    let Some(media_time) = media_time else {
+        return Ok(None);
+    };
+    let media_time = u128::try_from(media_time)
+        .map_err(|_| unsupported(path, "an edit list media time is out of range"))?;
+    let start = media_time
+        .checked_mul(u128::from(sample_rate))
+        .and_then(|scaled| scaled.checked_div(u128::from(media_timescale)))
+        .and_then(|samples| usize::try_from(samples).ok())
+        .ok_or_else(|| unsupported(path, "an edit list start is out of range"))?;
+    let duration = movie_duration
+        .checked_mul(u128::from(sample_rate))
+        .and_then(|scaled| scaled.checked_div(u128::from(movie_timescale)))
+        .and_then(|samples| usize::try_from(samples).ok())
+        .ok_or_else(|| unsupported(path, "an edit list duration is out of range"))?;
+    Ok(Some(EditListTrim { start, duration }))
 }
 
 /// One edit list entry.
@@ -84,6 +182,26 @@ struct Edit {
     segment_duration: u64,
     /// Media start time in the media timescale. `-1` marks an empty edit.
     media_time: i64,
+    /// The integer part of `media_rate`, in the media timescale.
+    media_rate_integer: i16,
+    /// The fractional part of `media_rate`.
+    media_rate_fraction: i16,
+}
+
+impl Edit {
+    /// Whether the entry presents at the unit rate (1.0). A dwell or a rate change is not.
+    fn is_unit_rate(&self) -> bool {
+        self.media_rate_integer == 1 && self.media_rate_fraction == 0
+    }
+}
+
+/// The `tkhd` track ID, so the reader can select the track the decoder chose.
+fn read_tkhd_track_id(tkhd: &[u8]) -> Option<u32> {
+    match *tkhd.first()? {
+        0 => read_u32(tkhd, 12),
+        1 => read_u32(tkhd, 20),
+        _ => None,
+    }
 }
 
 /// The bytes of the `moov` box, or `None` when the file is not an ISO base media file or has none.
@@ -229,19 +347,25 @@ fn read_edits(elst: &[u8]) -> Option<Vec<Edit>> {
     for index in 0..count as usize {
         let start = 8usize.checked_add(index.checked_mul(entry_len)?)?;
         let entry = elst.get(start..start + entry_len)?;
-        let (segment_duration, media_time) = match version {
+        let (segment_duration, media_time, rate_integer, rate_fraction) = match version {
             0 => (
                 u64::from(u32::from_be_bytes(entry[0..4].try_into().unwrap())),
                 i64::from(i32::from_be_bytes(entry[4..8].try_into().unwrap())),
+                i16::from_be_bytes(entry[8..10].try_into().unwrap()),
+                i16::from_be_bytes(entry[10..12].try_into().unwrap()),
             ),
             _ => (
                 u64::from_be_bytes(entry[0..8].try_into().unwrap()),
                 i64::from_be_bytes(entry[8..16].try_into().unwrap()),
+                i16::from_be_bytes(entry[16..18].try_into().unwrap()),
+                i16::from_be_bytes(entry[18..20].try_into().unwrap()),
             ),
         };
         edits.push(Edit {
             segment_duration,
             media_time,
+            media_rate_integer: rate_integer,
+            media_rate_fraction: rate_fraction,
         });
     }
     Some(edits)
@@ -278,6 +402,13 @@ mod tests {
         boxed(b"hdlr", &body)
     }
 
+    /// A version-0 `tkhd` whose track ID sits at offset 12.
+    fn tkhd(track_id: u32) -> Vec<u8> {
+        let mut body = vec![0u8; 16];
+        body[12..16].copy_from_slice(&track_id.to_be_bytes());
+        boxed(b"tkhd", &body)
+    }
+
     /// An `elst` with version-0 entries of `(segment_duration, media_time)`.
     fn elst(entries: &[(u32, i32)]) -> Vec<u8> {
         let mut body = vec![0u8; 8];
@@ -301,17 +432,27 @@ mod tests {
         media_timescale: u32,
         entries: &[(u32, i32)],
     ) -> Vec<u8> {
-        let mut mdia = Vec::new();
-        mdia.extend_from_slice(&mdhd(media_timescale));
-        mdia.extend_from_slice(&hdlr(handler));
+        file_with_tracks(movie_timescale, &[(1, *handler, media_timescale, entries)])
+    }
 
-        let mut trak = Vec::new();
-        trak.extend_from_slice(&boxed(b"mdia", &mdia));
-        trak.extend_from_slice(&boxed(b"edts", &elst(entries)));
-
+    /// One audio track: its `tkhd` ID, its handler, its media timescale, and its edit entries.
+    fn file_with_tracks(
+        movie_timescale: u32,
+        tracks: &[(u32, [u8; 4], u32, &[(u32, i32)])],
+    ) -> Vec<u8> {
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd(movie_timescale));
-        moov.extend_from_slice(&boxed(b"trak", &trak));
+        for (track_id, handler, media_timescale, entries) in tracks {
+            let mut mdia = Vec::new();
+            mdia.extend_from_slice(&mdhd(*media_timescale));
+            mdia.extend_from_slice(&hdlr(handler));
+
+            let mut trak = Vec::new();
+            trak.extend_from_slice(&tkhd(*track_id));
+            trak.extend_from_slice(&boxed(b"mdia", &mdia));
+            trak.extend_from_slice(&boxed(b"edts", &elst(entries)));
+            moov.extend_from_slice(&boxed(b"trak", &trak));
+        }
 
         let mut out = Vec::new();
         out.extend_from_slice(&boxed(b"ftyp", b"M4A "));
@@ -326,16 +467,34 @@ mod tests {
         path
     }
 
+    /// An `elst` with version-0 entries of `(duration, media_time, rate_integer, rate_fraction)`.
+    fn elst_with_rate(entries: &[(u32, i32, i16, i16)]) -> Vec<u8> {
+        let mut body = vec![0u8; 8];
+        body[4..8].copy_from_slice(&(entries.len() as u32).to_be_bytes());
+        for (duration, media_time, rate_integer, rate_fraction) in entries {
+            body.extend_from_slice(&duration.to_be_bytes());
+            body.extend_from_slice(&media_time.to_be_bytes());
+            body.extend_from_slice(&rate_integer.to_be_bytes());
+            body.extend_from_slice(&rate_fraction.to_be_bytes());
+        }
+        boxed(b"elst", &body)
+    }
+
+    /// Read track 1's trim and require the expected value.
+    fn assert_trim(path: &Path, expected: EditListTrim) {
+        assert_eq!(edit_list_trim(path, 1, 44_100).unwrap(), Some(expected));
+    }
+
     #[test]
     fn reads_the_start_and_the_presentation_duration() {
         // A 6 s presentation in a 1000-tick movie timescale, starting at media sample 1024.
         let path = write_temp("mp4_edit.m4a", &file(1_000, 44_100, &[(6_000, 1_024)]));
-        assert_eq!(
-            edit_list_trim(&path, 44_100),
-            Some(EditListTrim {
+        assert_trim(
+            &path,
+            EditListTrim {
                 start: 1_024,
-                duration: 264_600
-            })
+                duration: 264_600,
+            },
         );
     }
 
@@ -346,12 +505,12 @@ mod tests {
             "mp4_timescales.m4a",
             &file(48_000, 44_100, &[(96_000, 2_048)]),
         );
-        assert_eq!(
-            edit_list_trim(&path, 44_100),
-            Some(EditListTrim {
+        assert_trim(
+            &path,
+            EditListTrim {
                 start: 2_048,
-                duration: 88_200
-            })
+                duration: 88_200,
+            },
         );
     }
 
@@ -361,23 +520,101 @@ mod tests {
             "mp4_empty_edit.m4a",
             &file(1_000, 44_100, &[(500, -1), (6_000, 1_024)]),
         );
-        assert_eq!(
-            edit_list_trim(&path, 44_100),
-            Some(EditListTrim {
+        assert_trim(
+            &path,
+            EditListTrim {
                 start: 1_024,
-                duration: 264_600
-            })
+                duration: 264_600,
+            },
         );
     }
 
     #[test]
-    fn sums_the_non_empty_edits() {
+    fn sums_two_contiguous_edits() {
+        // (3000, 1024) then (3000, 133324): the second media range starts where the first ends,
+        // so the presentation is one contiguous six seconds.
         let path = write_temp(
             "mp4_two_edits.m4a",
-            &file(1_000, 44_100, &[(3_000, 1_024), (3_000, 133_424)]),
+            &file(1_000, 44_100, &[(3_000, 1_024), (3_000, 133_324)]),
+        );
+        assert_trim(
+            &path,
+            EditListTrim {
+                start: 1_024,
+                duration: 264_600,
+            },
+        );
+    }
+
+    #[test]
+    fn rejects_repeated_media_ranges() {
+        // Two identical ranges present the same three seconds twice, not six contiguous seconds.
+        let path = write_temp(
+            "mp4_repeated.m4a",
+            &file(1_000, 44_100, &[(3_000, 1_024), (3_000, 1_024)]),
+        );
+        let error = edit_list_trim(&path, 1, 44_100).expect_err("repeated ranges must be rejected");
+        assert_eq!(
+            error.kind(),
+            DecodeErrorKind::UnsupportedFormat,
+            "reason: {}",
+            error.reason()
+        );
+    }
+
+    #[test]
+    fn rejects_discontinuous_media_ranges() {
+        let path = write_temp(
+            "mp4_discontinuous.m4a",
+            &file(1_000, 44_100, &[(3_000, 1_024), (3_000, 999_999)]),
+        );
+        let error = edit_list_trim(&path, 1, 44_100).expect_err("a gap must be rejected");
+        assert_eq!(error.kind(), DecodeErrorKind::UnsupportedFormat);
+    }
+
+    #[test]
+    fn rejects_a_non_unit_rate_edit() {
+        // `media_rate` 0.0 is a dwell, not a presentation at the unit rate.
+        let mut trak = Vec::new();
+        trak.extend_from_slice(&tkhd(1));
+        let mut mdia = Vec::new();
+        mdia.extend_from_slice(&mdhd(44_100));
+        mdia.extend_from_slice(&hdlr(b"soun"));
+        trak.extend_from_slice(&boxed(b"mdia", &mdia));
+        trak.extend_from_slice(&boxed(b"edts", &elst_with_rate(&[(6_000, 1_024, 0, 0)])));
+        let mut moov = Vec::new();
+        moov.extend_from_slice(&mvhd(1_000));
+        moov.extend_from_slice(&boxed(b"trak", &trak));
+        let mut out = Vec::new();
+        out.extend_from_slice(&boxed(b"ftyp", b"M4A "));
+        out.extend_from_slice(&boxed(b"moov", &moov));
+
+        let path = write_temp("mp4_dwell.m4a", &out);
+        let error = edit_list_trim(&path, 1, 44_100).expect_err("a dwell must be rejected");
+        assert_eq!(error.kind(), DecodeErrorKind::UnsupportedFormat);
+    }
+
+    #[test]
+    fn selects_the_edit_list_by_tkhd_track_id() {
+        // Two audio tracks: track 1 trims to 1024, track 2 to 2048. Selecting a track must use its
+        // own edit list, not the first audio track's.
+        let data = file_with_tracks(
+            1_000,
+            &[
+                (1, *b"soun", 44_100, &[(6_000, 1_024)]),
+                (2, *b"soun", 44_100, &[(6_000, 2_048)]),
+            ],
+        );
+        let path = write_temp("mp4_two_tracks.m4a", &data);
+        assert_eq!(
+            edit_list_trim(&path, 2, 44_100).unwrap(),
+            Some(EditListTrim {
+                start: 2_048,
+                duration: 264_600
+            })
         );
         assert_eq!(
-            edit_list_trim(&path, 44_100),
+            edit_list_trim(&path, 1, 44_100).unwrap(),
             Some(EditListTrim {
                 start: 1_024,
                 duration: 264_600
@@ -388,12 +625,12 @@ mod tests {
     #[test]
     fn ignores_a_zero_trim() {
         let path = write_temp("mp4_zero_trim.m4a", &file(1_000, 44_100, &[(6_000, 0)]));
-        assert_eq!(
-            edit_list_trim(&path, 44_100),
-            Some(EditListTrim {
+        assert_trim(
+            &path,
+            EditListTrim {
                 start: 0,
-                duration: 264_600
-            })
+                duration: 264_600,
+            },
         );
     }
 
@@ -411,6 +648,7 @@ mod tests {
         let mut mdia = Vec::new();
         mdia.extend_from_slice(&mdhd(44_100));
         mdia.extend_from_slice(&hdlr(b"soun"));
+        trak.extend_from_slice(&tkhd(1));
         trak.extend_from_slice(&boxed(b"mdia", &mdia));
         trak.extend_from_slice(&boxed(b"edts", &boxed(b"elst", &body)));
         let mut moov = Vec::new();
@@ -421,12 +659,12 @@ mod tests {
         out.extend_from_slice(&boxed(b"moov", &moov));
 
         let path = write_temp("mp4_v1.m4a", &out);
-        assert_eq!(
-            edit_list_trim(&path, 44_100),
-            Some(EditListTrim {
+        assert_trim(
+            &path,
+            EditListTrim {
                 start: 1_024,
-                duration: 264_600
-            })
+                duration: 264_600,
+            },
         );
     }
 
@@ -436,7 +674,7 @@ mod tests {
             "mp4_video.m4a",
             &file_with_handler(b"vide", 1_000, 44_100, &[(6_000, 1_024)]),
         );
-        assert_eq!(edit_list_trim(&path, 44_100), None);
+        assert_eq!(edit_list_trim(&path, 1, 44_100).unwrap(), None);
     }
 
     #[test]
@@ -445,13 +683,15 @@ mod tests {
             "mp4_not_a_container.bin",
             b"not an ISO base media file at all",
         );
-        assert_eq!(edit_list_trim(&path, 44_100), None);
+        assert_eq!(edit_list_trim(&path, 1, 44_100).unwrap(), None);
     }
 
     #[test]
     fn rejects_a_zero_media_timescale() {
         let path = write_temp("mp4_zero_timescale.m4a", &file(1_000, 0, &[(6_000, 1_024)]));
-        assert_eq!(edit_list_trim(&path, 44_100), None);
+        let error =
+            edit_list_trim(&path, 1, 44_100).expect_err("a zero media timescale is malformed");
+        assert_eq!(error.kind(), DecodeErrorKind::Malformed);
     }
 
     #[test]
@@ -464,6 +704,7 @@ mod tests {
         let mut mdia = Vec::new();
         mdia.extend_from_slice(&mdhd(44_100));
         mdia.extend_from_slice(&hdlr(b"soun"));
+        trak.extend_from_slice(&tkhd(1));
         trak.extend_from_slice(&boxed(b"mdia", &mdia));
         trak.extend_from_slice(&boxed(b"edts", &elst));
         let mut moov = Vec::new();
@@ -474,7 +715,8 @@ mod tests {
         out.extend_from_slice(&boxed(b"moov", &moov));
 
         let path = write_temp("mp4_truncated.m4a", &out);
-        assert_eq!(edit_list_trim(&path, 44_100), None);
+        let error = edit_list_trim(&path, 1, 44_100).expect_err("a truncated table is malformed");
+        assert_eq!(error.kind(), DecodeErrorKind::Malformed);
     }
 
     #[test]
@@ -483,7 +725,9 @@ mod tests {
             "mp4_zero_movie_timescale.m4a",
             &file(0, 44_100, &[(6_000, 1_024)]),
         );
-        assert_eq!(edit_list_trim(&path, 44_100), None);
+        let error =
+            edit_list_trim(&path, 1, 44_100).expect_err("a zero movie timescale is malformed");
+        assert_eq!(error.kind(), DecodeErrorKind::Malformed);
     }
 
     #[test]
@@ -495,7 +739,7 @@ mod tests {
         out.extend_from_slice(b"free");
         out.extend_from_slice(&u64::MAX.to_be_bytes());
         let path = write_temp("mp4_oversized_box.m4a", &out);
-        assert_eq!(edit_list_trim(&path, 44_100), None);
+        assert_eq!(edit_list_trim(&path, 1, 44_100).unwrap(), None);
     }
 
     /// A `Read + Seek` wrapper that counts the bytes actually read.
@@ -529,7 +773,11 @@ mod tests {
             inner: fs::File::open(&path).unwrap(),
             read: std::cell::Cell::new(0),
         };
-        assert!(edit_list_trim_reader(&mut reader, 44_100).is_some());
+        assert!(
+            edit_list_trim_reader(Path::new("mp4_large_payload.m4a"), &mut reader, 1, 44_100)
+                .unwrap()
+                .is_some()
+        );
         assert!(
             reader.read.get() < 64 * 1024,
             "the reader read {} bytes of a {} byte file",

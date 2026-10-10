@@ -365,7 +365,7 @@ fn decode_with_symphonia(
     // Only an MP4 container has an edit list. Skip the reader for every other format, so a WAV or
     // FLAC decode never opens it.
     let edit = if needs_edit_list(format.format_info().short_name) {
-        mp4::edit_list_trim(path, rate)
+        mp4::edit_list_trim(path, track_id, rate)?
     } else {
         None
     };
