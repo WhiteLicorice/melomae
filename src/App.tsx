@@ -4,7 +4,7 @@ function App() {
   return (
     <main className="container">
       <h1>Melomae</h1>
-      <p>Build an offline music library from MusicBrainz.</p>
+      <p>Restore your music collection on your own machine.</p>
     </main>
   );
 }
