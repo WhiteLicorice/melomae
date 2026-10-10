@@ -808,3 +808,6 @@ mod tests {
         assert_eq!(store.triage_item("/music/missing.mp3").unwrap(), None);
     }
 }
+
+#[cfg(test)]
+mod race_tests;

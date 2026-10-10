@@ -5,7 +5,6 @@
 //! behavioral and not a compile error.
 
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Barrier};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use melomae_core::store::{JobState, Store, StoreError};
@@ -190,76 +189,4 @@ fn store_a_newer_schema_is_rejected_without_a_write() {
         )
         .unwrap();
     assert_eq!(value, "/music", "open changed a settings row");
-}
-
-#[test]
-fn store_a_cancelled_job_cannot_be_overwritten_by_a_stale_transition() {
-    let db = TempDb::new("cancel-race");
-    let path = db.path().to_path_buf();
-    let store = Store::open(&path).unwrap();
-    let id = store.insert_job("/music/a.mp3", true).unwrap();
-    store.transition_job(id, JobState::Restoring).unwrap();
-
-    // A second connection opens a write transaction and cancels the job, but
-    // does not commit yet.
-    let rival = Connection::open(&path).unwrap();
-    rival.execute_batch("BEGIN IMMEDIATE").unwrap();
-    rival
-        .execute("UPDATE jobs SET state = 'cancelled' WHERE id = ?1", [id])
-        .unwrap();
-
-    // The main thread starts the transition first, so its read runs against the
-    // still-`restoring` row and its write then waits on the cancel. A worker
-    // commits the cancel only when told, so the read cannot miss it.
-    let (go_tx, go_rx) = mpsc::channel();
-    let committer = std::thread::spawn(move || {
-        go_rx.recv().unwrap();
-        rival.execute_batch("COMMIT").unwrap();
-    });
-
-    go_tx.send(()).unwrap();
-    let result = store.transition_job(id, JobState::Encoding);
-    committer.join().unwrap();
-
-    assert!(
-        matches!(result, Err(StoreError::IllegalTransition { .. })),
-        "a stale transition overwrote the cancel: {result:?}"
-    );
-    assert_eq!(store.job(id).unwrap().state, JobState::Cancelled);
-}
-
-#[test]
-fn store_only_one_of_two_competing_transitions_wins() {
-    let db = TempDb::new("competing");
-    let path = db.path().to_path_buf();
-    let first = Store::open(&path).unwrap();
-    let id = first.insert_job("/music/a.mp3", true).unwrap();
-    let second = Store::open(&path).unwrap();
-
-    let barrier = Arc::new(Barrier::new(2));
-    let left = {
-        let barrier = Arc::clone(&barrier);
-        std::thread::spawn(move || {
-            barrier.wait();
-            first.transition_job(id, JobState::Restoring)
-        })
-    };
-    let right = {
-        let barrier = Arc::clone(&barrier);
-        std::thread::spawn(move || {
-            barrier.wait();
-            second.transition_job(id, JobState::Restoring)
-        })
-    };
-
-    let left = left.join().unwrap();
-    let right = right.join().unwrap();
-    let winners = [left.is_ok(), right.is_ok()]
-        .into_iter()
-        .filter(|won| *won)
-        .count();
-    assert_eq!(
-        winners, 1,
-        "exactly one transition must win: {left:?} and {right:?}"
-    );
 }
