@@ -7,7 +7,7 @@
 **Stack:** §D
 **Assigned to:** Agent
 **Started:** fd62a4e, clean tree. Baseline gate at fd62a4e: board 45 records, unittest 9 passed, Vitest 1 passed, cargo test 1 passed, pytest 8 passed.
-**Outcome:** DONE. `melomae_core::decode` decodes MP3, AAC/M4A, Opus (Ogg and WebM), Vorbis, FLAC, ALAC, WAV, and AIFF to planar f32 at 44.1 kHz. Crates: symphonia 0.6.1 (demux and non-Opus codecs), opusic-c 1.6.1 / opusic-sys 0.7.5 (libopus 1.6.1, vendored source), rubato 5.0.1. Measured: every fixture length equals the ffmpeg reference (1 sample, Opus 1 ms); the 48 kHz Opus decode sits within max |diff| 1.5e-5 of the conda libopus 1.6.1 reference (tolerance 1e-4); the resampled 1 kHz tone gives THD+N −136.0 dB; the analytic 20 Hz–20 kHz sweep scores SNR 105.9 dB; the ffmpeg swr comparison reads 105.7 dB and is recorded, not gated. Gate `pnpm verify` exit 0: board 45 records valid, unittest 9 passed, Vitest 1 passed, cargo test --workspace 27 passed, pytest 10 passed. See Outcome detail.
+**Outcome:** DONE. `melomae_core::decode` decodes MP3, AAC/M4A, Opus (Ogg and WebM), Vorbis, FLAC, ALAC, WAV, and AIFF to planar f32 at 44.1 kHz. Crates: symphonia 0.6.1 (demux and non-Opus codecs), opusic-c 1.6.1 / opusic-sys 0.7.5 (libopus 1.6.1, vendored source), rubato 5.0.1. Measured: every fixture length equals the ffmpeg reference (1 sample, Opus 1 ms); the 48 kHz Opus decode sits within max |diff| 1.5e-5 of the conda libopus 1.6.1 reference (tolerance 1e-4); the resampled 1 kHz tone gives THD+N −136.0 dB; the analytic 20 Hz–20 kHz sweep scores SNR 105.8 dB; the ffmpeg swr comparison reads 105.7 dB and is recorded, not gated. First-submission gate `pnpm verify` exit 0: board 45 records valid, unittest 9 passed, Vitest 1 passed, cargo test --workspace 27 passed, pytest 10 passed. Fix round 1 resolved the eight review findings (F1–F8), including F7 (mapped multichannel Opus) and F8 (a 20 kHz gate); `cargo test -p melomae-core` now passes 73 tests and `cargo clippy -p melomae-core --all-targets -- -D warnings` is clean. See Outcome detail.
 
 ## Goal
 
@@ -91,6 +91,18 @@ trims only the start; the pinned BtbN build trims both ends to the source length
 gapless-correct result. `decode::mp4` now returns the start and the summed non-empty edit
 durations, `media_time` converted with the media timescale from `mdhd` and `segment_duration` with
 the movie timescale from `mvhd`.
+
+Fix round 1 (2026-10-10) resolved the eight blocking review findings. F1: a hostile
+`DiscardPadding` returns a typed `Malformed` error, with checked arithmetic in both readers. F2:
+both container readers stream through a bounded `Read + Seek` and never load the whole file. F3:
+the selected container track drives the trim. F4: each block's signed `DiscardPadding` trims that
+block, positive at its end and negative at its start. F5: an unknown-size Segment's clean end is
+end of stream, and a truncated WebM still errors. F6: an initial empty MP4 edit is skipped, so the
+following start trim applies. F7: mapping-family 1 and 255 Opus streams decode with libopus's
+multistream decoder, the `OpusHead` mapping is validated, and a bad header returns a typed error.
+F8: the analytic gate trims only the measured stop transient and requires the scored band to reach
+19.9 kHz, and a steady 20 kHz tone gate scores 100.4 dB. Each finding has a red run saved before
+its fix.
 
 ## Verify
 
