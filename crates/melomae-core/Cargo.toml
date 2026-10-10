@@ -5,7 +5,10 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+opusic-c = "1.6.1"
+rubato = "5.0.1"
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+symphonia = { version = "0.6.1", features = ["all"] }
 
 [dev-dependencies]
 cargo_metadata = "0.23.1"

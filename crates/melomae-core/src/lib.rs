@@ -8,3 +8,5 @@ pub mod store;
 
 /// The crate version, read from `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub mod decode;
