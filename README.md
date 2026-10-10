@@ -1,9 +1,9 @@
 # Melomae
 
-Melomae is a free, open-source desktop app. It builds an offline music library.
-The user picks music on MusicBrainz. Melomae finds the audio on YouTube Music,
-downloads it, restores and repairs it, tags it, and files it into the library.
-Melomae can also restore and repair audio files that the user already owns.
+Melomae is a free, open-source desktop app. It restores a music collection
+that you already own. You add folders. Melomae shows which files can gain
+from restoration and restores them on your own machine. It keeps every tag
+and picture, and it mirrors your folder tree. No audio leaves your machine.
 
 Melomae produces a reconstructed approximation. It can't recover the data
 that lossy compression discarded, but it's probably good enough for your ears.

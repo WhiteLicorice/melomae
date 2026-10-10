@@ -19,11 +19,10 @@ This document defines how Melomae is built. `docs/melomae-srs.md` defines what i
 
 | Crate | Role |
 |---|---|
-| `crates/melomae-core` | The whole pipeline: decode, inference, encode, MusicBrainz, matching, download, tags, library, jobs. It must not depend on any `tauri*` crate. A test enforces this. |
+| `crates/melomae-core` | The whole pipeline: decode, inference, encode, triage, tags, provenance, jobs, and history. It must not depend on any `tauri*` crate. A test enforces this. |
 | `crates/melomae-cli` | A headless command line over the core. Agents and tests use it as the end-to-end path. |
 | `src-tauri` | The Tauri app. It holds commands, events, and packaging config only. |
 
-- `melomae-core::source` holds the `StreamSource` trait and the source registry (task 30). Each source lives in its own module, for example `source/youtube/`.
 - Long-running work runs off the main thread. Progress goes to the UI over Tauri Channels.
 - The TypeScript bindings are generated from Rust types. Ticket 18 picks tauri-specta or ts-rs.
 
@@ -37,6 +36,7 @@ This document defines how Melomae is built. `docs/melomae-srs.md` defines what i
 - Known limitation, accepted by the owner on 2026-09-25: the output is bit-exact on one machine with one thread count, but not across machines. ONNX Runtime CPU output moves by up to 3.4e-5 with the intra-op thread count, which is set to the physical core count. It can also move with the CPU instruction set (inferred). GPU output differs from CPU by up to 7.2e-4 (§K). Tests compare with a tolerance, never a byte hash.
 - ONNX Runtime peak memory is about 0.36 GB plus 0.58 GB per channel-second (ticket 01). This is about 2.2 times the torch figure in §K.
 - The chunking algorithm is a port of `C:\Lab\Apollo\inference.py:86-221`: padded chunks, a padded-start clamp at the file end, linear crossfades, and normalized overlap-add.
+- The pipeline calls restore through a file-level `RestoreBackend` trait (task 04). It takes one file's 44.1 kHz float channels, the settings, a progress callback, and a cancel flag. It returns the restored channels. The local ONNX Runtime engine is the only implementation. Chunking stays inside it. The MVP has no network backend (SRS §2.4). Backlog B-012 holds the hosted option.
 - GPU: ticket 08 picks the execution provider for each OS. Candidates: DirectML (in maintenance mode, WinML is its successor), CUDA, and WinML.
 - Fallback: if spike 01 returns NO-GO, a Python sidecar (standalone Python plus a CPU torch wheel) replaces ONNX Runtime. A board amendment must define it first.
 
@@ -55,52 +55,28 @@ This document defines how Melomae is built. `docs/melomae-srs.md` defines what i
 - Opus always decodes at 48 kHz. Melomae resamples it to 44.1 kHz for Apollo. The owner's old pipeline resampled with ffmpeg swr at `filter_size=256:phase_shift=24:cutoff=0.98` (`C:\Lab\Apollo\inference2.py:39`). Ticket 03 measures rubato against that reference.
 - The shipped app does not use ffmpeg. The conda ffmpeg is a dev-only test oracle.
 
-## §E — Acquisition
+## §E — Acquisition (removed)
 
-All acquisition goes through the `StreamSource` trait (task 30). A source searches, maps its results to the neutral `Candidate` type, fetches a stream, and reports what it fetched in `StreamInfo`: codec, container, bitrate, sample rate, and whether it is lossless. Each source chooses its own format. No source re-encodes. The matcher, the pipeline, the store, and the UI never name a specific source. A boundary test enforces this in `melomae-core` (SRS §5.9).
-
-### MVP source: YouTube Music
-
-- The official yt-dlp standalone binary does YouTube Music search and download. yt-dlp is Unlicense. Its PyInstaller binaries include GPLv3+ code.
-- yt-dlp needs an external JavaScript runtime for full YouTube support (yt-dlp issue #15012, since 2025.11.12). Deno (MIT) is the default runtime. The official binaries already bundle the EJS component.
-- The app downloads both binaries on first run. It verifies them against their published SHA-256 sums, updates them itself, and runs them as child processes. They are not bundled in the installer.
-- Format selection: `bestaudio[acodec=opus]/bestaudio[acodec^=mp4a]`. YouTube serves no MP3.
-- The owner rejected rustypipe (last crate release 0.11.4 on 2025-04-23) and YoutubeExplode (maintenance mode, no YouTube Music search) on 2026-09-24.
-
-### Backlog sources
-
-Checked on 2026-09-24. yt-dlp supports both sources (`supportedsites.md`), so the managed binary from task 11 can serve them.
-
-- **Bandcamp (B-009).** The public stream is `mp3-128` (`yt_dlp/extractor/bandcamp.py:460`). A free-download page offers other encodings, which can be lossless (`bandcamp.py:223-280`). Purchased downloads need the user's account.
-- **SoundCloud (B-010).** The formats are AAC, Opus, and MP3 over HTTP or HLS (`yt_dlp/extractor/soundcloud.py:109`). AAC reaches 256 kb/s for premium accounts (`:355`). The original WAV needs authentication (`:597`, `:630`).
-
-### SponsorBlock
-
-The MVP does not use SponsorBlock (SRS §5.11). Backlog record B-008 holds the option. Evidence, checked on 2026-09-24:
-
-- The matcher prefers song results from Topic channels. They carry the release audio, and SponsorBlock segments belong to uploaded videos. This is inferred. Spike 02 measures how often a track has only a music-video candidate.
-- The duration gate rejects a music video with extra sections. The track goes to review, so wrong audio never reaches the library.
-- `--sponsorblock-remove` is a yt-dlp post-processing step, and the yt-dlp README says ffmpeg is "Required for … various post-processing tasks." Melomae ships without ffmpeg.
-- The useful category is "Music: Non-Music Section" (`music_offtopic`). It covers "music not present in the official or Spotify music release."
-- "The API and database follow CC BY-NC-SA 4.0 unless you have explicit permission." Each lookup also sends the video ID to a third party.
+Melomae does not acquire audio (SRS §1.5). On 2026-10-10 the owner removed YouTube Music, yt-dlp, Deno, the `StreamSource` interface, and the Bandcamp, SoundCloud, and SponsorBlock records. Tasks 02, 11, 12, 13, and 30 and records B-007 to B-010 are `CANCELLED`. Commit `6f91149` holds the removed evidence. `docs/evidence/2026-10-10-pivot.md` records the reasons.
 
 ## §F — Metadata
 
-- MusicBrainz WS/2 JSON API. The limit is 1 request per second per IP. The User-Agent must be `Melomae/<version> ( <contact> )`. The owner supplies the contact (bootstrap item 1).
-- Cover Art Archive for front covers. Ticket 10 confirms its rate policy.
-- lofty reads and writes tags: Vorbis comments for FLAC and Opus, ID3 for WAV.
-- Tag names follow the MusicBrainz Picard mapping. Ticket 15 confirms it against the live Picard documentation.
+- lofty reads and writes tags: ID3 for MP3 and WAV, Vorbis comments for FLAC, Opus, and Ogg, and MP4 atoms for M4A.
+- Task 15 confirms at execution time how lofty exposes custom fields (ID3 `TXXX`, any Vorbis key, MP4 freeform atoms), multi-value fields, and picture types. If lofty can't carry one of them through its generic tag layer, task 15 uses the format-specific API for it. Record the result in task 15.
+- The field mapping between formats follows the MusicBrainz Picard tag mapping. Task 15 confirms it against the live Picard documentation. Reading that documentation is not use of the MusicBrainz web service.
+- Melomae calls no online metadata service. The MusicBrainz web service, the Cover Art Archive, and AcoustID are free for non-commercial use only (`docs/evidence/2026-10-10-pivot.md`).
 
 ## §G — Storage
 
 - SQLite through `rusqlite` with the bundled SQLite. The database lives in the app data directory.
 - `PRAGMA user_version` numbers the schema migrations.
-- The database holds settings, jobs, and the library index.
+- The database holds settings, jobs, triage results, and history.
 
 ## §H — Playback
 
 - Before/after playback is native Rust (cpal or rodio). It does not use the webview.
 - Reason: Linux WebKitGTK plays audio through GStreamer, and its codec support depends on installed plugins. Native playback behaves the same on both platforms.
+- Volume matching uses EBU R128 integrated loudness (SRS §10.4). Task 23 picks the crate. The `ebur128` crate is the candidate. Confirm it at execution time. The conda ffmpeg `ebur128` filter is a dev-only oracle.
 
 ## §I — Gate
 
