@@ -84,6 +84,14 @@ For this deep worktree path only, `CARGO_TARGET_DIR` must be set: the vendored c
 libopus exceeds MAX_PATH under the worktree. It is the only non-committed environment variable the
 gate needs. With it set and every `CMAKE_*` variable unset, a clean build exits 0.
 
+The trailing MP4 trim changed on 2026-10-10. The orchestrator ruled that the decoder trims the
+edit list's presentation duration as well as its start. Ruling-03 item 2 had said to trim the start
+only, and the review's F6 text assumed that. That rule rested on the old conda ffmpeg, which
+trims only the start; the pinned BtbN build trims both ends to the source length, which is the
+gapless-correct result. `decode::mp4` now returns the start and the summed non-empty edit
+durations, `media_time` converted with the media timescale from `mdhd` and `segment_duration` with
+the movie timescale from `mvhd`.
+
 ## Verify
 
 ```powershell
