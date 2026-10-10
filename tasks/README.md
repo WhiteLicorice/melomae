@@ -182,5 +182,7 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 | B-010 | [Add a SoundCloud source](backlog/B-010-add-a-soundcloud-source.md) | CANCELLED | 30, 17 |
 | B-011 | [Identify files with an online metadata service](backlog/B-011-identify-files-with-an-online-metadata-service.md) | TODO | 15 |
 | B-012 | [Offer optional hosted restore](backlog/B-012-offer-optional-hosted-restore.md) | TODO | 17 |
+| B-013 | [Check the losing error in the competing-transition test](backlog/B-013-check-the-losing-error-in-the-competing-transition-test.md) | TODO | 14 |
+| B-014 | [Make the gate independent of NODE_ENV](backlog/B-014-make-the-gate-independent-of-node-env.md) | TODO | 00 |
 
 Each backlog record states why it does not block the MVP. Each record also states its promotion condition.

@@ -22,3 +22,5 @@ Do not place a defect that blocks an MVP user journey here. Put that task in `ta
 | B-010 | [Add a SoundCloud source](B-010-add-a-soundcloud-source.md) |
 | B-011 | [Identify files with an online metadata service](B-011-identify-files-with-an-online-metadata-service.md) |
 | B-012 | [Offer optional hosted restore](B-012-offer-optional-hosted-restore.md) |
+| B-013 | [Check the losing error in the competing-transition test](B-013-check-the-losing-error-in-the-competing-transition-test.md) |
+| B-014 | [Make the gate independent of NODE_ENV](B-014-make-the-gate-independent-of-node-env.md) |
