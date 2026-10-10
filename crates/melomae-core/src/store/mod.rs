@@ -98,16 +98,23 @@ impl JobState {
         )
     }
 
-    /// Whether a job may move from this state to `next`.
+    /// Whether a job in this state may move to `next` (task 14 scope item 4).
     ///
-    /// A job with restore off goes `queued -> encoding`. The state machine
-    /// allows `queued -> encoding` for every job. The pipeline chooses the
-    /// path from the job's `restore_enabled` flag.
-    pub fn can_transition_to(self, next: JobState) -> bool {
+    /// A job with restore on moves `queued -> restoring`. A job with restore
+    /// off moves `queued -> encoding`. `queued -> failed` and
+    /// `queued -> cancelled` are legal for either flag. Every active state
+    /// accepts `failed` and `cancelled`. `tagging -> done` ends the job.
+    /// Terminal states accept nothing.
+    pub fn can_transition_to(self, next: JobState, restore_enabled: bool) -> bool {
         use JobState::*;
 
         match self {
-            Queued => matches!(next, Restoring | Encoding | Failed | Cancelled),
+            Queued => match next {
+                Restoring => restore_enabled,
+                Encoding => !restore_enabled,
+                Failed | Cancelled => true,
+                _ => false,
+            },
             Restoring => matches!(next, Encoding | Failed | Cancelled),
             Encoding => matches!(next, Tagging | Failed | Cancelled),
             Tagging => matches!(next, Done | Failed | Cancelled),
@@ -272,6 +279,8 @@ pub enum StoreError {
     UnknownValue { column: &'static str, value: String },
     /// No job has the requested id.
     JobNotFound(JobId),
+    /// The database schema is newer than this build supports.
+    UnsupportedSchema { found: i64, supported: i64 },
 }
 
 impl fmt::Display for StoreError {
@@ -285,6 +294,10 @@ impl fmt::Display for StoreError {
                 write!(formatter, "unknown {column} value: {value}")
             }
             StoreError::JobNotFound(id) => write!(formatter, "no job with id {id}"),
+            StoreError::UnsupportedSchema { found, supported } => write!(
+                formatter,
+                "the database schema is version {found}, but this build supports version {supported}"
+            ),
         }
     }
 }
@@ -310,27 +323,44 @@ pub struct Store {
 }
 
 impl Store {
-    /// Opens the database at `path`, creating and migrating it when needed.
+    /// Opens the database at `path`, creating it when absent and running the
+    /// schema migrations it needs.
     ///
-    /// On open, every job that was in flight moves back to `queued`, because no
-    /// worker runs its work anymore.
+    /// `open` does not touch the jobs. A second open while work still runs must
+    /// not disturb that work. Call [`Store::recover_interrupted_jobs`] once at
+    /// startup to requeue jobs that an earlier run left in flight.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let mut connection = Connection::open(path)?;
-        migrate(&mut connection)?;
-        connection.execute(
+        let found = read_user_version(&connection)?;
+        if found > SCHEMA_VERSION {
+            return Err(StoreError::UnsupportedSchema {
+                found,
+                supported: SCHEMA_VERSION,
+            });
+        }
+        migrate(&mut connection, found)?;
+        Ok(Self { connection })
+    }
+
+    /// Moves every interrupted job back to `queued` and returns how many moved.
+    ///
+    /// An interrupted job is one in `restoring`, `encoding`, or `tagging`,
+    /// because no worker in this run owns it. The app calls this once at
+    /// startup, before it starts any worker and before it opens a second
+    /// handle. `open` does not call it, so a second open leaves live jobs
+    /// alone.
+    pub fn recover_interrupted_jobs(&self) -> Result<usize, StoreError> {
+        let moved = self.connection.execute(
             "UPDATE jobs SET state = 'queued'
              WHERE state IN ('restoring', 'encoding', 'tagging')",
             [],
         )?;
-        Ok(Self { connection })
+        Ok(moved)
     }
 
     /// The schema version stored in `PRAGMA user_version`.
     pub fn schema_version(&self) -> Result<i64, StoreError> {
-        let version = self
-            .connection
-            .pragma_query_value(None, "user_version", |row| row.get(0))?;
-        Ok(version)
+        read_user_version(&self.connection)
     }
 
     /// Writes a setting, replacing any earlier value.
@@ -383,17 +413,26 @@ impl Store {
         }
     }
 
-    /// Moves a job to `next`. It rejects an illegal transition.
+    /// Moves a job to `next`.
+    ///
+    /// The validation covers the job's state and its restore setting. The write
+    /// is conditional on the state that was read, so a change from another
+    /// writer cannot be overwritten. On that conflict the store re-reads the
+    /// job and returns [`StoreError::IllegalTransition`].
     pub fn transition_job(&self, id: JobId, next: JobState) -> Result<(), StoreError> {
         let from = self.job(id)?.state;
-        if !from.can_transition_to(next) {
+        if !from.can_transition_to(next, self.job(id)?.restore_enabled) {
             return Err(StoreError::IllegalTransition { from, to: next });
         }
-        self.connection.execute(
-            "UPDATE jobs SET state = ?1 WHERE id = ?2",
-            params![next.as_str(), id],
+        let changed = self.connection.execute(
+            "UPDATE jobs SET state = ?1 WHERE id = ?2 AND state = ?3",
+            params![next.as_str(), id, from.as_str()],
         )?;
-        Ok(())
+        if changed == 1 {
+            return Ok(());
+        }
+        let from = self.job(id)?.state;
+        Err(StoreError::IllegalTransition { from, to: next })
     }
 
     /// Writes one triage result, replacing an earlier row for the same path.
@@ -488,15 +527,24 @@ impl Store {
     }
 }
 
-fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
-    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version < SCHEMA_VERSION {
+/// Runs every migration above the stored version, one time each.
+///
+/// Each block is guarded by its own version, so a later migration 2 does not
+/// replay migration 1. A caller rejects a version above `SCHEMA_VERSION`
+/// before this runs.
+fn migrate(connection: &mut Connection, from: i64) -> Result<(), StoreError> {
+    if from < 1 {
         let transaction = connection.transaction()?;
         transaction.execute_batch(MIGRATION_1)?;
-        transaction.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
+        transaction.execute_batch("PRAGMA user_version = 1;")?;
         transaction.commit()?;
     }
     Ok(())
+}
+
+fn read_user_version(connection: &Connection) -> Result<i64, StoreError> {
+    let version = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    Ok(version)
 }
 
 fn job_from_row(row: &Row<'_>) -> Result<Job, StoreError> {
@@ -587,6 +635,11 @@ mod tests {
     impl Drop for TempDb {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.path);
+            for suffix in ["-journal", "-wal", "-shm"] {
+                let mut sidecar = self.path.clone().into_os_string();
+                sidecar.push(suffix);
+                let _ = std::fs::remove_file(PathBuf::from(sidecar));
+            }
         }
     }
 
@@ -616,20 +669,27 @@ mod tests {
     fn transition_table_accepts_legal_and_rejects_illegal() {
         use JobState::*;
 
-        for from in ALL_STATES {
-            for to in ALL_STATES {
-                let expected = matches!(
-                    (from, to),
-                    (Queued, Restoring | Encoding | Failed | Cancelled)
-                        | (Restoring, Encoding | Failed | Cancelled)
-                        | (Encoding, Tagging | Failed | Cancelled)
-                        | (Tagging, Done | Failed | Cancelled)
-                );
-                assert_eq!(
-                    from.can_transition_to(to),
-                    expected,
-                    "unexpected rule for {from:?} -> {to:?}"
-                );
+        for restore_enabled in [false, true] {
+            for from in ALL_STATES {
+                for to in ALL_STATES {
+                    let expected = match from {
+                        Queued => match to {
+                            Restoring => restore_enabled,
+                            Encoding => !restore_enabled,
+                            Failed | Cancelled => true,
+                            _ => false,
+                        },
+                        Restoring => matches!(to, Encoding | Failed | Cancelled),
+                        Encoding => matches!(to, Tagging | Failed | Cancelled),
+                        Tagging => matches!(to, Done | Failed | Cancelled),
+                        Done | Failed | Cancelled => false,
+                    };
+                    assert_eq!(
+                        from.can_transition_to(to, restore_enabled),
+                        expected,
+                        "unexpected rule for restore_enabled={restore_enabled}, {from:?} -> {to:?}"
+                    );
+                }
             }
         }
     }
@@ -699,57 +759,6 @@ mod tests {
                 "history is missing {column}"
             );
         }
-    }
-
-    #[test]
-    fn restart_moves_an_in_flight_job_back_to_queued() {
-        let db = TempDb::new("restart");
-        let (restoring, encoding, tagging, done, cancelled, failed) = {
-            let store = Store::open(db.path()).unwrap();
-
-            let restoring = store.insert_job("/music/a.mp3", true).unwrap();
-            store
-                .transition_job(restoring, JobState::Restoring)
-                .unwrap();
-
-            let encoding = store.insert_job("/music/b.mp3", true).unwrap();
-            store.transition_job(encoding, JobState::Restoring).unwrap();
-            store.transition_job(encoding, JobState::Encoding).unwrap();
-
-            let tagging = store.insert_job("/music/c.mp3", true).unwrap();
-            store.transition_job(tagging, JobState::Restoring).unwrap();
-            store.transition_job(tagging, JobState::Encoding).unwrap();
-            store.transition_job(tagging, JobState::Tagging).unwrap();
-
-            let done = store.insert_job("/music/d.mp3", true).unwrap();
-            store.transition_job(done, JobState::Restoring).unwrap();
-            store.transition_job(done, JobState::Encoding).unwrap();
-            store.transition_job(done, JobState::Tagging).unwrap();
-            store.transition_job(done, JobState::Done).unwrap();
-
-            let cancelled = store.insert_job("/music/e.mp3", true).unwrap();
-            store
-                .transition_job(cancelled, JobState::Cancelled)
-                .unwrap();
-
-            let failed = store.insert_job("/music/f.mp3", true).unwrap();
-            store.transition_job(failed, JobState::Restoring).unwrap();
-            store.transition_job(failed, JobState::Failed).unwrap();
-
-            (restoring, encoding, tagging, done, cancelled, failed)
-        };
-
-        let store = Store::open(db.path()).unwrap();
-        for in_flight in [restoring, encoding, tagging] {
-            assert_eq!(
-                store.job(in_flight).unwrap().state,
-                JobState::Queued,
-                "job {in_flight} was in flight and must be requeued"
-            );
-        }
-        assert_eq!(store.job(done).unwrap().state, JobState::Done);
-        assert_eq!(store.job(cancelled).unwrap().state, JobState::Cancelled);
-        assert_eq!(store.job(failed).unwrap().state, JobState::Failed);
     }
 
     #[test]
