@@ -116,7 +116,7 @@ The validator rejects any other status value.
 
 | # | Task | Status | Depends on |
 | --- | --- | --- | --- |
-| 14 | [Persist jobs and settings in SQLite](mvp/14-persist-jobs-and-settings-in-sqlite.md) | TODO | 00 |
+| 14 | [Persist jobs and settings in SQLite](mvp/14-persist-jobs-and-settings-in-sqlite.md) | DONE | 00 |
 | 17 | [Run the job pipeline end to end](mvp/17-run-the-job-pipeline-end-to-end.md) | TODO | 07, 14, 15, 16, 31 |
 
 Task numbers record creation order. The executor still selects the lowest eligible `TODO`. Task 14 sits in Phase 3 but tasks 16 and 31 need it first.
