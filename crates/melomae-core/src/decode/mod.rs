@@ -13,6 +13,7 @@ use std::fmt;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+use opusic_c::multistream::{Config as OpusMsConfig, Decoder as OpusMsDecoder};
 use opusic_c::{Channels as OpusChannels, Decoder as OpusDecoder, SampleRate as OpusSampleRate};
 use symphonia::core::codecs::audio::well_known::CODEC_ID_OPUS;
 use symphonia::core::codecs::audio::{AudioCodecParameters, AudioDecoderOptions};
@@ -380,17 +381,17 @@ fn decode_opus(
     channel_count: usize,
     extra_data: Option<&[u8]>,
 ) -> Result<AudioBuffer, DecodeError> {
-    let opus_channels = match channel_count {
-        1 => OpusChannels::Mono,
-        2 => OpusChannels::Stereo,
-        other => {
-            return Err(DecodeError::new(
-                DecodeErrorKind::UnsupportedFormat,
-                path,
-                format!("Opus supports one or two channels, not {other}"),
-            ))
-        }
-    };
+    let head = parse_opus_head(path, extra_data)?;
+    if head.channels != channel_count {
+        return Err(DecodeError::new(
+            DecodeErrorKind::Malformed,
+            path,
+            format!(
+                "the Opus header declares {} channels but the track declares {channel_count}",
+                head.channels
+            ),
+        ));
+    }
     // Matroska carries the delay as the selected track's `CodecDelay` and the padding as each of
     // its blocks' `DiscardPadding`; symphonia surfaces neither. The scanner reads only those
     // elements through its own bounded reader, so it never loads the whole file. Ogg is not EBML,
@@ -403,16 +404,9 @@ fn decode_opus(
 
     let pre_skip = match &matroska_trim {
         Some(trim) => trim.pre_skip,
-        None => opus_pre_skip(extra_data).ok_or_else(|| {
-            DecodeError::new(
-                DecodeErrorKind::UnsupportedFormat,
-                path,
-                "the Opus track has no pre-skip",
-            )
-        })?,
+        None => head.pre_skip,
     };
-    let mut decoder = OpusDecoder::new(opus_channels, OpusSampleRate::Hz48000)
-        .map_err(|e| DecodeError::new(DecodeErrorKind::Decode, path, e.message()))?;
+    let mut decoder = build_opus_backend(path, &head)?;
 
     let mut channels: Vec<Vec<f32>> = vec![Vec::new(); channel_count];
     let mut block = vec![0f32; OPUS_MAX_FRAMES_PER_PACKET * channel_count];
@@ -450,8 +444,8 @@ fn decode_opus(
         }
 
         let decoded = decoder
-            .decode_float_to_slice(&packet.data, &mut block[..], false)
-            .map_err(|e| DecodeError::new(DecodeErrorKind::Decode, path, e.message()))?;
+            .decode(&packet.data, &mut block[..])
+            .map_err(|reason| DecodeError::new(DecodeErrorKind::Decode, path, reason))?;
 
         if matroska_trim.is_none() {
             trailing_padding += packet.trim_end.get() as usize;
@@ -542,13 +536,182 @@ fn apply_block_trim(
     Ok(())
 }
 
-/// Read the pre-skip from the `OpusHead` identification header in a track's extra data.
-fn opus_pre_skip(extra_data: Option<&[u8]>) -> Option<usize> {
-    let data = extra_data?;
-    if data.len() < 12 || &data[..8] != b"OpusHead" {
-        return None;
+/// The `OpusHead` identification header fields the decoder needs.
+///
+/// RFC 7845 section 5.1 defines the layout: bytes 0 to 7 are the magic, byte 8 is the version,
+/// byte 9 is the channel count, bytes 10 and 11 are the pre-skip, byte 18 is the channel mapping
+/// family, byte 19 is the stream count, byte 20 is the coupled stream count, and bytes 21 onward
+/// are the mapping table, one entry per channel.
+#[derive(Debug)]
+struct OpusHead {
+    /// The channel count, from byte 9.
+    channels: usize,
+    /// The pre-skip, in samples at 48 kHz, from bytes 10 and 11.
+    pre_skip: usize,
+    /// The channel mapping family, from byte 18.
+    mapping_family: u8,
+    /// The number of elementary streams, from byte 19 (mapping family 0 always has one).
+    stream_count: u8,
+    /// The number of coupled streams, from byte 20.
+    coupled_count: u8,
+    /// The mapping table, one entry per channel.
+    mapping: Vec<u8>,
+}
+
+/// Parse and validate the `OpusHead` identification header. A malformed or unsupported header
+/// returns a typed error that names the file and the offending field.
+fn parse_opus_head(path: &Path, extra_data: Option<&[u8]>) -> Result<OpusHead, DecodeError> {
+    let malformed = |reason: &str| DecodeError::new(DecodeErrorKind::Malformed, path, reason);
+    let data = extra_data.ok_or_else(|| malformed("the Opus track has no identification header"))?;
+    if data.len() < 19 || &data[..8] != b"OpusHead" {
+        return Err(malformed(
+            "the Opus identification header is missing or truncated",
+        ));
     }
-    Some(usize::from(u16::from_le_bytes([data[10], data[11]])))
+    let channels = usize::from(data[9]);
+    if channels == 0 {
+        return Err(malformed("the Opus header declares no channels"));
+    }
+    let pre_skip = usize::from(u16::from_le_bytes([data[10], data[11]]));
+    let mapping_family = data[18];
+    let (stream_count, coupled_count, mapping) = match mapping_family {
+        0 => {
+            if channels > 2 {
+                return Err(malformed(
+                    "the Opus header declares more than two channels in mapping family 0",
+                ));
+            }
+            (1, u8::from(channels == 2), (0..channels as u8).collect())
+        }
+        1 | 255 => {
+            let table_end = 21usize
+                .checked_add(channels)
+                .ok_or_else(|| malformed("the Opus header channel count is out of range"))?;
+            if data.len() < table_end {
+                return Err(malformed(
+                    "the Opus identification header is missing its mapping table",
+                ));
+            }
+            let stream_count = data[19];
+            let coupled_count = data[20];
+            if stream_count == 0 || coupled_count > stream_count {
+                return Err(malformed("the Opus header declares an invalid stream count"));
+            }
+            let total = usize::from(stream_count) + usize::from(coupled_count);
+            if total > channels {
+                return Err(malformed(
+                    "the Opus header declares more streams than channels",
+                ));
+            }
+            let mapping = data[21..table_end].to_vec();
+            if mapping
+                .iter()
+                .any(|value| *value != 255 && usize::from(*value) >= total)
+            {
+                return Err(malformed("the Opus header's channel mapping is out of range"));
+            }
+            (stream_count, coupled_count, mapping)
+        }
+        other => {
+            return Err(DecodeError::new(
+                DecodeErrorKind::UnsupportedFormat,
+                path,
+                format!("the Opus channel mapping family {other} is not supported"),
+            ))
+        }
+    };
+    Ok(OpusHead {
+        channels,
+        pre_skip,
+        mapping_family,
+        stream_count,
+        coupled_count,
+        mapping,
+    })
+}
+
+/// The libopus decoder for one file: the single-stream decoder for unpacked mono or stereo, and
+/// the multistream decoder for a mapped channel layout.
+enum OpusBackend {
+    Single(OpusDecoder),
+    Mapped(OpusMsDecoder),
+}
+
+impl OpusBackend {
+    /// Decode one packet into `output`, returning the number of frames per channel.
+    fn decode(&mut self, packet: &[u8], output: &mut [f32]) -> Result<usize, String> {
+        match self {
+            Self::Single(decoder) => decoder
+                .decode_float_to_slice(packet, output, false)
+                .map_err(|e| e.message().to_string()),
+            Self::Mapped(decoder) => decoder
+                .decode_float_to_slice(packet, output, false)
+                .map_err(|e| e.message().to_string()),
+        }
+    }
+}
+
+/// Build the decoder for a validated `OpusHead`.
+///
+/// Mapping family 0 is unpacked mono or stereo and uses the single-stream decoder. Every other
+/// family carries a mapping table and uses libopus's multistream decoder, whose channel count is a
+/// compile-time constant, so each supported count gets its own arm.
+fn build_opus_backend(path: &Path, head: &OpusHead) -> Result<OpusBackend, DecodeError> {
+    let rate = OpusSampleRate::Hz48000;
+    if head.mapping_family == 0 {
+        let opus_channels = match head.channels {
+            1 => OpusChannels::Mono,
+            2 => OpusChannels::Stereo,
+            _ => {
+                return Err(DecodeError::new(
+                    DecodeErrorKind::Malformed,
+                    path,
+                    "the Opus header declares more than two channels in mapping family 0",
+                ))
+            }
+        };
+        let decoder = OpusDecoder::new(opus_channels, rate)
+            .map_err(|e| DecodeError::new(DecodeErrorKind::Decode, path, e.message()))?;
+        return Ok(OpusBackend::Single(decoder));
+    }
+
+    macro_rules! mapped {
+        ($n:literal) => {{
+            let mut mapping = [0u8; $n];
+            mapping.copy_from_slice(&head.mapping[..$n]);
+            let config = OpusMsConfig::<$n>::try_new(
+                head.stream_count,
+                head.coupled_count,
+                mapping,
+            )
+            .ok_or_else(|| {
+                DecodeError::new(
+                    DecodeErrorKind::Malformed,
+                    path,
+                    "the Opus channel mapping is invalid",
+                )
+            })?;
+            let decoder = OpusMsDecoder::new(config, rate)
+                .map_err(|e| DecodeError::new(DecodeErrorKind::Decode, path, e.message()))?;
+            Ok(OpusBackend::Mapped(decoder))
+        }};
+    }
+
+    match head.channels {
+        1 => mapped!(1),
+        2 => mapped!(2),
+        3 => mapped!(3),
+        4 => mapped!(4),
+        5 => mapped!(5),
+        6 => mapped!(6),
+        7 => mapped!(7),
+        8 => mapped!(8),
+        other => Err(DecodeError::new(
+            DecodeErrorKind::UnsupportedFormat,
+            path,
+            format!("Opus decode supports at most eight channels, not {other}"),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -625,5 +788,71 @@ mod tests {
             );
         }
         assert!(needs_edit_list("isomp4"));
+    }
+
+    /// A minimal `OpusHead` with the given channel count, mapping family, stream counts, and
+    /// mapping table.
+    fn opus_head(
+        channels: u8,
+        mapping_family: u8,
+        stream_count: u8,
+        coupled_count: u8,
+        mapping: &[u8],
+    ) -> Vec<u8> {
+        let mut head = vec![0u8; 21 + usize::from(channels)];
+        head[..8].copy_from_slice(b"OpusHead");
+        head[9] = channels;
+        head[18] = mapping_family;
+        if mapping_family != 0 {
+            head[19] = stream_count;
+            head[20] = coupled_count;
+            head[21..21 + mapping.len()].copy_from_slice(mapping);
+        }
+        head
+    }
+
+    #[test]
+    fn a_bad_opus_head_returns_a_typed_error() {
+        // Mapping family 0 allows only one or two channels, so a six-channel family 0 header is
+        // malformed and must be rejected before any decoder is built.
+        let head = opus_head(6, 0, 0, 0, &[]);
+        let error = parse_opus_head(Path::new("bad.opus"), Some(&head)).expect_err("a bad header");
+        assert_eq!(error.kind(), DecodeErrorKind::Malformed);
+        assert!(
+            error.reason().contains("mapping family 0"),
+            "the error must name the bad field, got: {}",
+            error.reason()
+        );
+
+        // A truncated header has no complete mapping table and is also malformed.
+        let mut truncated = opus_head(6, 1, 4, 2, &[0, 1, 2, 3, 4, 5]);
+        truncated.truncate(20);
+        let error =
+            parse_opus_head(Path::new("bad.opus"), Some(&truncated)).expect_err("truncated");
+        assert_eq!(error.kind(), DecodeErrorKind::Malformed);
+
+        // A coupled count larger than the stream count is malformed.
+        let head = opus_head(6, 1, 2, 3, &[0, 1, 2, 3]);
+        let error =
+            parse_opus_head(Path::new("bad.opus"), Some(&head)).expect_err("bad stream counts");
+        assert_eq!(error.kind(), DecodeErrorKind::Malformed);
+    }
+
+    #[test]
+    fn a_valid_opus_head_reports_its_mapping() {
+        // The standard 5.1 layout: four streams, two of them coupled, in Vorbis channel order.
+        let head = opus_head(6, 1, 4, 2, &[0, 1, 2, 3, 4, 5]);
+        let parsed = parse_opus_head(Path::new("good.opus"), Some(&head)).expect("a valid header");
+        assert_eq!(parsed.channels, 6);
+        assert_eq!(parsed.mapping_family, 1);
+        assert_eq!(parsed.stream_count, 4);
+        assert_eq!(parsed.coupled_count, 2);
+        assert_eq!(parsed.mapping, vec![0, 1, 2, 3, 4, 5]);
+
+        let stereo = parse_opus_head(Path::new("good.opus"), Some(&opus_head(2, 0, 0, 0, &[])))
+            .expect("a valid stereo header");
+        assert_eq!(stereo.stream_count, 1);
+        assert_eq!(stereo.coupled_count, 1);
+        assert_eq!(stereo.mapping, vec![0, 1]);
     }
 }
