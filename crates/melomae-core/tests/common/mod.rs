@@ -1,29 +1,15 @@
 //! Shared helpers for the decode test targets.
 //!
-//! Fixtures that `tools/fixtures/make_fixtures.py` generates are read through [`fixture`].
-//! When the generator has not run, [`fixture`] returns `None` and the caller skips the case
-//! with a clear message, so the suite works on a machine with no ffmpeg.
+//! Signal synthesis and measurement only. The fixtures themselves are built by `setup`, which
+//! encodes synthesized audio with the pinned ffmpeg into a temporary directory.
 
 #![allow(dead_code)]
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// The sample rate that [`melomae_core::decode::decode_file`] always produces.
 pub const TARGET_RATE: u32 = 44_100;
-
-/// The directory the generator writes into.
-pub fn fixtures_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-}
-
-/// The absolute path to a generated fixture, or `None` when it is absent.
-pub fn fixture(name: &str) -> Option<PathBuf> {
-    let path = fixtures_dir().join(name);
-    path.is_file().then_some(path)
-}
 
 /// Read a raw little-endian `f32` file, as the ffmpeg oracle writes it.
 pub fn read_f32le(path: &Path) -> Vec<f32> {

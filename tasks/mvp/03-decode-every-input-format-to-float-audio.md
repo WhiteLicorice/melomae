@@ -32,6 +32,8 @@ Decode MP3, AAC/M4A, Opus (WebM and Ogg), Vorbis, FLAC, ALAC, WAV, and AIFF to p
 7. Return a typed error that names the file and the reason for an undecodable input.
 8. Add `tools/fixtures/make_fixtures.py`. It is dev-only and uses the conda ffmpeg. It builds the test fixtures from `C:\Lab\Apollo\asserts\input_wav.wav` (CC BY-SA 4.0). Record the attribution next to the fixtures. Never commit downloaded audio.
 
+   **Changed by the author on 2026-10-10.** The author's words: "Just recreate the fixtures during the test and delete them afterward, standard setup-and-teardown." This replaced the local-only fixtures and the skip-when-absent behavior. The tests now synthesize the source in Rust, encode it with a pinned ffmpeg (`tools/fetch_ffmpeg.py`, a BtbN monthly archive), and delete everything when the test ends. `make_fixtures.py` and its README are deleted, and no CC BY-SA attribution is needed because the source is synthesized.
+
 ## Out of scope
 
 - Streaming decode for very long files (backlog B-005)

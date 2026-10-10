@@ -2,10 +2,12 @@
 //! `melomae_core::decode::decode_file`, which returns planar 32-bit float at 44.1 kHz.
 
 mod common;
+mod setup;
 
 use melomae_core::decode::{decode_file, decode_file_native, TARGET_SAMPLE_RATE};
 
-use common::{fixture, log_sweep, sine, write_wav_f32};
+use common::{log_sweep, sine, write_wav_f32};
+use setup::{Fixtures, TempDir, INPUTS};
 
 /// The 44.1 kHz frame count that resampling `frames` at `rate` must produce.
 fn expected_target_frames(frames: usize, rate: u32) -> usize {
@@ -14,12 +16,11 @@ fn expected_target_frames(frames: usize, rate: u32) -> usize {
 
 #[test]
 fn e2e_decode_synthesized_wav_to_44100_float() {
+    let dir = TempDir::new("melomae-e2e-wav");
     let frames = 48_000;
     let left = sine(48_000, 440.0, 0.5, frames);
     let right = sine(48_000, 880.0, 0.5, frames);
-    let path = std::env::temp_dir()
-        .join("melomae-decode-tests")
-        .join("e2e_sine_48000.wav");
+    let path = dir.join("e2e_sine_48000.wav");
     write_wav_f32(&path, 48_000, &[left, right]);
 
     let decoded = decode_file(&path).expect("decode the synthesized WAV end to end");
@@ -31,23 +32,9 @@ fn e2e_decode_synthesized_wav_to_44100_float() {
 
 #[test]
 fn e2e_decode_every_fixture_format_to_44100_float() {
-    let inputs = [
-        "wav_44100.wav",
-        "aiff_44100.aiff",
-        "flac_44100.flac",
-        "mp3_44100.mp3",
-        "aac_44100.m4a",
-        "alac_44100.m4a",
-        "vorbis_44100.ogg",
-        "opus_48000.opus",
-        "opus_48000.webm",
-    ];
-
-    let mut checked = 0;
-    for name in inputs {
-        let Some(path) = fixture(name) else {
-            continue;
-        };
+    let fixtures = Fixtures::build();
+    for (name, _, _) in INPUTS {
+        let path = fixtures.path(name);
         let native = decode_file_native(&path).expect("decode natively");
         let decoded = decode_file(&path).expect("decode to 44.1 kHz");
 
@@ -66,22 +53,14 @@ fn e2e_decode_every_fixture_format_to_44100_float() {
             expected_target_frames(native.frames(), native.sample_rate()),
             "{name}: resampled length",
         );
-        checked += 1;
     }
-
-    if checked == 0 {
-        eprintln!("skipped: no generated fixtures; run tools/fixtures/make_fixtures.py");
-    } else {
-        eprintln!("decoded {checked} fixtures end to end to 44.1 kHz");
-    }
+    eprintln!("decoded {} fixtures end to end to 44.1 kHz", INPUTS.len());
 }
 
 #[test]
 fn e2e_decode_reports_a_named_error_for_an_undecodable_input() {
-    let path = std::env::temp_dir()
-        .join("melomae-decode-tests")
-        .join("not_audio.bin");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let dir = TempDir::new("melomae-e2e-bad");
+    let path = dir.join("not_audio.bin");
     std::fs::write(&path, b"this is not audio at all, not even close").unwrap();
 
     let error = decode_file(&path).expect_err("a text file must not decode");
@@ -94,11 +73,10 @@ fn e2e_decode_reports_a_named_error_for_an_undecodable_input() {
 
 #[test]
 fn e2e_decode_resampled_sweep_is_finite_and_ordered() {
+    let dir = TempDir::new("melomae-e2e-sweep");
     let frames = 24_000;
     let sweep = log_sweep(48_000, 20.0, 20_000.0, 0.5, frames);
-    let path = std::env::temp_dir()
-        .join("melomae-decode-tests")
-        .join("e2e_sweep_48000.wav");
+    let path = dir.join("e2e_sweep_48000.wav");
     write_wav_f32(&path, 48_000, &[sweep]);
 
     let decoded = decode_file(&path).expect("decode the synthesized sweep end to end");

@@ -1,104 +1,42 @@
-//! Decode behavior for every input format, checked against the ffmpeg oracle.
+//! Decode behavior for every input format, checked against the pinned ffmpeg oracle.
 //!
-//! Tests that need a generated fixture skip with a message when
-//! `tools/fixtures/make_fixtures.py` has not produced it. The threshold and distortion tests
-//! synthesize their own input and always run.
+//! Tests that need encoded inputs build them in a temporary directory with the pinned ffmpeg and
+//! delete them when the test ends. Tests that only need a synthesized WAV run without ffmpeg.
 
 mod common;
-
-use std::path::PathBuf;
+mod setup;
 
 use melomae_core::decode::{
     decode_file, decode_file_native, opus_libopus_version, AudioBuffer, TARGET_SAMPLE_RATE,
 };
 
 use common::{
-    fixture, interleave, log_sweep, log_sweep_seconds, max_abs_diff, read_f32le, rms, sine, snr_db,
-    thd_plus_n_db, write_wav_f32,
+    interleave, log_sweep, log_sweep_seconds, max_abs_diff, rms, sine, snr_db, thd_plus_n_db,
+    write_wav_f32,
 };
+use setup::{Fixtures, TempDir};
 
-/// One generated input and its ffmpeg reference decode.
-struct Case {
-    /// The input fixture file name.
-    input: &'static str,
-    /// The sample rate the input holds, and the rate its reference was decoded at.
-    rate: u32,
-    /// The channel count.
-    channels: usize,
-    /// The raw little-endian f32 reference decode written by the generator.
-    reference: &'static str,
-}
-
-const CASES: &[Case] = &[
-    Case {
-        input: "wav_44100.wav",
-        rate: 44_100,
-        channels: 2,
-        reference: "wav_44100.wav.ffmpeg.f32",
-    },
-    Case {
-        input: "aiff_44100.aiff",
-        rate: 44_100,
-        channels: 2,
-        reference: "aiff_44100.aiff.ffmpeg.f32",
-    },
-    Case {
-        input: "flac_44100.flac",
-        rate: 44_100,
-        channels: 2,
-        reference: "flac_44100.flac.ffmpeg.f32",
-    },
-    Case {
-        input: "mp3_44100.mp3",
-        rate: 44_100,
-        channels: 2,
-        reference: "mp3_44100.mp3.ffmpeg.f32",
-    },
-    Case {
-        input: "aac_44100.m4a",
-        rate: 44_100,
-        channels: 2,
-        reference: "aac_44100.m4a.ffmpeg.f32",
-    },
-    Case {
-        input: "alac_44100.m4a",
-        rate: 44_100,
-        channels: 2,
-        reference: "alac_44100.m4a.ffmpeg.f32",
-    },
-    Case {
-        input: "vorbis_44100.ogg",
-        rate: 44_100,
-        channels: 2,
-        reference: "vorbis_44100.ogg.ffmpeg.f32",
-    },
-    Case {
-        input: "opus_48000.opus",
-        rate: 48_000,
-        channels: 2,
-        reference: "opus_48000.opus.ffmpeg.f32",
-    },
-    Case {
-        input: "opus_48000.webm",
-        rate: 48_000,
-        channels: 2,
-        reference: "opus_48000.webm.ffmpeg.f32",
-    },
+/// One generated input, its source rate, and its channel count.
+const CASES: &[(&str, u32, usize)] = &[
+    ("wav_44100.wav", 44_100, 2),
+    ("aiff_44100.aiff", 44_100, 2),
+    ("flac_44100.flac", 44_100, 2),
+    ("mp3_44100.mp3", 44_100, 2),
+    ("aac_44100.m4a", 44_100, 2),
+    ("alac_44100.m4a", 44_100, 2),
+    ("vorbis_44100.ogg", 44_100, 2),
+    ("opus_48000.opus", 48_000, 2),
+    ("opus_48000.webm", 48_000, 2),
 ];
-
-/// A short WAV written into the process temp directory for the always-on tests.
-fn temp_wav(name: &str, sample_rate: u32, planes: &[Vec<f32>]) -> PathBuf {
-    let path = std::env::temp_dir().join("melomae-decode-tests").join(name);
-    write_wav_f32(&path, sample_rate, planes);
-    path
-}
 
 #[test]
 fn decode_wav_sine_reaches_the_target_rate_and_keeps_both_channels() {
+    let dir = TempDir::new("melomae-wav-stereo");
     let frames = 48_000;
     let left = sine(48_000, 440.0, 0.5, frames);
     let right = sine(48_000, 660.0, 0.5, frames);
-    let path = temp_wav("sine_48000_stereo.wav", 48_000, &[left, right]);
+    let path = dir.join("sine_48000_stereo.wav");
+    write_wav_f32(&path, 48_000, &[left, right]);
 
     let decoded = decode_file(&path).expect("decode the synthesized WAV");
 
@@ -118,10 +56,12 @@ fn decode_wav_sine_reaches_the_target_rate_and_keeps_both_channels() {
 }
 
 #[test]
-fn wav_sine_native_decode_keeps_the_source_rate_and_length() {
+fn decode_wav_sine_native_decode_keeps_the_source_rate_and_length() {
+    let dir = TempDir::new("melomae-wav-mono");
     let frames = 24_000;
     let tone = sine(44_100, 1000.0, 0.5, frames);
-    let path = temp_wav("sine_44100_mono.wav", 44_100, &[tone]);
+    let path = dir.join("sine_44100_mono.wav");
+    write_wav_f32(&path, 44_100, &[tone]);
 
     let decoded = decode_file_native(&path).expect("decode the synthesized WAV");
 
@@ -172,100 +112,75 @@ fn decode_synthesized_sweep_resamples_to_the_expected_length() {
 
 #[test]
 fn native_decode_length_matches_the_ffmpeg_reference() {
-    let mut checked = 0;
+    let fixtures = Fixtures::build();
     let mut mismatches = Vec::new();
-    for case in CASES {
-        let (Some(input), Some(reference)) = (fixture(case.input), fixture(case.reference)) else {
-            continue;
-        };
-        let decoded = decode_file_native(&input).expect("decode the fixture");
-        let reference_samples = read_f32le(&reference);
-        let reference_frames = reference_samples.len() / case.channels;
+    for (name, rate, channels) in CASES {
+        let decoded = decode_file_native(&fixtures.path(name)).expect("decode the fixture");
+        let reference_frames = fixtures.reference(name).len() / channels;
 
-        if decoded.sample_rate() != case.rate {
+        if decoded.sample_rate() != *rate {
             mismatches.push(format!(
-                "{}: sample rate {} != {}",
-                case.input,
-                decoded.sample_rate(),
-                case.rate
+                "{name}: sample rate {} != {rate}",
+                decoded.sample_rate()
             ));
         }
-        if decoded.channel_count() != case.channels {
+        if decoded.channel_count() != *channels {
             mismatches.push(format!(
-                "{}: {} channels != {}",
-                case.input,
-                decoded.channel_count(),
-                case.channels
+                "{name}: {} channels != {channels}",
+                decoded.channel_count()
             ));
         }
 
-        // Opus allows one millisecond of slack for pre-skip rounding; every other codec must
-        // land within a single sample.
-        let tolerance = if case.input.contains("opus") {
-            case.rate as usize / 1000
+        // Opus allows one millisecond of slack for pre-skip rounding; every other codec must land
+        // within a single sample.
+        let tolerance = if name.contains("opus") {
+            *rate as usize / 1000
         } else {
             1
         };
         let delta = decoded.frames().abs_diff(reference_frames);
         if delta > tolerance {
             mismatches.push(format!(
-                "{}: decoded {} frames, reference {} frames, off by {} (tolerance {})",
-                case.input,
+                "{name}: decoded {} frames, reference {reference_frames} frames, off by {delta} (tolerance {tolerance})",
                 decoded.frames(),
-                reference_frames,
-                delta,
-                tolerance,
             ));
         }
-        checked += 1;
-    }
-    if checked == 0 {
-        eprintln!("skipped: no generated fixtures; run tools/fixtures/make_fixtures.py");
-    } else {
-        eprintln!("checked {checked} fixtures against the ffmpeg reference");
     }
     assert!(
         mismatches.is_empty(),
         "length mismatches:\n{}",
         mismatches.join("\n")
     );
+    eprintln!(
+        "checked {} fixtures against the ffmpeg reference",
+        CASES.len()
+    );
 }
 
 #[test]
 fn opus_native_decode_matches_the_libopus_reference() {
-    let Some(input) = fixture("opus_48000.opus") else {
-        eprintln!("skipped: opus fixture absent; run tools/fixtures/make_fixtures.py");
-        return;
-    };
-    let Some(reference) = fixture("opus_48000.opus.ffmpeg.f32") else {
-        eprintln!("skipped: opus reference absent; run tools/fixtures/make_fixtures.py");
-        return;
-    };
-
-    let decoded = decode_file_native(&input).expect("decode the opus fixture");
+    let fixtures = Fixtures::build();
+    let decoded = decode_file_native(&fixtures.path("opus_48000.opus")).expect("decode opus");
     assert_eq!(decoded.sample_rate(), 48_000, "Opus must decode at 48 kHz");
 
     let ours = interleave(decoded.channels());
-    let reference = read_f32le(&reference);
+    let reference = fixtures.reference("opus_48000.opus");
     assert_eq!(
         ours.len(),
         reference.len(),
         "decoded and reference sample counts differ"
     );
 
-    // The shipped libopus and the oracle's libopus are both 1.6.1, but they are separate builds,
-    // so their SIMD paths round differently. Versions: ours is the libopus 1.6.1 bundled by
-    // opusic-sys 0.7.5; the oracle is conda-forge libopus 1.6.1 via `ffmpeg -c:a libopus`. The
-    // measured max |diff| is 1.53e-5 against a 1e-4 tolerance.
+    // Our libopus and the oracle's libopus are both 1.6-class builds, but they are separate
+    // binaries, so they are not bit-exact; see the task file for the measured difference.
     let max = max_abs_diff(&ours, &reference);
     eprintln!(
-        "measured: opus max |diff| vs the libopus reference = {max:e} (ours libopus {}, oracle conda-forge libopus 1.6.1)",
+        "measured: opus max |diff| vs the libopus reference = {max:e} (ours {})",
         opus_libopus_version()
     );
     assert!(
         max <= 1.0e-4,
-        "Opus differs from the libopus reference by {max:e} (ours libopus {}, oracle conda-forge libopus 1.6.1), above the 1e-4 tolerance",
-        opus_libopus_version()
+        "Opus differs from the libopus reference by {max:e}"
     );
 }
 
@@ -273,7 +188,7 @@ fn opus_native_decode_matches_the_libopus_reference() {
 fn decode_resampled_sweep_matches_an_analytic_reference_above_80_db() {
     // The gate: resample a synthesized sweep and score it against the same sweep evaluated at the
     // 44.1 kHz sample times. The phase depends only on time, so the 44.1 kHz sweep is the exact
-    // reference for the 48 kHz input in the band up to 20 kHz.
+    // reference for the 48 kHz input.
     let seconds = 3.0;
     let input = log_sweep_seconds(48_000, 20.0, 20_000.0, 0.5, seconds);
     let resampled = AudioBuffer::new(48_000, vec![input]).resample_to(TARGET_SAMPLE_RATE);
@@ -291,43 +206,36 @@ fn decode_resampled_sweep_matches_an_analytic_reference_above_80_db() {
 
     // Recorded, not gated: the same sweep against the ffmpeg swr reference. rubato and swr are
     // different filters with different group delay, so this reads lower than the gate above.
-    if let (Some(input), Some(reference)) =
-        (fixture("sweep_48000.wav"), fixture("sweep_44100.swr.f32"))
-    {
-        let native = decode_file_native(&input).expect("decode the sweep fixture");
-        let ours = interleave(native.resample_to(TARGET_SAMPLE_RATE).channels());
-        let reference = read_f32le(&reference);
-        let frames = ours.len().min(reference.len());
-        let skip = frames / 16;
-        let snr = snr_db(&reference[skip..frames - skip], &ours[skip..frames - skip]);
-        eprintln!("measured: sweep SNR vs ffmpeg swr (recorded, not gated) = {snr:.1} dB");
-    } else {
-        eprintln!("skipped: sweep swr fixtures absent; run tools/fixtures/make_fixtures.py");
-    }
+    let fixtures = Fixtures::build();
+    let sweep = fixtures.sweep_wav(48_000, seconds, 20.0, 20_000.0);
+    let ours = interleave(
+        decode_file_native(&sweep)
+            .expect("decode the sweep")
+            .resample_to(TARGET_SAMPLE_RATE)
+            .channels(),
+    );
+    let reference = fixtures.swr_reference(&sweep, TARGET_SAMPLE_RATE, 2);
+    let frames = ours.len().min(reference.len());
+    let skip = frames / 16;
+    let snr = snr_db(&reference[skip..frames - skip], &ours[skip..frames - skip]);
+    eprintln!("measured: sweep SNR vs ffmpeg swr (recorded, not gated) = {snr:.1} dB");
 }
 
 #[test]
 fn awkward_file_names_decode() {
+    let fixtures = Fixtures::build();
     let names = [
         "Florida!!!.opus",
         "Habits (Stay High).opus",
         "Sigur Rós.flac",
     ];
-    let mut checked = 0;
     for name in names {
-        let Some(path) = fixture(name) else {
-            continue;
-        };
-        let decoded = decode_file(&path).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let decoded = decode_file(fixtures.path(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(
             decoded.sample_rate(),
             TARGET_SAMPLE_RATE,
             "{name}: target rate"
         );
         assert!(decoded.frames() > 0, "{name}: decoded no frames");
-        checked += 1;
-    }
-    if checked == 0 {
-        eprintln!("skipped: no named fixtures; run tools/fixtures/make_fixtures.py");
     }
 }

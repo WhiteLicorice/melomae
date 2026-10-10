@@ -14,6 +14,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The pinned ffmpeg for the decode tests. `pnpm verify` runs tools/fetch_ffmpeg.py, which
+      # downloads it on a cache miss. Do not use apt or choco ffmpeg: the versions differ.
+      - name: Cache the pinned ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: .cache/ffmpeg
+          key: ffmpeg-${{ runner.os }}-autobuild-2026-08-31-13-27
+
       - name: Install Linux system dependencies
         if: matrix.os == 'ubuntu-22.04'
         run: |

@@ -21,6 +21,7 @@ use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, FormatReader, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
+use symphonia::core::units::TimeBase;
 
 /// The sample rate Apollo expects. [`decode_file`] resamples every input to this rate.
 pub const TARGET_SAMPLE_RATE: u32 = 44_100;
@@ -200,7 +201,7 @@ fn decode_format(
     path: &Path,
     mut format: Box<dyn FormatReader>,
 ) -> Result<AudioBuffer, DecodeError> {
-    let (track_id, codec_params) = {
+    let (track_id, codec_params, track_time_base, track_duration) = {
         let track = format.default_track(TrackType::Audio).ok_or_else(|| {
             DecodeError::new(DecodeErrorKind::NoAudioTrack, path, "no audio track")
         })?;
@@ -211,7 +212,7 @@ fn decode_format(
                 "the audio track has no codec parameters",
             )
         })?;
-        (track.id, codec_params)
+        (track.id, codec_params, track.time_base, track.duration)
     };
 
     let audio = codec_params.audio().ok_or_else(|| {
@@ -250,7 +251,22 @@ fn decode_format(
             "unknown sample rate",
         )
     })?;
-    decode_with_symphonia(path, &mut *format, track_id, sample_rate, audio)
+    // The track's duration is the number of valid media frames, in timebase units. When the
+    // timebase is the reciprocal of the sample rate, that is a frame count, and the difference
+    // from the decoded total is the container's trailing encoder padding.
+    let valid_frames = if track_time_base == TimeBase::try_from_recip(sample_rate) {
+        track_duration.and_then(|duration| usize::try_from(duration.get()).ok())
+    } else {
+        None
+    };
+    decode_with_symphonia(
+        path,
+        &mut *format,
+        track_id,
+        sample_rate,
+        audio,
+        valid_frames,
+    )
 }
 
 fn decode_with_symphonia(
@@ -259,6 +275,7 @@ fn decode_with_symphonia(
     track_id: u32,
     sample_rate: u32,
     params: &AudioCodecParameters,
+    valid_frames: Option<usize>,
 ) -> Result<AudioBuffer, DecodeError> {
     let mut decoder = symphonia::default::get_codecs()
         .make_audio_decoder(params, &AudioDecoderOptions::default())
@@ -315,12 +332,22 @@ fn decode_with_symphonia(
             "no decodable audio frames",
         ));
     }
-    // Match ffmpeg: an MP4 edit list trims only the encoder priming from the start.
-    if let Some(trim) = mp4::edit_list_start_trim(path, rate) {
-        let trim = trim.min(channels[0].len());
-        for channel in &mut channels {
-            channel.drain(..trim);
-        }
+
+    // Match ffmpeg's gapless length. The edit list gives the start trim and the presentation
+    // length, so the end is exactly `start + duration`. Formats without an edit list fall back to
+    // the track's declared duration, and otherwise keep every decoded frame.
+    let decoded_frames = channels[0].len();
+    let edit = mp4::edit_list_trim(path, rate);
+    let start_trim = edit.map_or(0, |edit| edit.start);
+    let valid_frames = match edit {
+        Some(edit) => Some(start_trim.saturating_add(edit.duration)),
+        None => valid_frames,
+    };
+    let end = valid_frames.unwrap_or(decoded_frames).min(decoded_frames);
+    let start_trim = start_trim.min(end);
+    for channel in &mut channels {
+        channel.truncate(end);
+        channel.drain(..start_trim);
     }
     Ok(AudioBuffer::new(rate, channels))
 }
@@ -470,5 +497,33 @@ mod tests {
     #[should_panic(expected = "same length")]
     fn audio_buffer_rejects_ragged_planes() {
         AudioBuffer::new(44_100, vec![vec![0.0, 0.5], vec![0.0]]);
+    }
+
+    #[test]
+    fn decode_source_never_spawns_a_process() {
+        // The decoder must not depend on ffmpeg: only the test setup runs it. The needles are
+        // built at runtime so this test does not match its own source.
+        let needles = [
+            concat!("Command", "::new"),
+            concat!("process", "::Command"),
+            concat!("std", "::process"),
+        ];
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("decode");
+        for entry in std::fs::read_dir(&dir).expect("read the decode source directory") {
+            let path = entry.expect("read a decode source entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("read a decode source file");
+            for needle in needles {
+                assert!(
+                    !text.contains(needle),
+                    "{} must not spawn a process ({needle})",
+                    path.display()
+                );
+            }
+        }
     }
 }

@@ -1,20 +1,30 @@
-//! A minimal ISO base media file reader for the audio track's edit-list start trim.
+//! A minimal ISO base media file reader for the audio track's edit list.
 //!
 //! Symphonia exposes the container's `elst` atom but does not apply it, and its AAC decoder does
-//! no gapless trim, so the encoder priming would leak into the decoded output. ffmpeg applies the
-//! edit list's `media_time` as a start trim and nothing at the end; this module reads the same
-//! value so the decoded length matches.
+//! no gapless trim, so the encoder priming and padding would leak into the decoded output. The
+//! edit list holds both: `media_time` is the media position the presentation starts at (the
+//! priming), and the sum of the non-empty `segment_duration` values is how long the presentation
+//! lasts (which drops the padding). `media_time` is in the media timescale; `segment_duration` is
+//! in the movie timescale.
 
 use std::fs;
 use std::path::Path;
 
-/// The number of leading frames the audio track's edit list says to skip, in samples.
-///
-/// Returns `None` when the file is not an ISO base media file, or when it has no audio edit list.
-pub(crate) fn edit_list_start_trim(path: &Path, sample_rate: u32) -> Option<usize> {
-    let data = fs::read(path).ok()?;
-    find_box(&data, b"ftyp")?;
+/// The trim the audio track's edit list asks for, in samples.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EditListTrim {
+    /// Frames to drop from the start of the decoded audio.
+    pub start: usize,
+    /// How many frames the presentation lasts, after the start trim.
+    pub duration: usize,
+}
+
+/// Read the audio track's edit list, or `None` when the file is not an ISO base media file or has
+/// no edit list.
+pub(crate) fn edit_list_trim(path: &Path, sample_rate: u32) -> Option<EditListTrim> {
+    let data = read_container(path)?;
     let moov = find_box(&data, b"moov")?;
+    let movie_timescale = find_box(moov, b"mvhd").and_then(read_mvhd_timescale)?;
 
     for trak in find_boxes(moov, b"trak") {
         let Some(mdia) = find_box(trak, b"mdia") else {
@@ -27,18 +37,51 @@ pub(crate) fn edit_list_start_trim(path: &Path, sample_rate: u32) -> Option<usiz
         if hdlr.get(8..12) != Some(b"soun") {
             continue;
         }
-        let timescale = find_box(mdia, b"mdhd").and_then(read_mdhd_timescale)?;
+        let media_timescale = find_box(mdia, b"mdhd").and_then(read_mdhd_timescale)?;
         let elst = find_box(trak, b"edts").and_then(|edts| find_box(edts, b"elst"))?;
-        let media_time = read_first_media_time(elst)?;
-        if media_time <= 0 {
-            return Some(0);
+
+        let edits = read_edits(elst)?;
+
+        // Skip initial empty edits: they carry no media, and the presentation starts at the first
+        // edit that does.
+        let mut media_time = None;
+        let mut movie_duration: u128 = 0;
+        for edit in edits {
+            if edit.media_time < 0 {
+                continue;
+            }
+            media_time.get_or_insert(edit.media_time);
+            movie_duration = movie_duration.checked_add(u128::from(edit.segment_duration))?;
         }
-        // `media_time` is in the media timescale, which for audio is the sample rate.
-        let samples =
-            (u128::from(media_time as u64) * u128::from(sample_rate)) / u128::from(timescale);
-        return Some(samples as usize);
+        let media_time = u128::try_from(media_time?).ok()?;
+
+        let start = media_time
+            .checked_mul(u128::from(sample_rate))?
+            .checked_div(u128::from(media_timescale))?;
+        let duration = movie_duration
+            .checked_mul(u128::from(sample_rate))?
+            .checked_div(u128::from(movie_timescale))?;
+        return Some(EditListTrim {
+            start: usize::try_from(start).ok()?,
+            duration: usize::try_from(duration).ok()?,
+        });
     }
     None
+}
+
+/// One edit list entry.
+struct Edit {
+    /// Duration in the movie timescale.
+    segment_duration: u64,
+    /// Media start time in the media timescale. `-1` marks an empty edit.
+    media_time: i64,
+}
+
+/// The bytes of an ISO base media file, or `None` when it is not one.
+fn read_container(path: &Path) -> Option<Vec<u8>> {
+    let data = fs::read(path).ok()?;
+    find_box(&data, b"ftyp")?;
+    Some(data)
 }
 
 /// The first child box of `kind` within `data`.
@@ -74,38 +117,77 @@ fn boxes(data: &[u8]) -> impl Iterator<Item = (&[u8; 4], &[u8])> {
         if size < header_len as u64 {
             return None;
         }
-        let body_start = offset + header_len;
-        let body_end = offset + size as usize;
+        let body_start = offset.checked_add(header_len)?;
+        let body_end = offset.checked_add(usize::try_from(size).ok()?)?;
         let body = data.get(body_start..body_end)?;
         offset = body_end;
         Some((kind, body))
     })
 }
 
-/// Read the timescale from an `mdhd` payload.
-fn read_mdhd_timescale(mdhd: &[u8]) -> Option<u32> {
-    let version = *mdhd.first()?;
-    match version {
-        0 => Some(u32::from_be_bytes(mdhd.get(12..16)?.try_into().unwrap())),
-        1 => Some(u32::from_be_bytes(mdhd.get(20..24)?.try_into().unwrap())),
+/// Read the timescale from an `mvhd` payload, in the movie timescale.
+fn read_mvhd_timescale(mvhd: &[u8]) -> Option<u32> {
+    match *mvhd.first()? {
+        0 => read_u32(mvhd, 12),
+        1 => read_u32(mvhd, 20),
         _ => None,
     }
 }
 
-/// Read the `media_time` of the first `elst` entry.
-fn read_first_media_time(elst: &[u8]) -> Option<i64> {
+/// Read the timescale from an `mdhd` payload, in the media timescale.
+fn read_mdhd_timescale(mdhd: &[u8]) -> Option<u32> {
+    let timescale = match *mdhd.first()? {
+        0 => read_u32(mdhd, 12),
+        1 => read_u32(mdhd, 20),
+        _ => None,
+    }?;
+    // A zero timescale cannot be used to convert a duration to samples.
+    (timescale != 0).then_some(timescale)
+}
+
+/// Read a big-endian `u32` at `offset`.
+fn read_u32(data: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_be_bytes(
+        data.get(offset..offset + 4)?.try_into().unwrap(),
+    ))
+}
+
+/// Read the entries of an `elst` payload.
+fn read_edits(elst: &[u8]) -> Option<Vec<Edit>> {
+    /// A count that large is malformed; do not allocate for it.
+    const MAX_EDITS: u32 = 1024;
+
     let version = *elst.first()?;
-    let count = u32::from_be_bytes(elst.get(4..8)?.try_into().unwrap());
-    if count == 0 {
+    let count = read_u32(elst, 4)?;
+    if count > MAX_EDITS {
         return None;
     }
-    match version {
-        0 => Some(i64::from(i32::from_be_bytes(
-            elst.get(12..16)?.try_into().unwrap(),
-        ))),
-        1 => Some(i64::from_be_bytes(elst.get(16..24)?.try_into().unwrap())),
-        _ => None,
+    let entry_len = match version {
+        0 => 12,
+        1 => 20,
+        _ => return None,
+    };
+
+    let mut edits = Vec::with_capacity(count as usize);
+    for index in 0..count as usize {
+        let start = 8usize.checked_add(index.checked_mul(entry_len)?)?;
+        let entry = elst.get(start..start + entry_len)?;
+        let (segment_duration, media_time) = match version {
+            0 => (
+                u64::from(u32::from_be_bytes(entry[0..4].try_into().unwrap())),
+                i64::from(i32::from_be_bytes(entry[4..8].try_into().unwrap())),
+            ),
+            _ => (
+                u64::from_be_bytes(entry[0..8].try_into().unwrap()),
+                i64::from_be_bytes(entry[8..16].try_into().unwrap()),
+            ),
+        };
+        edits.push(Edit {
+            segment_duration,
+            media_time,
+        });
     }
+    Some(edits)
 }
 
 #[cfg(test)]
@@ -120,6 +202,12 @@ mod tests {
         out
     }
 
+    fn mvhd(timescale: u32) -> Vec<u8> {
+        let mut body = vec![0u8; 20];
+        body[12..16].copy_from_slice(&timescale.to_be_bytes());
+        boxed(b"mvhd", &body)
+    }
+
     fn mdhd(timescale: u32) -> Vec<u8> {
         let mut body = vec![0u8; 20];
         body[12..16].copy_from_slice(&timescale.to_be_bytes());
@@ -132,24 +220,41 @@ mod tests {
         boxed(b"hdlr", &body)
     }
 
-    fn elst(media_time: i32) -> Vec<u8> {
-        let mut body = vec![0u8; 16];
-        body[4..8].copy_from_slice(&1u32.to_be_bytes());
-        body[8..12].copy_from_slice(&6_000u32.to_be_bytes());
-        body[12..16].copy_from_slice(&media_time.to_be_bytes());
+    /// An `elst` with version-0 entries of `(segment_duration, media_time)`.
+    fn elst(entries: &[(u32, i32)]) -> Vec<u8> {
+        let mut body = vec![0u8; 8];
+        body[4..8].copy_from_slice(&(entries.len() as u32).to_be_bytes());
+        for (duration, media_time) in entries {
+            body.extend_from_slice(&duration.to_be_bytes());
+            body.extend_from_slice(&media_time.to_be_bytes());
+            body.extend_from_slice(&1u16.to_be_bytes());
+            body.extend_from_slice(&0u16.to_be_bytes());
+        }
         boxed(b"elst", &body)
     }
 
-    fn file(handler: &[u8; 4], media_time: i32) -> Vec<u8> {
-        let mut trak = Vec::new();
+    fn file(movie_timescale: u32, media_timescale: u32, entries: &[(u32, i32)]) -> Vec<u8> {
+        file_with_handler(b"soun", movie_timescale, media_timescale, entries)
+    }
+
+    fn file_with_handler(
+        handler: &[u8; 4],
+        movie_timescale: u32,
+        media_timescale: u32,
+        entries: &[(u32, i32)],
+    ) -> Vec<u8> {
         let mut mdia = Vec::new();
-        mdia.extend_from_slice(&mdhd(44_100));
+        mdia.extend_from_slice(&mdhd(media_timescale));
         mdia.extend_from_slice(&hdlr(handler));
+
+        let mut trak = Vec::new();
         trak.extend_from_slice(&boxed(b"mdia", &mdia));
-        trak.extend_from_slice(&boxed(b"edts", &elst(media_time)));
+        trak.extend_from_slice(&boxed(b"edts", &elst(entries)));
 
         let mut moov = Vec::new();
+        moov.extend_from_slice(&mvhd(movie_timescale));
         moov.extend_from_slice(&boxed(b"trak", &trak));
+
         let mut out = Vec::new();
         out.extend_from_slice(&boxed(b"ftyp", b"M4A "));
         out.extend_from_slice(&boxed(b"moov", &moov));
@@ -164,21 +269,116 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_audio_edit_list_start_trim() {
-        let path = write_temp("mp4_edit_1024.m4a", &file(b"soun", 1024));
-        assert_eq!(edit_list_start_trim(&path, 44_100), Some(1024));
+    fn reads_the_start_and_the_presentation_duration() {
+        // A 6 s presentation in a 1000-tick movie timescale, starting at media sample 1024.
+        let path = write_temp("mp4_edit.m4a", &file(1_000, 44_100, &[(6_000, 1_024)]));
+        assert_eq!(
+            edit_list_trim(&path, 44_100),
+            Some(EditListTrim {
+                start: 1_024,
+                duration: 264_600
+            })
+        );
     }
 
     #[test]
-    fn ignores_a_zero_edit_list_start_trim() {
-        let path = write_temp("mp4_edit_zero.m4a", &file(b"soun", 0));
-        assert_eq!(edit_list_start_trim(&path, 44_100), Some(0));
+    fn converts_each_timescale_separately() {
+        // Movie timescale 48_000 and media timescale 44_100: the two conversions differ.
+        let path = write_temp(
+            "mp4_timescales.m4a",
+            &file(48_000, 44_100, &[(96_000, 2_048)]),
+        );
+        assert_eq!(
+            edit_list_trim(&path, 44_100),
+            Some(EditListTrim {
+                start: 2_048,
+                duration: 88_200
+            })
+        );
+    }
+
+    #[test]
+    fn skips_an_initial_empty_edit() {
+        let path = write_temp(
+            "mp4_empty_edit.m4a",
+            &file(1_000, 44_100, &[(500, -1), (6_000, 1_024)]),
+        );
+        assert_eq!(
+            edit_list_trim(&path, 44_100),
+            Some(EditListTrim {
+                start: 1_024,
+                duration: 264_600
+            })
+        );
+    }
+
+    #[test]
+    fn sums_the_non_empty_edits() {
+        let path = write_temp(
+            "mp4_two_edits.m4a",
+            &file(1_000, 44_100, &[(3_000, 1_024), (3_000, 133_424)]),
+        );
+        assert_eq!(
+            edit_list_trim(&path, 44_100),
+            Some(EditListTrim {
+                start: 1_024,
+                duration: 264_600
+            })
+        );
+    }
+
+    #[test]
+    fn ignores_a_zero_trim() {
+        let path = write_temp("mp4_zero_trim.m4a", &file(1_000, 44_100, &[(6_000, 0)]));
+        assert_eq!(
+            edit_list_trim(&path, 44_100),
+            Some(EditListTrim {
+                start: 0,
+                duration: 264_600
+            })
+        );
+    }
+
+    #[test]
+    fn reads_version_one_entries() {
+        let mut body = vec![0u8; 8];
+        body[0] = 1;
+        body[4..8].copy_from_slice(&1u32.to_be_bytes());
+        body.extend_from_slice(&6_000u64.to_be_bytes());
+        body.extend_from_slice(&1_024i64.to_be_bytes());
+        body.extend_from_slice(&1u16.to_be_bytes());
+        body.extend_from_slice(&0u16.to_be_bytes());
+
+        let mut trak = Vec::new();
+        let mut mdia = Vec::new();
+        mdia.extend_from_slice(&mdhd(44_100));
+        mdia.extend_from_slice(&hdlr(b"soun"));
+        trak.extend_from_slice(&boxed(b"mdia", &mdia));
+        trak.extend_from_slice(&boxed(b"edts", &boxed(b"elst", &body)));
+        let mut moov = Vec::new();
+        moov.extend_from_slice(&mvhd(1_000));
+        moov.extend_from_slice(&boxed(b"trak", &trak));
+        let mut out = Vec::new();
+        out.extend_from_slice(&boxed(b"ftyp", b"M4A "));
+        out.extend_from_slice(&boxed(b"moov", &moov));
+
+        let path = write_temp("mp4_v1.m4a", &out);
+        assert_eq!(
+            edit_list_trim(&path, 44_100),
+            Some(EditListTrim {
+                start: 1_024,
+                duration: 264_600
+            })
+        );
     }
 
     #[test]
     fn ignores_a_video_track_edit_list() {
-        let path = write_temp("mp4_video_edit.m4a", &file(b"vide", 1024));
-        assert_eq!(edit_list_start_trim(&path, 44_100), None);
+        let path = write_temp(
+            "mp4_video.m4a",
+            &file_with_handler(b"vide", 1_000, 44_100, &[(6_000, 1_024)]),
+        );
+        assert_eq!(edit_list_trim(&path, 44_100), None);
     }
 
     #[test]
@@ -187,6 +387,35 @@ mod tests {
             "mp4_not_a_container.bin",
             b"not an ISO base media file at all",
         );
-        assert_eq!(edit_list_start_trim(&path, 44_100), None);
+        assert_eq!(edit_list_trim(&path, 44_100), None);
+    }
+
+    #[test]
+    fn rejects_a_zero_media_timescale() {
+        let path = write_temp("mp4_zero_timescale.m4a", &file(1_000, 0, &[(6_000, 1_024)]));
+        assert_eq!(edit_list_trim(&path, 44_100), None);
+    }
+
+    #[test]
+    fn rejects_a_truncated_entry_table() {
+        // The count claims two entries but the payload holds one.
+        let mut elst = elst(&[(6_000, 1_024)]);
+        elst[12..16].copy_from_slice(&2u32.to_be_bytes());
+
+        let mut trak = Vec::new();
+        let mut mdia = Vec::new();
+        mdia.extend_from_slice(&mdhd(44_100));
+        mdia.extend_from_slice(&hdlr(b"soun"));
+        trak.extend_from_slice(&boxed(b"mdia", &mdia));
+        trak.extend_from_slice(&boxed(b"edts", &elst));
+        let mut moov = Vec::new();
+        moov.extend_from_slice(&mvhd(1_000));
+        moov.extend_from_slice(&boxed(b"trak", &trak));
+        let mut out = Vec::new();
+        out.extend_from_slice(&boxed(b"ftyp", b"M4A "));
+        out.extend_from_slice(&boxed(b"moov", &moov));
+
+        let path = write_temp("mp4_truncated.m4a", &out);
+        assert_eq!(edit_list_trim(&path, 44_100), None);
     }
 }
