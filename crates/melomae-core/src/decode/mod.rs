@@ -518,6 +518,18 @@ fn decode_opus(
         plane.truncate(end);
         plane.drain(..pre_skip);
     }
+
+    // The `OpusHead` output gain is a signed Q7.8 decibel value. Apply it once as a float scale,
+    // in both the single-stream and the multistream path; neither binding applies it for us. Keep
+    // the samples as float and add no clipping.
+    if head.output_gain != 0 {
+        let scale = 10f32.powf(f32::from(head.output_gain) / (20.0 * 256.0));
+        for plane in &mut channels {
+            for sample in plane.iter_mut() {
+                *sample *= scale;
+            }
+        }
+    }
     Ok(AudioBuffer::new(OPUS_SAMPLE_RATE, channels))
 }
 
@@ -558,15 +570,18 @@ fn apply_block_trim(
 /// The `OpusHead` identification header fields the decoder needs.
 ///
 /// RFC 7845 section 5.1 defines the layout: bytes 0 to 7 are the magic, byte 8 is the version,
-/// byte 9 is the channel count, bytes 10 and 11 are the pre-skip, byte 18 is the channel mapping
-/// family, byte 19 is the stream count, byte 20 is the coupled stream count, and bytes 21 onward
-/// are the mapping table, one entry per channel.
+/// byte 9 is the channel count, bytes 10 and 11 are the pre-skip, bytes 16 and 17 are the signed
+/// output gain in Q7.8 decibels, byte 18 is the channel mapping family, byte 19 is the stream
+/// count, byte 20 is the coupled stream count, and bytes 21 onward are the mapping table, one
+/// entry per channel.
 #[derive(Debug)]
 struct OpusHead {
     /// The channel count, from byte 9.
     channels: usize,
     /// The pre-skip, in samples at 48 kHz, from bytes 10 and 11.
     pre_skip: usize,
+    /// The output gain, signed Q7.8 decibels, from bytes 16 and 17.
+    output_gain: i16,
     /// The channel mapping family, from byte 18.
     mapping_family: u8,
     /// The number of elementary streams, from byte 19 (mapping family 0 always has one).
@@ -593,6 +608,7 @@ fn parse_opus_head(path: &Path, extra_data: Option<&[u8]>) -> Result<OpusHead, D
         return Err(malformed("the Opus header declares no channels"));
     }
     let pre_skip = usize::from(u16::from_le_bytes([data[10], data[11]]));
+    let output_gain = i16::from_le_bytes([data[16], data[17]]);
     let mapping_family = data[18];
     let (stream_count, coupled_count, mapping) = match mapping_family {
         0 => {
@@ -647,6 +663,7 @@ fn parse_opus_head(path: &Path, extra_data: Option<&[u8]>) -> Result<OpusHead, D
     Ok(OpusHead {
         channels,
         pre_skip,
+        output_gain,
         mapping_family,
         stream_count,
         coupled_count,

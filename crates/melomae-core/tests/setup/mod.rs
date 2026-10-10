@@ -178,18 +178,44 @@ impl Fixtures {
 
     /// Encode a six-channel WAV with a distinct tone per channel into an Opus file. The WAV has no
     /// channel mask, so ffmpeg reads its six channels as 5.1 and libopus writes a mapping family 1
-    /// stream with four streams, two of them coupled.
+    /// stream with four streams, two of them coupled. The tone amplitude keeps the peak below full
+    /// scale after a +6 dB output gain, so a gain comparison against the oracle does not clip.
     pub fn multichannel_opus(&self) -> PathBuf {
         let rate = 48_000;
         let frames = rate as usize;
         let planes: Vec<Vec<f32>> = Self::MULTICHANNEL_TONES
             .iter()
-            .map(|frequency| sine(rate, *frequency, 0.5, frames))
+            .map(|frequency| sine(rate, *frequency, 0.4, frames))
             .collect();
         let wav = self.dir.join("multichannel.wav");
         write_wav_f32(&wav, rate, &planes);
 
         let target = self.dir.join("multichannel.opus");
+        run(&[
+            "-i",
+            &wav.display().to_string(),
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "256k",
+            &target.display().to_string(),
+        ]);
+        target
+    }
+
+    /// A quiet two-channel Opus file, so an applied output gain does not reach full scale. Two
+    /// tones at amplitude 0.4 keep the peak at 0.8 after +6 dB.
+    pub fn quiet_stereo_opus(&self) -> PathBuf {
+        let rate = 48_000;
+        let frames = rate as usize;
+        let planes = vec![
+            sine(rate, 440.0, 0.4, frames),
+            sine(rate, 660.0, 0.4, frames),
+        ];
+        let wav = self.dir.join("quiet-stereo.wav");
+        write_wav_f32(&wav, rate, &planes);
+
+        let target = self.dir.join("quiet-stereo.opus");
         run(&[
             "-i",
             &wav.display().to_string(),
