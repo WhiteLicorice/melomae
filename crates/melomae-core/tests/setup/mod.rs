@@ -545,6 +545,52 @@ fn encode_element(id: u64, body: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Prepend an empty edit (`media_time = -1`) to the audio track's edit list, as the reviewer's
+/// `rev03_inputs.py` does. The fixture puts `moov` at the end of the file, so media offsets do not
+/// move, and the box sizes only grow.
+pub fn prepend_empty_edit(source: &Path, target: &Path) {
+    let data = fs::read(source).expect("read the source MP4");
+    fs::write(target, prepend_empty_edit_boxes(&data)).expect("write the empty-edit MP4");
+}
+
+/// Rebuild the box tree with an empty edit prepended to every `elst`.
+fn prepend_empty_edit_boxes(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    while pos + 8 <= data.len() {
+        let size = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+        if size < 8 || pos + size > data.len() {
+            break;
+        }
+        let kind = &data[pos + 4..pos + 8];
+        let body = &data[pos + 8..pos + size];
+        let new_body = match kind {
+            b"moov" | b"trak" | b"edts" => prepend_empty_edit_boxes(body),
+            b"elst" => elst_with_empty_edit(body),
+            _ => body.to_vec(),
+        };
+        out.extend_from_slice(&((new_body.len() + 8) as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(&new_body);
+        pos += size;
+    }
+    out
+}
+
+/// A version-0 `elst` body with one empty edit inserted before the existing entries.
+fn elst_with_empty_edit(body: &[u8]) -> Vec<u8> {
+    let count = u32::from_be_bytes(body[4..8].try_into().unwrap());
+    let mut out = Vec::new();
+    out.extend_from_slice(&body[0..4]);
+    out.extend_from_slice(&(count + 1).to_be_bytes());
+    out.extend_from_slice(&1_000u32.to_be_bytes());
+    out.extend_from_slice(&(-1i32).to_be_bytes());
+    out.extend_from_slice(&1u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&body[8..]);
+    out
+}
+
 /// Low-level noise from a fixed seed, so the source is deterministic. Amplitude is +/-0.01.
 fn noise(frames: usize, seed: u64) -> Vec<f32> {
     let mut state = seed;

@@ -118,6 +118,23 @@ fn f5_live_webm_decodes_at_clean_eof() {
     assert!(decoded.frames() > 0, "the live WebM decoded no frames");
 }
 
+/// F6: an initial empty MP4 edit (`media_time = -1`) carries no media. The decoder must skip it
+/// and apply the following edit's start trim, as ffmpeg does.
+#[test]
+fn f6_an_initial_empty_edit_keeps_the_following_start_trim() {
+    let fixtures = Fixtures::build();
+    let empty_edit = fixtures.dir().join("empty-edit.m4a");
+    setup::prepend_empty_edit(&fixtures.path("aac_44100.m4a"), &empty_edit);
+
+    let decoded = decode_file_native(&empty_edit).expect("decode the empty-edit MP4");
+    let reference = fixtures.reference_for(&empty_edit, 44_100, 2, None);
+    assert_eq!(
+        decoded.frames(),
+        reference.len() / 2,
+        "the decoder must apply the trim of the first non-empty edit"
+    );
+}
+
 /// F5: a WebM cut in the middle of a cluster is a truncation, not a clean end of file. It must
 /// return an error, not decode a partial stream.
 #[test]
