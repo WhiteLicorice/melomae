@@ -4,5 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[dependencies]
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+
 [dev-dependencies]
 cargo_metadata = "0.23.1"
