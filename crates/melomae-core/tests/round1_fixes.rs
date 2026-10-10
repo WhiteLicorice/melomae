@@ -119,13 +119,18 @@ fn f4_signed_interior_padding_trims_exactly_its_block() {
 }
 
 /// F5: a WebM written with the live muxer option ends with an unknown-size Segment. That clean end
-/// of file must decode, not raise an unexpected-end-of-file error.
+/// of file must decode, not raise an unexpected-end-of-file error, and it must keep its exact
+/// length.
 #[test]
 fn f5_live_webm_decodes_at_clean_eof() {
     let fixtures = Fixtures::build();
     let live = fixtures.live_webm(&fixtures.path("opus_48000.webm"));
     let decoded = decode_file_native(&live).expect("decode the live WebM at a clean end of file");
-    assert!(decoded.frames() > 0, "the live WebM decoded no frames");
+    assert_eq!(
+        decoded.frames(),
+        288_000,
+        "the live WebM holds six seconds at 48 kHz"
+    );
 }
 
 /// F6: an initial empty MP4 edit (`media_time = -1`) carries no media. The decoder must skip it
