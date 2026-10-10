@@ -460,7 +460,12 @@ fn decode_opus(
         if in_block {
             packets_left = packets_left.saturating_sub(1);
             if packets_left == 0 {
-                apply_block_trim(path, &mut channels, block_start, blocks[block_index].padding)?;
+                apply_block_trim(
+                    path,
+                    &mut channels,
+                    block_start,
+                    blocks[block_index].padding,
+                )?;
                 block_index += 1;
                 block_start = channels.first().map_or(0, Vec::len);
                 match blocks.get(block_index) {
@@ -562,7 +567,8 @@ struct OpusHead {
 /// returns a typed error that names the file and the offending field.
 fn parse_opus_head(path: &Path, extra_data: Option<&[u8]>) -> Result<OpusHead, DecodeError> {
     let malformed = |reason: &str| DecodeError::new(DecodeErrorKind::Malformed, path, reason);
-    let data = extra_data.ok_or_else(|| malformed("the Opus track has no identification header"))?;
+    let data =
+        extra_data.ok_or_else(|| malformed("the Opus track has no identification header"))?;
     if data.len() < 19 || &data[..8] != b"OpusHead" {
         return Err(malformed(
             "the Opus identification header is missing or truncated",
@@ -595,7 +601,9 @@ fn parse_opus_head(path: &Path, extra_data: Option<&[u8]>) -> Result<OpusHead, D
             let stream_count = data[19];
             let coupled_count = data[20];
             if stream_count == 0 || coupled_count > stream_count {
-                return Err(malformed("the Opus header declares an invalid stream count"));
+                return Err(malformed(
+                    "the Opus header declares an invalid stream count",
+                ));
             }
             let total = usize::from(stream_count) + usize::from(coupled_count);
             if total > channels {
@@ -608,7 +616,9 @@ fn parse_opus_head(path: &Path, extra_data: Option<&[u8]>) -> Result<OpusHead, D
                 .iter()
                 .any(|value| *value != 255 && usize::from(*value) >= total)
             {
-                return Err(malformed("the Opus header's channel mapping is out of range"));
+                return Err(malformed(
+                    "the Opus header's channel mapping is out of range",
+                ));
             }
             (stream_count, coupled_count, mapping)
         }
@@ -679,18 +689,15 @@ fn build_opus_backend(path: &Path, head: &OpusHead) -> Result<OpusBackend, Decod
         ($n:literal) => {{
             let mut mapping = [0u8; $n];
             mapping.copy_from_slice(&head.mapping[..$n]);
-            let config = OpusMsConfig::<$n>::try_new(
-                head.stream_count,
-                head.coupled_count,
-                mapping,
-            )
-            .ok_or_else(|| {
-                DecodeError::new(
-                    DecodeErrorKind::Malformed,
-                    path,
-                    "the Opus channel mapping is invalid",
-                )
-            })?;
+            let config =
+                OpusMsConfig::<$n>::try_new(head.stream_count, head.coupled_count, mapping)
+                    .ok_or_else(|| {
+                        DecodeError::new(
+                            DecodeErrorKind::Malformed,
+                            path,
+                            "the Opus channel mapping is invalid",
+                        )
+                    })?;
             let decoder = OpusMsDecoder::new(config, rate)
                 .map_err(|e| DecodeError::new(DecodeErrorKind::Decode, path, e.message()))?;
             Ok(OpusBackend::Mapped(decoder))

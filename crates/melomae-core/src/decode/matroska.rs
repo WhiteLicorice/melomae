@@ -190,8 +190,8 @@ fn scan<R: Read + Seek>(
         return Ok(None);
     }
     let _ = path;
-    let pre_skip =
-        ns_to_samples(state.codec_delay_ns, state.rate).ok_or(Fail::Bad("CodecDelay is out of range"))?;
+    let pre_skip = ns_to_samples(state.codec_delay_ns, state.rate)
+        .ok_or(Fail::Bad("CodecDelay is out of range"))?;
     let blocks = state.blocks;
     Ok(Some(OpusTrim { pre_skip, blocks }))
 }
@@ -199,11 +199,11 @@ fn scan<R: Read + Seek>(
 /// The absolute end of an element body, or `None` when the size is the unknown marker.
 fn element_end(body_start: u64, size: Option<u64>) -> Result<Option<u64>, Fail> {
     match size {
-        Some(size) => Ok(Some(
-            body_start
-                .checked_add(size)
-                .ok_or(Fail::Bad("an element size overflows the stream"))?,
-        )),
+        Some(size) => {
+            Ok(Some(body_start.checked_add(size).ok_or(Fail::Bad(
+                "an element size overflows the stream",
+            ))?))
+        }
         None => Ok(None),
     }
 }
@@ -245,7 +245,11 @@ fn parse_tracks<R: Read + Seek>(
         let body_start = scanner.pos;
         let child_end = element_end(body_start, size)?;
         if id == ID_TRACK_ENTRY {
-            parse_track_entry(scanner, child_end.ok_or(Fail::Bad("a track entry has no size"))?, state)?;
+            parse_track_entry(
+                scanner,
+                child_end.ok_or(Fail::Bad("a track entry has no size"))?,
+                state,
+            )?;
         } else {
             skip(scanner, body_start, child_end)?;
         }
@@ -297,7 +301,11 @@ fn parse_cluster<R: Read + Seek>(
         let Some((id, _)) = read_id(scanner)? else {
             // A clean EOF ends an unknown-size cluster. A finite cluster that ends before its
             // declared size is truncated.
-            return if end.is_none() { Ok(()) } else { Err(Fail::Eof) };
+            return if end.is_none() {
+                Ok(())
+            } else {
+                Err(Fail::Eof)
+            };
         };
         // An unknown-size cluster runs until an element that is not one of its children appears,
         // which is the RFC 8794 section 6.2 termination rule.
@@ -329,7 +337,11 @@ fn parse_cluster<R: Read + Seek>(
 fn is_cluster_child(id: u32) -> bool {
     matches!(
         id,
-        ID_CLUSTER_TIMESTAMP | ID_POSITION | ID_PREV_SIZE | ID_SIMPLE_BLOCK | ID_BLOCK_GROUP
+        ID_CLUSTER_TIMESTAMP
+            | ID_POSITION
+            | ID_PREV_SIZE
+            | ID_SIMPLE_BLOCK
+            | ID_BLOCK_GROUP
             | ID_ENCRYPTED_BLOCK
             | ID_SILENT_TRACKS
             | ID_VOID
@@ -754,7 +766,9 @@ mod tests {
         // A SimpleBlock, then an interior BlockGroup whose DiscardPadding is negative.
         let simple = element(ID_SIMPLE_BLOCK, &[0x81, 0x00, 0x00, 0x80]);
         let group = element(ID_BLOCK_GROUP, &block_group(0x81, -1_000_000));
-        let trim = read(&file_with_blocks(&[simple, group]), 1).unwrap().unwrap();
+        let trim = read(&file_with_blocks(&[simple, group]), 1)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             trim.blocks,
             vec![

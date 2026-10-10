@@ -241,7 +241,12 @@ fn decode_resampled_20khz_tone_matches_the_analytic_reference_above_80_db() {
     let frames = rate as usize;
     let input = sine(rate, 20_000.0, 0.5, frames);
     let resampled = AudioBuffer::new(rate, vec![input]).resample_to(TARGET_SAMPLE_RATE);
-    let reference = sine(TARGET_SAMPLE_RATE, 20_000.0, 0.5, TARGET_SAMPLE_RATE as usize);
+    let reference = sine(
+        TARGET_SAMPLE_RATE,
+        20_000.0,
+        0.5,
+        TARGET_SAMPLE_RATE as usize,
+    );
 
     let ours = resampled.channel(0).unwrap();
     let end = ours.len().min(reference.len()) - 2_000;

@@ -31,10 +31,7 @@ pub(crate) fn edit_list_trim(path: &Path, sample_rate: u32) -> Option<EditListTr
 }
 
 /// Read the audio track's edit list from an open reader, so a test can count the bytes read.
-fn edit_list_trim_reader<R: Read + Seek>(
-    reader: &mut R,
-    sample_rate: u32,
-) -> Option<EditListTrim> {
+fn edit_list_trim_reader<R: Read + Seek>(reader: &mut R, sample_rate: u32) -> Option<EditListTrim> {
     let moov = read_moov(reader)?;
     let movie_timescale = find_box(&moov, b"mvhd").and_then(read_mvhd_timescale)?;
 

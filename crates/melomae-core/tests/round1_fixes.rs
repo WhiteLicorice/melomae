@@ -39,7 +39,11 @@ fn f2_readers_do_not_load_the_whole_file() {
 fn f1_hostile_padding_returns_a_typed_error() {
     let fixtures = Fixtures::build();
     let hostile = fixtures.dir().join("overflow-padding.webm");
-    setup::rewrite_webm_padding(&fixtures.path("opus_48000.webm"), &hostile, Padding::Hostile);
+    setup::rewrite_webm_padding(
+        &fixtures.path("opus_48000.webm"),
+        &hostile,
+        Padding::Hostile,
+    );
 
     let result = std::panic::catch_unwind(|| decode_file(&hostile));
     assert!(result.is_ok(), "the decoder panicked on hostile padding");
@@ -87,15 +91,21 @@ fn f3_selected_track_matches_its_own_oracle() {
 fn f4_signed_interior_padding_trims_exactly_its_block() {
     let fixtures = Fixtures::build();
     let source = fixtures.path("opus_48000.webm");
-    let baseline = decode_file_native(&source).expect("decode the baseline").frames();
+    let baseline = decode_file_native(&source)
+        .expect("decode the baseline")
+        .frames();
 
     let positive = fixtures.dir().join("interior-positive.webm");
     let negative = fixtures.dir().join("interior-negative.webm");
     setup::rewrite_webm_padding(&source, &positive, Padding::Interior(1_000_000));
     setup::rewrite_webm_padding(&source, &negative, Padding::Interior(-1_000_000));
 
-    let positive_frames = decode_file_native(&positive).expect("positive padding").frames();
-    let negative_frames = decode_file_native(&negative).expect("negative padding").frames();
+    let positive_frames = decode_file_native(&positive)
+        .expect("positive padding")
+        .frames();
+    let negative_frames = decode_file_native(&negative)
+        .expect("negative padding")
+        .frames();
     assert_eq!(
         positive_frames,
         baseline - 48,
@@ -163,7 +173,11 @@ fn f7_multichannel_opus_keeps_every_channel() {
     let decoded = decode_file_native(&source).expect("decode the six-channel Opus");
 
     assert_eq!(decoded.sample_rate(), 48_000, "Opus decodes at 48 kHz");
-    assert_eq!(decoded.channel_count(), 6, "the decoder must keep six channels");
+    assert_eq!(
+        decoded.channel_count(),
+        6,
+        "the decoder must keep six channels"
+    );
 
     let reference = fixtures.reference_for(&source, 48_000, 6, Some("libopus"));
     let reference = common::planar_from_interleaved(&reference, 6);
