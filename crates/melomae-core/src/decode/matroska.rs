@@ -59,15 +59,26 @@ pub(crate) struct OpusTrim {
     pub blocks: Vec<BlockTrim>,
 }
 
-/// Read the Opus trim for `track` from a Matroska/WebM stream.
+/// The result of scanning a Matroska/WebM stream.
+pub(crate) struct ScanOutcome {
+    /// The Opus trim, when a matching Opus track was found.
+    pub trim: Option<OpusTrim>,
+    /// True when the stream is Matroska and its structure was validated to the physical end of
+    /// file. A caller may accept the container's clean end of file only when this is true: a
+    /// truncated file returns an error here instead.
+    pub valid_eof: bool,
+}
+
+/// Scan a Matroska/WebM stream for `track`'s Opus trim.
 ///
-/// Returns `Ok(None)` when the stream is not Matroska or holds no block for `track`.
+/// A stream that is not Matroska yields a `None` trim and `valid_eof == false`. A truncated or
+/// malformed Matroska stream is an error.
 pub(crate) fn opus_trim<R: Read + Seek>(
     path: &Path,
     reader: &mut R,
     track: u64,
     sample_rate: u32,
-) -> Result<Option<OpusTrim>, DecodeError> {
+) -> Result<ScanOutcome, DecodeError> {
     let mut scanner = Scanner::new(reader).map_err(|e| to_error(path, Fail::Io(e)))?;
     scan(path, &mut scanner, track, sample_rate).map_err(|fail| to_error(path, fail))
 }
@@ -161,11 +172,14 @@ fn scan<R: Read + Seek>(
     scanner: &mut Scanner<R>,
     track: u64,
     rate: u32,
-) -> Result<Option<OpusTrim>, Fail> {
+) -> Result<ScanOutcome, Fail> {
     let mut magic = [0u8; 4];
     let read = scanner.read(&mut magic)?;
     if read < 4 || magic != [0x1A, 0x45, 0xDF, 0xA3] {
-        return Ok(None);
+        return Ok(ScanOutcome {
+            trim: None,
+            valid_eof: false,
+        });
     }
 
     let mut state = State {
@@ -186,14 +200,23 @@ fn scan<R: Read + Seek>(
         skip(scanner, body_start, body_end)?;
     }
 
+    // The scan reached the end of the stream without a structural error, so its end of file is a
+    // valid boundary and a caller may accept the demuxer's matching clean end.
+    let valid_eof = true;
     if !state.found_track {
-        return Ok(None);
+        return Ok(ScanOutcome {
+            trim: None,
+            valid_eof,
+        });
     }
     let _ = path;
     let pre_skip = ns_to_samples(state.codec_delay_ns, state.rate)
         .ok_or(Fail::Bad("CodecDelay is out of range"))?;
     let blocks = state.blocks;
-    Ok(Some(OpusTrim { pre_skip, blocks }))
+    Ok(ScanOutcome {
+        trim: Some(OpusTrim { pre_skip, blocks }),
+        valid_eof,
+    })
 }
 
 /// The absolute end of an element body, or `None` when the size is the unknown marker.
@@ -559,10 +582,15 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
-    /// Read a trim from an in-memory byte stream.
-    fn read(data: &[u8], track: u64) -> Result<Option<OpusTrim>, DecodeError> {
+    /// Scan an in-memory byte stream.
+    fn scan_bytes(data: &[u8], track: u64) -> Result<ScanOutcome, DecodeError> {
         let mut cursor = Cursor::new(data.to_vec());
         opus_trim(Path::new("memory.webm"), &mut cursor, track, 48_000)
+    }
+
+    /// Read a trim from an in-memory byte stream, discarding the scan outcome.
+    fn read(data: &[u8], track: u64) -> Result<Option<OpusTrim>, DecodeError> {
+        scan_bytes(data, track).map(|outcome| outcome.trim)
     }
 
     /// Encode an element ID (with its length marker).
@@ -860,6 +888,7 @@ mod tests {
         };
         let trim = opus_trim(Path::new("memory.webm"), &mut reader, 1, 48_000)
             .expect("read the trim")
+            .trim
             .expect("some trim");
         assert_eq!(trim.blocks.len(), 1);
         assert!(

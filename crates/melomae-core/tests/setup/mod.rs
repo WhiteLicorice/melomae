@@ -575,6 +575,53 @@ fn encode_element(id: u64, body: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Rewrite an Ogg Opus file's `OpusHead` output gain and channel mapping family.
+///
+/// The `OpusHead` packet is the first packet of the first Ogg page. Its output gain is the signed
+/// little-endian Q7.8 field at bytes 16 and 17; its channel mapping family is byte 18. The first
+/// page's CRC is recomputed after the edit.
+pub fn rewrite_opus_head(source: &Path, target: &Path, gain_q78: Option<i16>, family: Option<u8>) {
+    let mut bytes = fs::read(source).expect("read the source Opus file");
+    let segments = bytes[26] as usize;
+    let page_len = 27
+        + segments
+        + bytes[27..27 + segments]
+            .iter()
+            .map(|v| *v as usize)
+            .sum::<usize>();
+    let head = 27 + segments;
+    assert_eq!(
+        &bytes[head..head + 8],
+        b"OpusHead",
+        "the first Ogg packet must be an OpusHead"
+    );
+    if let Some(gain) = gain_q78 {
+        bytes[head + 16..head + 18].copy_from_slice(&gain.to_le_bytes());
+    }
+    if let Some(family) = family {
+        bytes[head + 18] = family;
+    }
+    rewrite_ogg_page_crc(&mut bytes, page_len);
+    fs::write(target, bytes).expect("write the rewritten Opus file");
+}
+
+/// Recompute the CRC of the first Ogg page over `page_len` bytes, with the checksum field zeroed.
+fn rewrite_ogg_page_crc(bytes: &mut [u8], page_len: usize) {
+    bytes[22..26].fill(0);
+    let mut crc = 0u32;
+    for byte in &bytes[..page_len] {
+        crc ^= u32::from(*byte) << 24;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000 != 0 {
+                (crc << 1) ^ 0x04c1_1db7
+            } else {
+                crc << 1
+            };
+        }
+    }
+    bytes[22..26].copy_from_slice(&crc.to_le_bytes());
+}
+
 /// Prepend an empty edit (`media_time = -1`) to the audio track's edit list, as the reviewer's
 /// `rev03_inputs.py` does. The fixture puts `moov` at the end of the file, so media offsets do not
 /// move, and the box sizes only grow.

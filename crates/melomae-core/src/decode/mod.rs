@@ -294,15 +294,24 @@ fn decode_with_symphonia(
     let mut planes: Vec<Vec<f32>> = Vec::new();
     let mut rate = sample_rate;
 
+    // An unknown-size Matroska Segment runs to the end of the file, which the demuxer reports as
+    // an unexpected EOF. A structural scan proves that end is valid. Every other format, and a
+    // truncated Matroska file, treats the same error as truncation.
+    let accept_eof_at_end = if format.format_info().short_name == "mkv" {
+        let mut reader = File::open(path)
+            .map_err(|e| DecodeError::new(DecodeErrorKind::Io, path, e.to_string()))?;
+        matroska::opus_trim(path, &mut reader, 0, sample_rate)?.valid_eof
+    } else {
+        false
+    };
+
     loop {
         let packet = match format.next_packet() {
             Ok(Some(packet)) => packet,
             Ok(None) => break,
             Err(SymphoniaError::ResetRequired) => break,
-            // An unknown-size Segment or Cluster runs to the end of the file; that clean end
-            // surfaces as an unexpected EOF from the demuxer, not a truncation.
             Err(SymphoniaError::IoError(error))
-                if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+                if error.kind() == std::io::ErrorKind::UnexpectedEof && accept_eof_at_end =>
             {
                 break
             }
@@ -396,11 +405,15 @@ fn decode_opus(
     // its blocks' `DiscardPadding`; symphonia surfaces neither. The scanner reads only those
     // elements through its own bounded reader, so it never loads the whole file. Ogg is not EBML,
     // so the scanner returns `None` and the Ogg path below runs instead.
-    let matroska_trim = {
+    let matroska = {
         let mut reader = File::open(path)
             .map_err(|e| DecodeError::new(DecodeErrorKind::Io, path, e.to_string()))?;
         matroska::opus_trim(path, &mut reader, u64::from(track_id), OPUS_SAMPLE_RATE)?
     };
+    // A clean end of file is only a valid boundary for a Matroska stream whose structural scan
+    // proved it. A truncated WebM fails the scan above, before this loop runs.
+    let accept_eof_at_end = matroska.valid_eof;
+    let matroska_trim = matroska.trim;
 
     let pre_skip = match &matroska_trim {
         Some(trim) => trim.pre_skip,
@@ -425,9 +438,10 @@ fn decode_opus(
             Ok(None) => break,
             Err(SymphoniaError::ResetRequired) => break,
             // An unknown-size Segment runs to the end of the file. Symphonia reports that clean
-            // end as an unexpected EOF from its EBML iterator, which is not a truncation.
+            // end as an unexpected EOF from its EBML iterator. Accept it only when the structural
+            // scan validated the end; otherwise it is a truncation.
             Err(SymphoniaError::IoError(error))
-                if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+                if error.kind() == std::io::ErrorKind::UnexpectedEof && accept_eof_at_end =>
             {
                 break
             }
