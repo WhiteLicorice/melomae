@@ -97,7 +97,7 @@ The validator rejects any other status value.
 
 | # | Task | Status | Depends on |
 | --- | --- | --- | --- |
-| 03 | [Decode every input format to 44.1 kHz float audio](mvp/03-decode-every-input-format-to-float-audio.md) | TODO | 00 |
+| 03 | [Decode every input format to 44.1 kHz float audio](mvp/03-decode-every-input-format-to-float-audio.md) | DONE | 00 |
 | 04 | [Port chunked inference to ONNX Runtime](mvp/04-port-chunked-inference-to-onnx-runtime.md) | TODO | 01, 03 |
 | 05 | [Size chunks from free memory](mvp/05-size-chunks-from-free-memory.md) | TODO | 04 |
 | 06 | [Encode FLAC, WAV, and Opus output](mvp/06-encode-flac-wav-and-opus-output.md) | TODO | 03 |
