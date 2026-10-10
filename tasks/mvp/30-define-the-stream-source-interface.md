@@ -1,13 +1,13 @@
 # 30 — Define the stream source interface
 
-**Status:** TODO
+**Status:** CANCELLED
 **Phase:** 2 — Metadata and acquisition
 **Depends on:** 00, 03
 **SRS:** §5, §6
 **Stack:** §B, §E
 **Assigned to:** Agent
 **Started:** —
-**Outcome:** —
+**Outcome:** Cancelled on 2026-10-10. Melomae does not acquire audio (SRS §1.5). See `docs/evidence/2026-10-10-pivot.md`.
 
 ## Goal
 

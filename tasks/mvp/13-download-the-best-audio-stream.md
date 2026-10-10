@@ -1,13 +1,13 @@
 # 13 — Download the best audio stream
 
-**Status:** TODO
+**Status:** CANCELLED
 **Phase:** 2 — Metadata and acquisition
 **Depends on:** 11, 12, 30
 **SRS:** §5
 **Stack:** §E
 **Assigned to:** Agent
 **Started:** —
-**Outcome:** —
+**Outcome:** Cancelled on 2026-10-10. Melomae does not acquire audio (SRS §1.5). See `docs/evidence/2026-10-10-pivot.md`.
 
 ## Goal
 

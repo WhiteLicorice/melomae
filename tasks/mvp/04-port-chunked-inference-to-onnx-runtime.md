@@ -27,12 +27,13 @@ Run `apollo.onnx` with ONNX Runtime on CPU and match the chunked output of stock
 1. Port `resolve_chunking`, `chunk_starts`, `crossfade_weights`, and `run_model` exactly. Keep batch size 1.
 2. If task 01 chose model-core-only export, implement the STFT and iSTFT in Rust (`realfft`) to match `torch.stft` and `torch.istft` with `center=True`, reflect padding, and a periodic Hann window.
 3. Put the model behind a trait so tests can use fakes.
-4. Run inference one channel at a time.
-5. Report progress per chunk: chunk index, chunk count, and channel.
-6. Check an `AtomicBool` between chunks. On cancel, stop and return a cancelled result.
-7. Write the output to a temporary file. Rename it only when it is complete.
-8. Load `apollo.onnx` from a path given by the caller. The app passes its resource path.
-9. Add `tools/parity/make_golden.py`. It runs the **stock** `C:\Lab\Apollo\inference.py`:
+4. Expose the whole chunked run through a file-level `RestoreBackend` trait (Stack §C). It takes one file's 44.1 kHz float channels, the settings, a progress callback, and a cancel flag. It returns the restored channels. The ONNX Runtime engine is its only implementation. Add no network code.
+5. Run inference one channel at a time.
+6. Report progress per chunk: chunk index, chunk count, and channel.
+7. Check an `AtomicBool` between chunks. On cancel, stop and return a cancelled result.
+8. Write the output to a temporary file. Rename it only when it is complete.
+9. Load `apollo.onnx` from a path given by the caller. The app passes its resource path.
+10. Add `tools/parity/make_golden.py`. It runs the **stock** `C:\Lab\Apollo\inference.py`:
    - in the conda env `look2hear_win`
    - with `PYTHONDONTWRITEBYTECODE=1`, so the clone stays read-only
    - with `--device cpu --checkpoint C:\Lab\Apollo\Apollo\pytorch_model.bin --chunk-seconds 6 --overlap-seconds 1 --chunk-pad-seconds 1`
@@ -55,6 +56,7 @@ Run `apollo.onnx` with ONNX Runtime on CPU and match the chunked output of stock
 2. The Rust output on the 18 s input stays within max abs 1e-3 and RMSE 1e-4 of the golden.
 3. An input no longer than one chunk takes the full-file path.
 4. A cancel flag set during chunk 2 stops the run and leaves no output file.
+5. A fake `RestoreBackend` drives one file through the trait and reports progress.
 
 Run the tests. They fail because the engine does not exist.
 

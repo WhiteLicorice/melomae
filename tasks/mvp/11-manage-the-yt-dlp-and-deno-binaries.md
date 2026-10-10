@@ -1,13 +1,13 @@
 # 11 — Manage the yt-dlp and Deno binaries
 
-**Status:** TODO
+**Status:** CANCELLED
 **Phase:** 2 — Metadata and acquisition
 **Depends on:** 02, 30
 **SRS:** §3, §5
 **Stack:** §E
 **Assigned to:** Agent
 **Started:** —
-**Outcome:** —
+**Outcome:** Cancelled on 2026-10-10. Melomae does not acquire audio (SRS §1.5). See `docs/evidence/2026-10-10-pivot.md`.
 
 ## Goal
 

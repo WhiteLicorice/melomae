@@ -1,8 +1,9 @@
 # B-010 — Add a SoundCloud source
 
-**Status:** TODO
+**Status:** CANCELLED
 **Severity:** Future-deferred non-MVP
 **Depends on:** 30, 17
+**Outcome:** Cancelled on 2026-10-10. Melomae does not acquire audio (SRS §1.5).
 
 ## Impact
 

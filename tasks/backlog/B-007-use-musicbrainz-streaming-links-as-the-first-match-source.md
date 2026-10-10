@@ -1,8 +1,9 @@
 # B-007 — Use MusicBrainz streaming links as the first match source
 
-**Status:** TODO
+**Status:** CANCELLED
 **Severity:** Future-deferred non-MVP
 **Depends on:** 12, 30
+**Outcome:** Cancelled on 2026-10-10. Melomae does not acquire audio (SRS §1.5).
 
 ## Impact
 

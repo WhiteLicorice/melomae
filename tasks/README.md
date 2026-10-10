@@ -34,7 +34,7 @@ The Apollo clone at `C:\Lab\Apollo` is read-only. Do not write to it. When you r
 
 ### Spike tasks
 
-Tasks 01 and 02 are spikes. Each one ends with `GO` or `NO-GO` in `Outcome`, with the measured evidence.
+Task 01 was a spike. A spike ends with `GO` or `NO-GO` in `Outcome`, with the measured evidence.
 
 On `NO-GO`, do these steps:
 
@@ -84,7 +84,7 @@ The validator rejects any other status value.
 
 | Task | Status | Notes |
 | --- | --- | --- |
-| [Bootstrap handoff](mvp/bootstrap-task.md) | TODO | The MusicBrainz contact, the GitHub repository, the app identifier, code signing, the YouTube risk acceptance, and the name check. Agents instruct the owner but do not perform these actions. |
+| [Bootstrap handoff](mvp/bootstrap-task.md) | TODO | The GitHub repository, the app identifier, code signing, and the name check. Items 1 and 5 were withdrawn on 2026-10-10. Agents instruct the owner but do not perform these actions. |
 
 ## Phase 0 — Foundation and go/no-go spikes
 
@@ -92,7 +92,6 @@ The validator rejects any other status value.
 | --- | --- | --- | --- |
 | 00 | [Bootstrap the Tauri workspace and the verify gate](mvp/00-bootstrap-the-tauri-workspace-and-the-verify-gate.md) | DONE | — |
 | 01 | [Prove the ONNX export against stock Apollo](mvp/01-prove-the-onnx-export-against-stock-apollo.md) | DONE | 00 |
-| 02 | [Prove YouTube Music search and download through yt-dlp](mvp/02-prove-youtube-music-search-and-download-through-yt-dlp.md) | TODO | 00 |
 
 ## Phase 1 — Restoration engine
 
@@ -105,29 +104,22 @@ The validator rejects any other status value.
 | 07 | [Add the restore command-line entry](mvp/07-add-the-restore-command-line-entry.md) | TODO | 04, 05, 06 |
 | 08 | [Add GPU execution with CPU fallback](mvp/08-add-gpu-execution-with-cpu-fallback.md) | TODO | 07 |
 
-## Phase 2 — Metadata and acquisition
+## Phase 2 — Metadata, triage, and provenance
 
 | # | Task | Status | Depends on |
 | --- | --- | --- | --- |
-| 30 | [Define the stream source interface](mvp/30-define-the-stream-source-interface.md) | TODO | 00, 03 |
-| 09 | [Add the MusicBrainz client with a shared rate limiter](mvp/09-add-the-musicbrainz-client-with-a-shared-rate-limiter.md) | TODO | 00 |
-| 10 | [Fetch cover art from the Cover Art Archive](mvp/10-fetch-cover-art-from-the-cover-art-archive.md) | TODO | 09 |
-| 11 | [Manage the yt-dlp and Deno binaries](mvp/11-manage-the-yt-dlp-and-deno-binaries.md) | TODO | 02, 30 |
-| 12 | [Match MusicBrainz tracks to YouTube Music candidates](mvp/12-match-musicbrainz-tracks-to-youtube-music-candidates.md) | TODO | 02, 09, 11, 30 |
-| 13 | [Download the best audio stream](mvp/13-download-the-best-audio-stream.md) | TODO | 11, 12, 30 |
+| 15 | [Preserve tags and pictures across formats](mvp/15-preserve-tags-and-pictures-across-formats.md) | TODO | 06 |
+| 16 | [Triage input files for restoration](mvp/16-triage-input-files-for-restoration.md) | TODO | 03, 14 |
+| 31 | [Record restore provenance in tags and history](mvp/31-record-restore-provenance-in-tags-and-history.md) | TODO | 14, 15 |
 
-Task 30 was added after the board was created. Tasks 11 to 14 and 17 depend on it. Task numbers record creation order. The executor still selects the lowest eligible `TODO`.
-
-Stream sources are a core requirement (SRS §5.9). Acquisition goes through the task 30 interface. YouTube Music is the only MVP source. The Bandcamp and SoundCloud sources are backlog records B-009 and B-010.
-
-## Phase 3 — Library and pipeline
+## Phase 3 — Jobs and pipeline
 
 | # | Task | Status | Depends on |
 | --- | --- | --- | --- |
-| 14 | [Persist jobs and settings in SQLite](mvp/14-persist-jobs-and-settings-in-sqlite.md) | TODO | 00, 30 |
-| 15 | [Write tags and art and file tracks into the library](mvp/15-write-tags-and-art-and-file-tracks-into-the-library.md) | TODO | 06, 09, 10 |
-| 16 | [Scan the library and deduplicate by MBID](mvp/16-scan-the-library-and-deduplicate-by-mbid.md) | TODO | 14, 15 |
-| 17 | [Run the job pipeline end to end](mvp/17-run-the-job-pipeline-end-to-end.md) | TODO | 07, 13, 14, 15, 16, 30 |
+| 14 | [Persist jobs and settings in SQLite](mvp/14-persist-jobs-and-settings-in-sqlite.md) | TODO | 00 |
+| 17 | [Run the job pipeline end to end](mvp/17-run-the-job-pipeline-end-to-end.md) | TODO | 07, 14, 15, 16, 31 |
+
+Task numbers record creation order. The executor still selects the lowest eligible `TODO`. Task 14 sits in Phase 3 but tasks 16 and 31 need it first.
 
 ## Phase 4 — Desktop UI
 
@@ -135,27 +127,42 @@ Stream sources are a core requirement (SRS §5.9). Acquisition goes through the 
 | --- | --- | --- | --- |
 | 18 | [Generate typed Tauri commands and progress events](mvp/18-generate-typed-tauri-commands-and-progress-events.md) | TODO | 17 |
 | 19 | [Build the app shell, theme, settings, and E2E harness](mvp/19-build-the-app-shell-theme-settings-and-e2e-harness.md) | TODO | 18 |
-| 20 | [Browse MusicBrainz and enqueue releases](mvp/20-browse-musicbrainz-and-enqueue-releases.md) | TODO | 16, 19 |
 | 21 | [Show the job queue with progress, ETA, and cancel](mvp/21-show-the-job-queue-with-progress-eta-and-cancel.md) | TODO | 19 |
-| 22 | [Review uncertain matches](mvp/22-review-uncertain-matches.md) | TODO | 12, 21 |
 | 23 | [Compare before and after audio](mvp/23-compare-before-and-after-audio.md) | TODO | 21 |
-| 24 | [Restore local files and folders](mvp/24-restore-local-files-and-folders.md) | TODO | 07, 21 |
-| 25 | [Add the first-run setup and the attribution screen](mvp/25-add-the-first-run-setup-and-the-attribution-screen.md) | TODO | 08, 11, 19 |
+| 24 | [Add folders and review the triage](mvp/24-add-folders-and-review-the-triage.md) | TODO | 07, 16, 21 |
+| 25 | [Add the first-run setup and the attribution screen](mvp/25-add-the-first-run-setup-and-the-attribution-screen.md) | TODO | 08, 19 |
+| 32 | [Add a blind ABX mode to the compare player](mvp/32-add-a-blind-abx-mode-to-the-compare-player.md) | TODO | 23 |
 
 ## Phase 5 — Packaging and release
 
 | # | Task | Status | Depends on |
 | --- | --- | --- | --- |
-| 26 | [Publish third-party notices and the model attribution](mvp/26-publish-third-party-notices-and-the-model-attribution.md) | TODO | 03, 04, 06, 11 |
+| 26 | [Publish third-party notices and the model attribution](mvp/26-publish-third-party-notices-and-the-model-attribution.md) | TODO | 03, 04, 06 |
 | 27 | [Build and verify the Windows installer](mvp/27-build-and-verify-the-windows-installer.md) | TODO | 25, 26 |
 | 28 | [Build and verify the Linux packages](mvp/28-build-and-verify-the-linux-packages.md) | TODO | 25, 26 |
-| 29 | [Run the release-candidate journey](mvp/29-run-the-release-candidate-journey.md) | TODO | 20, 21, 22, 23, 24, 27, 28 |
+| 29 | [Run the release-candidate journey](mvp/29-run-the-release-candidate-journey.md) | TODO | 21, 23, 24, 27, 28, 32 |
+
+## Cancelled by the 2026-10-10 pivot
+
+Melomae does not acquire audio and uses no online metadata service (SRS §1.5, §5.6). `docs/evidence/2026-10-10-pivot.md` records the reasons. The files stay for the record.
+
+| # | Task | Status | Depends on |
+| --- | --- | --- | --- |
+| 02 | [Prove YouTube Music search and download through yt-dlp](mvp/02-prove-youtube-music-search-and-download-through-yt-dlp.md) | CANCELLED | 00 |
+| 09 | [Add the MusicBrainz client with a shared rate limiter](mvp/09-add-the-musicbrainz-client-with-a-shared-rate-limiter.md) | CANCELLED | 00 |
+| 10 | [Fetch cover art from the Cover Art Archive](mvp/10-fetch-cover-art-from-the-cover-art-archive.md) | CANCELLED | 09 |
+| 11 | [Manage the yt-dlp and Deno binaries](mvp/11-manage-the-yt-dlp-and-deno-binaries.md) | CANCELLED | 02, 30 |
+| 12 | [Match MusicBrainz tracks to YouTube Music candidates](mvp/12-match-musicbrainz-tracks-to-youtube-music-candidates.md) | CANCELLED | 02, 09, 11, 30 |
+| 13 | [Download the best audio stream](mvp/13-download-the-best-audio-stream.md) | CANCELLED | 11, 12, 30 |
+| 20 | [Browse MusicBrainz and enqueue releases](mvp/20-browse-musicbrainz-and-enqueue-releases.md) | CANCELLED | 16, 19 |
+| 22 | [Review uncertain matches](mvp/22-review-uncertain-matches.md) | CANCELLED | 12, 21 |
+| 30 | [Define the stream source interface](mvp/30-define-the-stream-source-interface.md) | CANCELLED | 00, 03 |
 
 ## Blocked tasks
 
 | Task | Human input that clears it |
 | --- | --- |
-| — | No task is blocked. Tasks 09, 27, 28, and 29 need bootstrap items before they can finish. |
+| — | No task is blocked. Tasks 27, 28, and 29 need bootstrap items before they can finish. |
 
 After a board edit, run `python tasks/validate_board.py`. The task file and its board row must agree on the title, the status, and the dependencies. Every dependency must name a task that exists.
 
@@ -169,9 +176,11 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 | B-004 | [Offer a faster reduced-precision model](backlog/B-004-offer-a-faster-reduced-precision-model.md) | TODO | 01, 04 |
 | B-005 | [Stream decoding and encoding for very long inputs](backlog/B-005-stream-decoding-and-encoding-for-very-long-inputs.md) | TODO | 04, 05 |
 | B-006 | [Add signed in-app updates](backlog/B-006-add-signed-in-app-updates.md) | TODO | 27, 28 |
-| B-007 | [Use MusicBrainz streaming links as the first match source](backlog/B-007-use-musicbrainz-streaming-links-as-the-first-match-source.md) | TODO | 12, 30 |
-| B-008 | [Trim non-music sections with SponsorBlock](backlog/B-008-trim-non-music-sections-with-sponsorblock.md) | TODO | 02, 12, 13 |
-| B-009 | [Add a Bandcamp source](backlog/B-009-add-a-bandcamp-source.md) | TODO | 30, 17 |
-| B-010 | [Add a SoundCloud source](backlog/B-010-add-a-soundcloud-source.md) | TODO | 30, 17 |
+| B-007 | [Use MusicBrainz streaming links as the first match source](backlog/B-007-use-musicbrainz-streaming-links-as-the-first-match-source.md) | CANCELLED | 12, 30 |
+| B-008 | [Trim non-music sections with SponsorBlock](backlog/B-008-trim-non-music-sections-with-sponsorblock.md) | CANCELLED | 02, 12, 13 |
+| B-009 | [Add a Bandcamp source](backlog/B-009-add-a-bandcamp-source.md) | CANCELLED | 30, 17 |
+| B-010 | [Add a SoundCloud source](backlog/B-010-add-a-soundcloud-source.md) | CANCELLED | 30, 17 |
+| B-011 | [Identify files with an online metadata service](backlog/B-011-identify-files-with-an-online-metadata-service.md) | TODO | 15 |
+| B-012 | [Offer optional hosted restore](backlog/B-012-offer-optional-hosted-restore.md) | TODO | 17 |
 
 Each backlog record states why it does not block the MVP. Each record also states its promotion condition.

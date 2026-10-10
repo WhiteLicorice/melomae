@@ -1,13 +1,13 @@
 # 22 — Review uncertain matches
 
-**Status:** TODO
+**Status:** CANCELLED
 **Phase:** 4 — Desktop UI
 **Depends on:** 12, 21
 **SRS:** §5
 **Stack:** §A
 **Assigned to:** Agent
 **Started:** —
-**Outcome:** —
+**Outcome:** Cancelled on 2026-10-10. Melomae does not match or download audio (SRS §1.5).
 
 ## Goal
 

@@ -1,13 +1,13 @@
 # 09 — Add the MusicBrainz client with a shared rate limiter
 
-**Status:** TODO
+**Status:** CANCELLED
 **Phase:** 2 — Metadata and acquisition
 **Depends on:** 00
 **SRS:** §4, §8
 **Stack:** §F
 **Assigned to:** Agent
 **Started:** —
-**Outcome:** —
+**Outcome:** Cancelled on 2026-10-10. Melomae uses no online metadata service (SRS §5.6, §11.5). See `docs/evidence/2026-10-10-pivot.md`.
 
 ## Goal
 

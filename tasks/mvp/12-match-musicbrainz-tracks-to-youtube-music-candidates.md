@@ -1,13 +1,13 @@
 # 12 — Match MusicBrainz tracks to YouTube Music candidates
 
-**Status:** TODO
+**Status:** CANCELLED
 **Phase:** 2 — Metadata and acquisition
 **Depends on:** 02, 09, 11, 30
 **SRS:** §5
 **Stack:** §E, §F
 **Assigned to:** Agent
 **Started:** —
-**Outcome:** —
+**Outcome:** Cancelled on 2026-10-10. Melomae does not acquire audio (SRS §1.5). See `docs/evidence/2026-10-10-pivot.md`.
 
 ## Goal
 

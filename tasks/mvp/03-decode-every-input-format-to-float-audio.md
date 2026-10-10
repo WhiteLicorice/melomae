@@ -3,7 +3,7 @@
 **Status:** TODO
 **Phase:** 1 — Restoration engine
 **Depends on:** 00
-**SRS:** §5, §6, §9
+**SRS:** §4, §6, §9
 **Stack:** §D
 **Assigned to:** Agent
 **Started:** —
@@ -16,7 +16,7 @@ Decode MP3, AAC/M4A, Opus (WebM and Ogg), Vorbis, FLAC, ALAC, WAV, and AIFF to p
 ## Evidence
 
 - Symphonia has no Opus decoder. Its Opus work was an open WIP pull request (#398) on 2026-09-24.
-- Opus is the primary input. YouTube's best audio stream is Opus (format 251).
+- Users own Opus files in Ogg and WebM containers, so Opus decode stays in scope.
 - Opus always decodes at 48 kHz. Apollo needs 44.1 kHz.
 - The owner's old pipeline resampled with ffmpeg swr at `filter_size=256:phase_shift=24:cutoff=0.98` (`C:\Lab\Apollo\inference2.py:39`).
 - The owner's library holds names such as `Florida!!!.opus` and `Habits (Stay High).opus`, which broke an old batch script (`C:\Lab\Apollo\run_batch.py` docstring).
@@ -35,7 +35,7 @@ Decode MP3, AAC/M4A, Opus (WebM and Ogg), Vorbis, FLAC, ALAC, WAV, and AIFF to p
 ## Out of scope
 
 - Streaming decode for very long files (backlog B-005)
-- Tag reading (tasks 15 and 24)
+- Tag reading (task 15)
 
 ## Test-first plan
 

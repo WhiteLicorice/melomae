@@ -1,8 +1,9 @@
 # B-008 — Trim non-music sections with SponsorBlock
 
-**Status:** TODO
+**Status:** CANCELLED
 **Severity:** Future-deferred non-MVP
 **Depends on:** 02, 12, 13
+**Outcome:** Cancelled on 2026-10-10. Melomae does not acquire audio (SRS §1.5).
 
 ## Impact
 

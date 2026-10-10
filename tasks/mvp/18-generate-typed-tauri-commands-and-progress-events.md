@@ -16,7 +16,7 @@ Connect the React UI to `melomae-core` through typed commands and events, with T
 ## Scope
 
 1. Generate the TypeScript bindings from the Rust types. The candidates are tauri-specta and ts-rs. Confirm Tauri 2 support for each at execution time. Record the pick and the reason.
-2. Expose commands for search, browse, queue, cancel, retry, job list, review decisions, settings, library scan, and playback control.
+2. Expose commands for adding inputs, triage, queue, cancel, retry, job list, settings, history, and playback control.
 3. Stream progress over Tauri Channels.
 4. Keep heavy work off the main thread.
 5. Add `pnpm bindings:check` to the gate. It fails when the committed bindings differ from the generated ones.

@@ -1,13 +1,13 @@
 # 02 — Prove YouTube Music search and download through yt-dlp
 
-**Status:** TODO
+**Status:** CANCELLED
 **Phase:** 0 — Foundation and go/no-go spikes
 **Depends on:** 00
 **SRS:** §3, §5, §11
 **Stack:** §E
 **Assigned to:** Agent
 **Started:** —
-**Outcome:** —
+**Outcome:** Cancelled on 2026-10-10. Melomae does not acquire audio (SRS §1.5). See `docs/evidence/2026-10-10-pivot.md`.
 
 This task is a spike. It ends with `GO` or `NO-GO`.
 

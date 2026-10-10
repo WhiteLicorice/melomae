@@ -15,10 +15,10 @@ Give the app its navigation, theme, settings screen, and an end-to-end test harn
 
 ## Scope
 
-1. A sidebar with Search, Library, Queue, Review, Local restore, and Settings.
+1. A sidebar with Restore, Queue, History, and Settings.
 2. Light and dark themes that follow the OS setting. Every text pair meets WCAG 2.2 AA contrast.
 3. Full keyboard navigation with a visible focus ring.
-4. Settings: library folder, output format (default FLAC), restore default (on), device (Auto), and keep sources (on).
+4. Settings: default output folder, output format (default FLAC), restore default (on), device (Auto), and volume matching (on).
 5. An E2E harness with tauri-driver and WebdriverIO on Windows and Linux. Confirm current tauri-driver support at execution time.
 
 ## Out of scope

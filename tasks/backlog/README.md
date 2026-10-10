@@ -20,3 +20,5 @@ Do not place a defect that blocks an MVP user journey here. Put that task in `ta
 | B-008 | [Trim non-music sections with SponsorBlock](B-008-trim-non-music-sections-with-sponsorblock.md) |
 | B-009 | [Add a Bandcamp source](B-009-add-a-bandcamp-source.md) |
 | B-010 | [Add a SoundCloud source](B-010-add-a-soundcloud-source.md) |
+| B-011 | [Identify files with an online metadata service](B-011-identify-files-with-an-online-metadata-service.md) |
+| B-012 | [Offer optional hosted restore](B-012-offer-optional-hosted-restore.md) |

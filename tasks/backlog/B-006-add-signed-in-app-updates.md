@@ -6,7 +6,7 @@
 
 ## Impact
 
-Without in-app updates, users must download each new version by hand. yt-dlp updates itself through task 11. The app does not.
+Without in-app updates, users must download each new version by hand.
 
 ## Why this does not block MVP
 

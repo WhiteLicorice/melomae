@@ -2,7 +2,7 @@
 
 **Status:** TODO
 **Phase:** 5 — Packaging and release
-**Depends on:** 20, 21, 22, 23, 24, 27, 28
+**Depends on:** 21, 23, 24, 27, 28, 32
 **SRS:** §1, §2, §3, §4, §5, §6, §7, §8, §9, §10, §11, §12
 **Stack:** §J, §K
 **Assigned to:** Agent
@@ -18,21 +18,20 @@ Prove the whole product through the path a real user takes, and record the numbe
 On a fresh Windows user profile, run these steps in order:
 
 1. Install from the task 27 installer.
-2. Complete the first-run flow.
-3. Search for an album and queue it.
-4. Resolve one review.
-5. Let the downloads finish.
-6. Restore one track on CPU and one on GPU.
-7. Check the tags and the cover in a third-party player.
-8. Run the A/B compare.
-9. Restore a local folder.
-10. Uninstall.
+2. Complete the first-run flow with the network turned off.
+3. Add a nested folder that holds the task 16 calibration fixtures and the task 15 tag fixture.
+4. Check each verdict and the default selection.
+5. Restore one file on CPU and one on GPU.
+6. Check the tags, the cover, and the provenance field in a third-party player.
+7. Check that every input file is unchanged.
+8. Run the volume-matched compare and ten blind ABX trials.
+9. Uninstall.
 
-Record the time for each step and compare it with SRS §12 and Stack §K. Repeat steps 2, 6, and 8 under WSLg.
+Record the time for each step and compare it with SRS §12 and Stack §K. Repeat steps 2, 5, and 8 under WSLg.
 
 ## Blocking inputs
 
-This task cannot finish before bootstrap items 1 (the MusicBrainz contact), 5 (the YouTube risk acceptance), and 6 (the name check) are complete. If one is missing, follow the human-input protocol.
+This task cannot finish before bootstrap item 6 (the name check) is complete. If it is missing, follow the human-input protocol.
 
 ## Out of scope
 

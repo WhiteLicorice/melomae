@@ -2,9 +2,9 @@
 
 **Status:** TODO
 **Phase:** 5 — Packaging and release
-**Depends on:** 03, 04, 06, 11
+**Depends on:** 03, 04, 06
 **SRS:** §11
-**Stack:** §C, §D, §E, §I
+**Stack:** §C, §D, §I
 **Assigned to:** Agent
 **Started:** —
 **Outcome:** —
@@ -17,7 +17,6 @@ Ship every license notice that Melomae's bundled components require, and keep th
 
 - The Apollo code and weights are CC BY-SA 4.0 (the local `LICENSE` and the Hugging Face card). CC BY-SA 4.0 is one-way compatible with GPLv3.
 - Symphonia is MPL-2.0. libopus is BSD-3-Clause. rubato is MIT. ONNX Runtime is MIT.
-- yt-dlp's PyInstaller binaries include GPLv3+ code. Deno is MIT. Melomae downloads both at runtime and does not bundle them.
 
 ## Scope
 
@@ -25,7 +24,6 @@ Ship every license notice that Melomae's bundled components require, and keep th
 2. Generate `THIRD_PARTY_NOTICES` from the Cargo and pnpm dependency trees. Bundle it with the app.
 3. Add a model notice: the creators, CC BY-SA 4.0 with a link, the source URL, and the modification statement ("converted to ONNX, STFT re-expressed as real arithmetic").
 4. Ship `apollo.onnx` under CC BY-SA 4.0.
-5. State in the notices that yt-dlp and Deno download at runtime, with their licenses.
 
 This is not legal advice. Record any open license question for the owner in `Outcome`.
 

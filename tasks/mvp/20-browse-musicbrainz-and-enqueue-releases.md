@@ -1,13 +1,13 @@
 # 20 — Browse MusicBrainz and enqueue releases
 
-**Status:** TODO
+**Status:** CANCELLED
 **Phase:** 4 — Desktop UI
 **Depends on:** 16, 19
 **SRS:** §4, §8
 **Stack:** §A
 **Assigned to:** Agent
 **Started:** —
-**Outcome:** —
+**Outcome:** Cancelled on 2026-10-10. Melomae uses no online metadata service (SRS §5.6, §11.5). Task 24 is the entry screen now.
 
 ## Goal
 
