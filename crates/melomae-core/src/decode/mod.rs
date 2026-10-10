@@ -271,6 +271,12 @@ fn decode_format(
     )
 }
 
+/// Only an ISO base media file carries an edit list the decoder must apply. Every other container
+/// (WAV, FLAC, MP3, Vorbis, AIFF) must not even open the edit-list reader.
+fn needs_edit_list(short_name: &str) -> bool {
+    short_name == "isomp4"
+}
+
 fn decode_with_symphonia(
     path: &Path,
     format: &mut dyn FormatReader,
@@ -346,7 +352,13 @@ fn decode_with_symphonia(
     // length, so the end is exactly `start + duration`. Formats without an edit list fall back to
     // the track's declared duration, and otherwise keep every decoded frame.
     let decoded_frames = channels[0].len();
-    let edit = mp4::edit_list_trim(path, rate);
+    // Only an MP4 container has an edit list. Skip the reader for every other format, so a WAV or
+    // FLAC decode never opens it.
+    let edit = if needs_edit_list(format.format_info().short_name) {
+        mp4::edit_list_trim(path, rate)
+    } else {
+        None
+    };
     let start_trim = edit.map_or(0, |edit| edit.start);
     let valid_frames = match edit {
         Some(edit) => Some(start_trim.saturating_add(edit.duration)),
@@ -601,5 +613,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn only_the_mp4_container_needs_the_edit_list() {
+        // These are symphonia's container short names. Only the MP4 reader carries an edit list.
+        for short_name in ["wav", "flac", "mp3", "ogg", "aiff", "mkv"] {
+            assert!(
+                !needs_edit_list(short_name),
+                "{short_name} must not open the edit-list reader"
+            );
+        }
+        assert!(needs_edit_list("isomp4"));
     }
 }

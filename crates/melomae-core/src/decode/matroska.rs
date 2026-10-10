@@ -786,4 +786,96 @@ mod tests {
             .expect_err("hostile padding must return an error");
         assert_eq!(error.kind(), DecodeErrorKind::Malformed);
     }
+
+    /// Encode an element size with the shortest vint that fits, for sizes over 126.
+    fn size_vint(value: usize) -> Vec<u8> {
+        for width in 1..=8u32 {
+            let max = (1u128 << (7 * width)) - 1;
+            if (value as u128) < max {
+                let encoded = (1u128 << (7 * width)) | value as u128;
+                return encoded.to_be_bytes()[(16 - width as usize)..].to_vec();
+            }
+        }
+        panic!("the element is too large to encode");
+    }
+
+    /// A `Read + Seek` wrapper that counts the bytes actually read.
+    struct CountingCursor {
+        inner: Cursor<Vec<u8>>,
+        read: std::cell::Cell<u64>,
+    }
+
+    impl Read for CountingCursor {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let count = self.inner.read(buf)?;
+            self.read.set(self.read.get() + count as u64);
+            Ok(count)
+        }
+    }
+
+    impl Seek for CountingCursor {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
+    #[test]
+    fn skips_a_large_payload_without_reading_it() {
+        let mut tracks = Vec::new();
+        tracks.extend_from_slice(&element(ID_TRACK_ENTRY, &track_entry(1, 0)));
+        let mut cluster = Vec::new();
+        cluster.extend_from_slice(&element(ID_BLOCK_GROUP, &block_group(0x81, 0)));
+
+        let mut segment = Vec::new();
+        segment.extend_from_slice(&element(ID_TRACKS, &tracks));
+        segment.extend_from_slice(&element(ID_CLUSTER, &cluster));
+        // A 4 MiB Void element: the scanner must seek past it, not read it.
+        let mut void = id(ID_VOID);
+        void.extend_from_slice(&size_vint(4 * 1024 * 1024));
+        void.extend_from_slice(&vec![0u8; 4 * 1024 * 1024]);
+        segment.extend_from_slice(&void);
+
+        let mut data = vec![0x1A, 0x45, 0xDF, 0xA3, 0x80];
+        data.extend_from_slice(&id(ID_SEGMENT));
+        data.extend_from_slice(&size_vint(segment.len()));
+        data.extend_from_slice(&segment);
+
+        let mut reader = CountingCursor {
+            inner: Cursor::new(data.clone()),
+            read: std::cell::Cell::new(0),
+        };
+        let trim = opus_trim(Path::new("memory.webm"), &mut reader, 1, 48_000)
+            .expect("read the trim")
+            .expect("some trim");
+        assert_eq!(trim.blocks.len(), 1);
+        assert!(
+            reader.read.get() < 64 * 1024,
+            "the reader read {} bytes of a {} byte file",
+            reader.read.get(),
+            data.len()
+        );
+    }
+
+    #[test]
+    fn rejects_a_cluster_that_runs_past_the_end() {
+        let mut tracks = Vec::new();
+        tracks.extend_from_slice(&element(ID_TRACK_ENTRY, &track_entry(1, 0)));
+
+        // A cluster whose declared size is far larger than the bytes that follow.
+        let mut cluster = id(ID_CLUSTER);
+        cluster.extend_from_slice(&size_vint(10_000));
+        cluster.extend_from_slice(&element(ID_SIMPLE_BLOCK, &[0x81, 0x00, 0x00, 0x80]));
+
+        let mut segment = Vec::new();
+        segment.extend_from_slice(&element(ID_TRACKS, &tracks));
+        segment.extend_from_slice(&cluster);
+
+        let mut data = vec![0x1A, 0x45, 0xDF, 0xA3, 0x80];
+        data.extend_from_slice(&id(ID_SEGMENT));
+        data.extend_from_slice(&size_vint(segment.len()));
+        data.extend_from_slice(&segment);
+
+        let error = read(&data, 1).expect_err("a truncated cluster must return an error");
+        assert_eq!(error.kind(), DecodeErrorKind::Malformed);
+    }
 }

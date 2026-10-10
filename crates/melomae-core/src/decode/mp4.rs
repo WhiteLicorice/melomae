@@ -26,7 +26,16 @@ pub(crate) struct EditListTrim {
 /// Read the audio track's edit list, or `None` when the file is not an ISO base media file or has
 /// no edit list.
 pub(crate) fn edit_list_trim(path: &Path, sample_rate: u32) -> Option<EditListTrim> {
-    let moov = read_moov(path)?;
+    let mut file = File::open(path).ok()?;
+    edit_list_trim_reader(&mut file, sample_rate)
+}
+
+/// Read the audio track's edit list from an open reader, so a test can count the bytes read.
+fn edit_list_trim_reader<R: Read + Seek>(
+    reader: &mut R,
+    sample_rate: u32,
+) -> Option<EditListTrim> {
+    let moov = read_moov(reader)?;
     let movie_timescale = find_box(&moov, b"mvhd").and_then(read_mvhd_timescale)?;
 
     for trak in find_boxes(&moov, b"trak") {
@@ -85,21 +94,20 @@ struct Edit {
 /// Only the box headers are read to walk the top level, the media data is skipped by seeking, and
 /// the `moov` payload is read into a buffer bounded by [`MAX_MOOV_BYTES`]. The reader therefore
 /// never loads the whole file.
-fn read_moov(path: &Path) -> Option<Vec<u8>> {
-    let mut file = File::open(path).ok()?;
-    let file_len = file.metadata().ok()?.len();
+fn read_moov<R: Read + Seek>(reader: &mut R) -> Option<Vec<u8>> {
+    let file_len = reader.seek(SeekFrom::End(0)).ok()?;
     let mut offset = 0u64;
     let mut is_iso = false;
     while offset.checked_add(8)? <= file_len {
-        file.seek(SeekFrom::Start(offset)).ok()?;
+        reader.seek(SeekFrom::Start(offset)).ok()?;
         let mut header = [0u8; 8];
-        file.read_exact(&mut header).ok()?;
+        reader.read_exact(&mut header).ok()?;
         let mut size = u64::from(u32::from_be_bytes(header[..4].try_into().unwrap()));
         let kind: &[u8; 4] = header[4..8].try_into().unwrap();
         let mut header_len = 8u64;
         if size == 1 {
             let mut large = [0u8; 8];
-            file.read_exact(&mut large).ok()?;
+            reader.read_exact(&mut large).ok()?;
             size = u64::from_be_bytes(large);
             header_len = 16;
         } else if size == 0 {
@@ -124,9 +132,9 @@ fn read_moov(path: &Path) -> Option<Vec<u8>> {
             if body_len > MAX_MOOV_BYTES {
                 return None;
             }
-            file.seek(SeekFrom::Start(body_start)).ok()?;
+            reader.seek(SeekFrom::Start(body_start)).ok()?;
             let mut body = vec![0u8; usize::try_from(body_len).ok()?];
-            file.read_exact(&mut body).ok()?;
+            reader.read_exact(&mut body).ok()?;
             return Some(body);
         }
         offset = body_end;
@@ -177,11 +185,13 @@ fn boxes(data: &[u8]) -> impl Iterator<Item = (&[u8; 4], &[u8])> {
 
 /// Read the timescale from an `mvhd` payload, in the movie timescale.
 fn read_mvhd_timescale(mvhd: &[u8]) -> Option<u32> {
-    match *mvhd.first()? {
+    let timescale = match *mvhd.first()? {
         0 => read_u32(mvhd, 12),
         1 => read_u32(mvhd, 20),
         _ => None,
-    }
+    }?;
+    // A zero timescale cannot be used to convert a duration to samples.
+    (timescale != 0).then_some(timescale)
 }
 
 /// Read the timescale from an `mdhd` payload, in the media timescale.
@@ -468,5 +478,66 @@ mod tests {
 
         let path = write_temp("mp4_truncated.m4a", &out);
         assert_eq!(edit_list_trim(&path, 44_100), None);
+    }
+
+    #[test]
+    fn rejects_a_zero_movie_timescale() {
+        let path = write_temp(
+            "mp4_zero_movie_timescale.m4a",
+            &file(0, 44_100, &[(6_000, 1_024)]),
+        );
+        assert_eq!(edit_list_trim(&path, 44_100), None);
+    }
+
+    #[test]
+    fn rejects_an_oversized_extended_box() {
+        // `ftyp`, then a box whose extended 64-bit size is `u64::MAX`. The reader must not
+        // allocate it, and must not overflow on `offset + size`.
+        let mut out = boxed(b"ftyp", b"M4A ");
+        out.extend_from_slice(&1u32.to_be_bytes());
+        out.extend_from_slice(b"free");
+        out.extend_from_slice(&u64::MAX.to_be_bytes());
+        let path = write_temp("mp4_oversized_box.m4a", &out);
+        assert_eq!(edit_list_trim(&path, 44_100), None);
+    }
+
+    /// A `Read + Seek` wrapper that counts the bytes actually read.
+    struct CountingReader {
+        inner: fs::File,
+        read: std::cell::Cell<u64>,
+    }
+
+    impl std::io::Read for CountingReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let count = self.inner.read(buf)?;
+            self.read.set(self.read.get() + count as u64);
+            Ok(count)
+        }
+    }
+
+    impl std::io::Seek for CountingReader {
+        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
+    #[test]
+    fn reads_only_the_boxes_it_needs() {
+        // A small `moov` followed by a 4 MiB `free` box. The reader must stop at the `moov`.
+        let mut data = file(1_000, 44_100, &[(6_000, 1_024)]);
+        data.extend_from_slice(&boxed(b"free", &vec![0u8; 4 * 1024 * 1024]));
+        let path = write_temp("mp4_large_payload.m4a", &data);
+
+        let mut reader = CountingReader {
+            inner: fs::File::open(&path).unwrap(),
+            read: std::cell::Cell::new(0),
+        };
+        assert!(edit_list_trim_reader(&mut reader, 44_100).is_some());
+        assert!(
+            reader.read.get() < 64 * 1024,
+            "the reader read {} bytes of a {} byte file",
+            reader.read.get(),
+            data.len()
+        );
     }
 }
