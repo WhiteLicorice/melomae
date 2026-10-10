@@ -40,6 +40,10 @@ const ID_DISCARD_PADDING: u32 = 0x75A2;
 /// than this. It bounds a `DiscardPadding` before the padding is applied to decoded audio.
 const OPUS_MAX_FRAMES_PER_PACKET: usize = 5760;
 
+/// The most audio blocks the scanner records. A real file needs one entry per audio block, so this
+/// only rejects a damaged file whose metadata would otherwise grow without a bound.
+const MAX_BLOCK_TRIMS: usize = 4_000_000;
+
 /// The trim a single Matroska audio block asks for, in samples at the codec's 48 kHz rate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BlockTrim {
@@ -80,25 +84,43 @@ pub(crate) fn opus_trim<R: Read + Seek>(
     sample_rate: u32,
 ) -> Result<ScanOutcome, DecodeError> {
     let mut scanner = Scanner::new(reader).map_err(|e| to_error(path, Fail::Io(e)))?;
-    scan(path, &mut scanner, track, sample_rate).map_err(|fail| to_error(path, fail))
+    scan(path, &mut scanner, track, sample_rate, MAX_BLOCK_TRIMS)
+        .map_err(|fail| to_error(path, fail))
 }
 
-/// The scanner carries the current byte position so element bounds can be checked and payloads
-/// skipped by seeking.
+/// The scanner carries the current byte position and the physical file length, so element bounds
+/// can be checked against both the file and the nearest finite ancestor, and payloads skipped by
+/// seeking.
 struct Scanner<R> {
     inner: R,
     pos: u64,
+    file_len: u64,
 }
 
 impl<R: Read + Seek> Scanner<R> {
     fn new(mut inner: R) -> io::Result<Self> {
         let pos = inner.stream_position()?;
-        Ok(Self { inner, pos })
+        let file_len = inner.seek(SeekFrom::End(0))?;
+        inner.seek(SeekFrom::Start(pos))?;
+        Ok(Self {
+            inner,
+            pos,
+            file_len,
+        })
+    }
+
+    /// The byte limit for an element body: the physical file length, bounded by the nearest
+    /// finite ancestor.
+    fn limit(&self, parent_end: Option<u64>) -> u64 {
+        parent_end.map_or(self.file_len, |end| end.min(self.file_len))
     }
 
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Fail> {
         let read = self.inner.read(buf)?;
-        self.pos += read as u64;
+        self.pos = self
+            .pos
+            .checked_add(read as u64)
+            .ok_or(Fail::Bad("the stream position overflows"))?;
         Ok(read)
     }
 
@@ -126,6 +148,48 @@ impl<R: Read + Seek> Scanner<R> {
         self.inner.seek(SeekFrom::Start(pos))?;
         self.pos = pos;
         Ok(())
+    }
+
+    /// Read one byte, refusing to cross `end`.
+    fn byte_within(&mut self, end: u64) -> Result<u8, Fail> {
+        if self.pos >= end {
+            return Err(Fail::Eof);
+        }
+        self.byte()
+    }
+
+    /// Read `buf.len()` bytes, refusing to cross `end`.
+    fn read_exact_within(&mut self, buf: &mut [u8], end: u64) -> Result<(), Fail> {
+        let needed = self
+            .pos
+            .checked_add(buf.len() as u64)
+            .ok_or(Fail::Bad("the stream position overflows"))?;
+        if needed > end {
+            return Err(Fail::Eof);
+        }
+        self.read_exact(buf)
+    }
+
+    /// The absolute end of an element body, bounded by `limit`. An element that runs past its
+    /// limit is a truncation. `None` is the unknown-size marker.
+    fn bounded_end(
+        &self,
+        body_start: u64,
+        size: Option<u64>,
+        limit: u64,
+    ) -> Result<Option<u64>, Fail> {
+        match size {
+            Some(size) => {
+                let end = body_start
+                    .checked_add(size)
+                    .ok_or(Fail::Bad("an element size overflows the stream"))?;
+                if end > limit {
+                    return Err(Fail::Eof);
+                }
+                Ok(Some(end))
+            }
+            None => Ok(None),
+        }
     }
 }
 
@@ -158,13 +222,26 @@ fn to_error(path: &Path, fail: Fail) -> DecodeError {
     }
 }
 
-#[derive(Default)]
 struct State {
     track: u64,
     found_track: bool,
     codec_delay_ns: u64,
     blocks: Vec<BlockTrim>,
     rate: u32,
+    max_blocks: usize,
+}
+
+impl State {
+    /// Record one audio block, refusing to grow the table past its budget.
+    fn push_block(&mut self, block: BlockTrim) -> Result<(), Fail> {
+        if self.blocks.len() >= self.max_blocks {
+            return Err(Fail::Bad(
+                "the file declares more audio blocks than the budget allows",
+            ));
+        }
+        self.blocks.push(block);
+        Ok(())
+    }
 }
 
 fn scan<R: Read + Seek>(
@@ -172,6 +249,7 @@ fn scan<R: Read + Seek>(
     scanner: &mut Scanner<R>,
     track: u64,
     rate: u32,
+    max_blocks: usize,
 ) -> Result<ScanOutcome, Fail> {
     let mut magic = [0u8; 4];
     let read = scanner.read(&mut magic)?;
@@ -185,14 +263,17 @@ fn scan<R: Read + Seek>(
     let mut state = State {
         track,
         rate,
-        ..State::default()
+        max_blocks,
+        found_track: false,
+        codec_delay_ns: 0,
+        blocks: Vec::new(),
     };
     scanner.seek(0)?;
 
     while let Some((id, _)) = read_id(scanner)? {
         let size = read_size(scanner)?;
         let body_start = scanner.pos;
-        let body_end = element_end(body_start, size)?;
+        let body_end = scanner.bounded_end(body_start, size, scanner.file_len)?;
         if id == ID_SEGMENT {
             parse_segment(scanner, body_end, &mut state)?;
             break;
@@ -219,35 +300,28 @@ fn scan<R: Read + Seek>(
     })
 }
 
-/// The absolute end of an element body, or `None` when the size is the unknown marker.
-fn element_end(body_start: u64, size: Option<u64>) -> Result<Option<u64>, Fail> {
-    match size {
-        Some(size) => {
-            Ok(Some(body_start.checked_add(size).ok_or(Fail::Bad(
-                "an element size overflows the stream",
-            ))?))
-        }
-        None => Ok(None),
-    }
-}
-
 fn parse_segment<R: Read + Seek>(
     scanner: &mut Scanner<R>,
     end: Option<u64>,
     state: &mut State,
 ) -> Result<(), Fail> {
     loop {
-        if let Some(end) = end {
-            if scanner.pos >= end {
-                return Ok(());
-            }
+        let limit = scanner.limit(end);
+        if scanner.pos >= limit {
+            return Ok(());
         }
         let Some((id, _)) = read_id(scanner)? else {
-            return Ok(());
+            // A physical end of file under a finite Segment is a truncation; under an unknown-size
+            // Segment it is the clean end of the file.
+            return if end.is_none() {
+                Ok(())
+            } else {
+                Err(Fail::Eof)
+            };
         };
         let size = read_size(scanner)?;
         let body_start = scanner.pos;
-        let child_end = element_end(body_start, size)?;
+        let child_end = scanner.bounded_end(body_start, size, limit)?;
         match id {
             ID_TRACKS => parse_tracks(scanner, child_end, state)?,
             ID_CLUSTER => parse_cluster(scanner, child_end, state)?,
@@ -262,11 +336,12 @@ fn parse_tracks<R: Read + Seek>(
     state: &mut State,
 ) -> Result<(), Fail> {
     let end = end.ok_or(Fail::Bad("the Tracks element has no size"))?;
-    while scanner.pos < end {
+    let limit = scanner.limit(Some(end));
+    while scanner.pos < limit {
         let (id, _) = read_id(scanner)?.ok_or(Fail::Eof)?;
         let size = read_size(scanner)?;
         let body_start = scanner.pos;
-        let child_end = element_end(body_start, size)?;
+        let child_end = scanner.bounded_end(body_start, size, limit)?;
         if id == ID_TRACK_ENTRY {
             parse_track_entry(
                 scanner,
@@ -288,12 +363,14 @@ fn parse_track_entry<R: Read + Seek>(
     let mut number = None;
     let mut is_opus = false;
     let mut delay_ns = 0u64;
-    while scanner.pos < end {
+    let limit = scanner.limit(Some(end));
+    while scanner.pos < limit {
         let (id, _) = read_id(scanner)?.ok_or(Fail::Eof)?;
         let size = read_size(scanner)?;
         let body_start = scanner.pos;
-        let child_end = element_end(body_start, size)?;
-        let child_end = child_end.ok_or(Fail::Bad("a track entry child has no size"))?;
+        let child_end = scanner
+            .bounded_end(body_start, size, limit)?
+            .ok_or(Fail::Bad("a track entry child has no size"))?;
         match id {
             ID_TRACK_NUMBER => number = read_uint(scanner, child_end)?,
             ID_CODEC_ID => is_opus = read_bytes(scanner, child_end)? == b"A_OPUS",
@@ -315,10 +392,9 @@ fn parse_cluster<R: Read + Seek>(
     state: &mut State,
 ) -> Result<(), Fail> {
     loop {
-        if let Some(end) = end {
-            if scanner.pos >= end {
-                return Ok(());
-            }
+        let limit = scanner.limit(end);
+        if scanner.pos >= limit {
+            return Ok(());
         }
         let id_start = scanner.pos;
         let Some((id, _)) = read_id(scanner)? else {
@@ -338,7 +414,7 @@ fn parse_cluster<R: Read + Seek>(
         }
         let size = read_size(scanner)?;
         let body_start = scanner.pos;
-        let child_end = element_end(body_start, size)?;
+        let child_end = scanner.bounded_end(body_start, size, limit)?;
         match id {
             ID_SIMPLE_BLOCK => {
                 // A SimpleBlock carries no `DiscardPadding`, but its frame count is needed so a
@@ -346,7 +422,7 @@ fn parse_cluster<R: Read + Seek>(
                 let end = child_end.ok_or(Fail::Bad("a simple block has no size"))?;
                 let (block_track, frames) = read_block_header(scanner, end)?;
                 if block_track == Some(state.track) {
-                    state.blocks.push(BlockTrim { frames, padding: 0 });
+                    state.push_block(BlockTrim { frames, padding: 0 })?;
                 }
                 scanner.seek(end)?;
             }
@@ -378,15 +454,17 @@ fn parse_block_group<R: Read + Seek>(
     state: &mut State,
 ) -> Result<(), Fail> {
     let end = end.ok_or(Fail::Bad("a block group has no size"))?;
+    let limit = scanner.limit(Some(end));
     let mut track = None;
     let mut frames = 1usize;
     let mut padding_ns = 0i64;
-    while scanner.pos < end {
+    while scanner.pos < limit {
         let (id, _) = read_id(scanner)?.ok_or(Fail::Eof)?;
         let size = read_size(scanner)?;
         let body_start = scanner.pos;
-        let child_end = element_end(body_start, size)?;
-        let child_end = child_end.ok_or(Fail::Bad("a block group child has no size"))?;
+        let child_end = scanner
+            .bounded_end(body_start, size, limit)?
+            .ok_or(Fail::Bad("a block group child has no size"))?;
         match id {
             ID_BLOCK => {
                 let (block_track, block_frames) = read_block_header(scanner, child_end)?;
@@ -405,7 +483,7 @@ fn parse_block_group<R: Read + Seek>(
         if padding.unsigned_abs() > max_samples {
             return Err(Fail::Bad("a DiscardPadding is larger than its block"));
         }
-        state.blocks.push(BlockTrim { frames, padding });
+        state.push_block(BlockTrim { frames, padding })?;
     }
     Ok(())
 }
@@ -485,25 +563,29 @@ fn read_block_header<R: Read + Seek>(
     scanner: &mut Scanner<R>,
     end: u64,
 ) -> Result<(Option<u64>, usize), Fail> {
+    // A block header needs at least the track vint, a two-byte timecode, and a flags byte.
     if end.saturating_sub(scanner.pos) < 4 {
-        return Ok((None, 1));
+        return Err(Fail::Eof);
     }
-    let track = read_vint_number(scanner)?;
+    let track = read_vint_number(scanner, end)?;
     let mut header = [0u8; 3];
-    scanner.read_exact(&mut header)?;
+    scanner.read_exact_within(&mut header, end)?;
     let flags = header[2];
     let lacing = (flags >> 1) & 0x03;
     let frames = if lacing == 0 {
         1
     } else {
-        usize::from(scanner.byte()?) + 1
+        usize::from(scanner.byte_within(end)?) + 1
     };
     Ok((track, frames))
 }
 
-/// Read the track number vint at the start of a `Block` payload.
-fn read_vint_number<R: Read + Seek>(scanner: &mut Scanner<R>) -> Result<Option<u64>, Fail> {
-    let first = scanner.byte()?;
+/// Read the track number vint at the start of a `Block` payload, bounded by the block's end.
+fn read_vint_number<R: Read + Seek>(
+    scanner: &mut Scanner<R>,
+    end: u64,
+) -> Result<Option<u64>, Fail> {
+    let first = scanner.byte_within(end)?;
     if first == 0 {
         return Err(Fail::Bad("a block track number is zero"));
     }
@@ -514,7 +596,8 @@ fn read_vint_number<R: Read + Seek>(scanner: &mut Scanner<R>) -> Result<Option<u
     let marker = (1u16 << (8 - len)) - 1;
     let mut value = u64::from(first) & u64::from(marker as u8);
     for _ in 1..len {
-        value = (value << 8) | u64::from(scanner.byte()?);
+        let byte = scanner.byte_within(end)?;
+        value = (value << 8) | u64::from(byte);
     }
     Ok(Some(value))
 }
@@ -591,6 +674,25 @@ mod tests {
     /// Read a trim from an in-memory byte stream, discarding the scan outcome.
     fn read(data: &[u8], track: u64) -> Result<Option<OpusTrim>, DecodeError> {
         scan_bytes(data, track).map(|outcome| outcome.trim)
+    }
+
+    /// Read a trim with an explicit block-table budget, so a test can reach the limit cheaply.
+    fn read_with_budget(
+        data: &[u8],
+        track: u64,
+        max_blocks: usize,
+    ) -> Result<Option<OpusTrim>, DecodeError> {
+        let mut cursor = Cursor::new(data.to_vec());
+        let mut scanner = Scanner::new(&mut cursor).expect("a scanner");
+        scan(
+            Path::new("memory.webm"),
+            &mut scanner,
+            track,
+            48_000,
+            max_blocks,
+        )
+        .map(|outcome| outcome.trim)
+        .map_err(|fail| to_error(Path::new("memory.webm"), fail))
     }
 
     /// Encode an element ID (with its length marker).
@@ -920,5 +1022,75 @@ mod tests {
 
         let error = read(&data, 1).expect_err("a truncated cluster must return an error");
         assert_eq!(error.kind(), DecodeErrorKind::Malformed);
+    }
+
+    /// B2: a SimpleBlock whose declared body is cut by the end of the file is a truncation, not a
+    /// clean end. The scanner must check the element body against the physical file length.
+    #[test]
+    fn a_truncated_block_payload_is_an_error() {
+        let simple = element(ID_SIMPLE_BLOCK, &[0x81, 0, 0, 0x80, 0xAA]);
+        let mut data = file_with_blocks(&[simple]);
+        data.pop();
+        let result = read(&data, 1);
+        eprintln!("TRUNCATED BLOCK {result:?}");
+        assert!(
+            result.is_err(),
+            "a block cut at end of file must be an error"
+        );
+    }
+
+    /// B2: a child element whose declared body runs past its finite parent is malformed. The
+    /// scanner must check each child against the nearest finite ancestor, not only against itself.
+    #[test]
+    fn a_child_that_crosses_its_parent_is_an_error() {
+        let mut tracks = element(ID_TRACK_ENTRY, &track_entry(1, 0));
+        tracks.extend_from_slice(&element(ID_VOID, &[0; 10]));
+        let mut segment = element(ID_TRACKS, &tracks);
+        segment.extend_from_slice(&element(
+            ID_CLUSTER,
+            &element(ID_SIMPLE_BLOCK, &[0x81, 0, 0, 0x80]),
+        ));
+        let mut data = vec![0x1A, 0x45, 0xDF, 0xA3, 0x80];
+        data.extend_from_slice(&element(ID_SEGMENT, &segment));
+        // Shrink the Tracks size by 10, so its Void child now overruns it by 10 bytes.
+        let tracks_start = 5 + id(ID_SEGMENT).len() + size(segment.len()).len();
+        data[tracks_start + id(ID_TRACKS).len()] -= 10;
+        let result = read(&data, 1);
+        eprintln!("CHILD CROSSES PARENT {result:?}");
+        assert!(
+            result.is_err(),
+            "a child that overruns its finite parent must be an error"
+        );
+    }
+
+    /// B2: a finite Segment that declares one more byte than the file holds is truncated, even
+    /// though the error surfaces as an end of file.
+    #[test]
+    fn a_finite_segment_short_of_its_size_is_truncated() {
+        let simple = element(ID_SIMPLE_BLOCK, &[0x81, 0, 0, 0x80]);
+        let mut data = file_with_blocks(&[simple]);
+        data[5 + id(ID_SEGMENT).len()] += 1;
+        let result = read(&data, 1);
+        eprintln!("FINITE SEGMENT EOF {result:?}");
+        assert!(
+            result.is_err(),
+            "a finite segment short of its size must be an error"
+        );
+    }
+
+    /// B2: a file whose block table would grow past its budget is a named error, not an unbounded
+    /// allocation. The production budget is large; this exercises the limit directly.
+    #[test]
+    fn a_block_table_past_its_budget_is_an_error() {
+        let simple = element(ID_SIMPLE_BLOCK, &[0x81, 0, 0, 0x80]);
+        let data = file_with_blocks(&[simple.clone(), simple.clone(), simple]);
+        assert!(
+            read_with_budget(&data, 1, 2).is_err(),
+            "a third block past a budget of two must be an error"
+        );
+        assert!(
+            read_with_budget(&data, 1, 3).is_ok(),
+            "three blocks within a budget of three must scan"
+        );
     }
 }
