@@ -7,8 +7,12 @@
 //! lasts (which drops the padding). `media_time` is in the media timescale; `segment_duration` is
 //! in the movie timescale.
 
-use std::fs;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+
+/// The largest `moov` box this reader buffers. A larger one is metadata that cannot be trusted.
+const MAX_MOOV_BYTES: u64 = 64 * 1024 * 1024;
 
 /// The trim the audio track's edit list asks for, in samples.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,11 +26,10 @@ pub(crate) struct EditListTrim {
 /// Read the audio track's edit list, or `None` when the file is not an ISO base media file or has
 /// no edit list.
 pub(crate) fn edit_list_trim(path: &Path, sample_rate: u32) -> Option<EditListTrim> {
-    let data = read_container(path)?;
-    let moov = find_box(&data, b"moov")?;
-    let movie_timescale = find_box(moov, b"mvhd").and_then(read_mvhd_timescale)?;
+    let moov = read_moov(path)?;
+    let movie_timescale = find_box(&moov, b"mvhd").and_then(read_mvhd_timescale)?;
 
-    for trak in find_boxes(moov, b"trak") {
+    for trak in find_boxes(&moov, b"trak") {
         let Some(mdia) = find_box(trak, b"mdia") else {
             continue;
         };
@@ -77,11 +80,58 @@ struct Edit {
     media_time: i64,
 }
 
-/// The bytes of an ISO base media file, or `None` when it is not one.
-fn read_container(path: &Path) -> Option<Vec<u8>> {
-    let data = fs::read(path).ok()?;
-    find_box(&data, b"ftyp")?;
-    Some(data)
+/// The bytes of the `moov` box, or `None` when the file is not an ISO base media file or has none.
+///
+/// Only the box headers are read to walk the top level, the media data is skipped by seeking, and
+/// the `moov` payload is read into a buffer bounded by [`MAX_MOOV_BYTES`]. The reader therefore
+/// never loads the whole file.
+fn read_moov(path: &Path) -> Option<Vec<u8>> {
+    let mut file = File::open(path).ok()?;
+    let file_len = file.metadata().ok()?.len();
+    let mut offset = 0u64;
+    let mut is_iso = false;
+    while offset.checked_add(8)? <= file_len {
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        let mut header = [0u8; 8];
+        file.read_exact(&mut header).ok()?;
+        let mut size = u64::from(u32::from_be_bytes(header[..4].try_into().unwrap()));
+        let kind: &[u8; 4] = header[4..8].try_into().unwrap();
+        let mut header_len = 8u64;
+        if size == 1 {
+            let mut large = [0u8; 8];
+            file.read_exact(&mut large).ok()?;
+            size = u64::from_be_bytes(large);
+            header_len = 16;
+        } else if size == 0 {
+            size = file_len.checked_sub(offset)?;
+        }
+        if size < header_len {
+            return None;
+        }
+        let body_start = offset.checked_add(header_len)?;
+        let body_end = offset.checked_add(size)?;
+        if body_end > file_len {
+            return None;
+        }
+        if kind == b"ftyp" {
+            is_iso = true;
+        }
+        if kind == b"moov" {
+            if !is_iso {
+                return None;
+            }
+            let body_len = body_end.checked_sub(body_start)?;
+            if body_len > MAX_MOOV_BYTES {
+                return None;
+            }
+            file.seek(SeekFrom::Start(body_start)).ok()?;
+            let mut body = vec![0u8; usize::try_from(body_len).ok()?];
+            file.read_exact(&mut body).ok()?;
+            return Some(body);
+        }
+        offset = body_end;
+    }
+    None
 }
 
 /// The first child box of `kind` within `data`.
@@ -193,6 +243,7 @@ fn read_edits(elst: &[u8]) -> Option<Vec<Edit>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn boxed(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(8 + body.len());

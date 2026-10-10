@@ -44,6 +44,8 @@ pub enum DecodeErrorKind {
     Io,
     /// The container or its codec is not supported, or the container is malformed.
     UnsupportedFormat,
+    /// The container is malformed: an element is truncated or internally inconsistent.
+    Malformed,
     /// The format is supported, but a packet could not be decoded.
     Decode,
     /// The container holds no decodable audio track.
@@ -290,6 +292,13 @@ fn decode_with_symphonia(
             Ok(Some(packet)) => packet,
             Ok(None) => break,
             Err(SymphoniaError::ResetRequired) => break,
+            // An unknown-size Segment or Cluster runs to the end of the file; that clean end
+            // surfaces as an unexpected EOF from the demuxer, not a truncation.
+            Err(SymphoniaError::IoError(error))
+                if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                break
+            }
             Err(e) => {
                 return Err(DecodeError::new(
                     DecodeErrorKind::Decode,
@@ -370,12 +379,17 @@ fn decode_opus(
             ))
         }
     };
-    // Matroska carries the delay as the track's CodecDelay and the padding as each block's
-    // DiscardPadding; symphonia surfaces neither, so read them from the container. In Ogg the
-    // pre-skip comes from the identification header and the trailing padding from the last
-    // packet's trim.
-    let matroska_trim = matroska::opus_trim(path, OPUS_SAMPLE_RATE);
-    let pre_skip = match matroska_trim {
+    // Matroska carries the delay as the selected track's `CodecDelay` and the padding as each of
+    // its blocks' `DiscardPadding`; symphonia surfaces neither. The scanner reads only those
+    // elements through its own bounded reader, so it never loads the whole file. Ogg is not EBML,
+    // so the scanner returns `None` and the Ogg path below runs instead.
+    let matroska_trim = {
+        let mut reader = File::open(path)
+            .map_err(|e| DecodeError::new(DecodeErrorKind::Io, path, e.to_string()))?;
+        matroska::opus_trim(path, &mut reader, u64::from(track_id), OPUS_SAMPLE_RATE)?
+    };
+
+    let pre_skip = match &matroska_trim {
         Some(trim) => trim.pre_skip,
         None => opus_pre_skip(extra_data).ok_or_else(|| {
             DecodeError::new(
@@ -390,13 +404,27 @@ fn decode_opus(
 
     let mut channels: Vec<Vec<f32>> = vec![Vec::new(); channel_count];
     let mut block = vec![0f32; OPUS_MAX_FRAMES_PER_PACKET * channel_count];
-    let mut trailing_padding = matroska_trim.map_or(0, |trim| trim.end_padding);
+    let mut trailing_padding = 0usize;
+
+    // Each Matroska block holds `frames` decoded packets; apply its trim when the block ends.
+    let blocks: &[matroska::BlockTrim] = matroska_trim.as_ref().map_or(&[], |trim| &trim.blocks);
+    let mut block_index = 0usize;
+    let mut packets_left = blocks.first().map_or(0, |entry| entry.frames);
+    let mut block_start = 0usize;
+    let mut in_block = !blocks.is_empty();
 
     loop {
         let packet = match format.next_packet() {
             Ok(Some(packet)) => packet,
             Ok(None) => break,
             Err(SymphoniaError::ResetRequired) => break,
+            // An unknown-size Segment runs to the end of the file. Symphonia reports that clean
+            // end as an unexpected EOF from its EBML iterator, which is not a truncation.
+            Err(SymphoniaError::IoError(error))
+                if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                break
+            }
             Err(e) => {
                 return Err(DecodeError::new(
                     DecodeErrorKind::Decode,
@@ -422,6 +450,19 @@ fn decode_opus(
                 plane.push(block[frame * channel_count + channel]);
             }
         }
+
+        if in_block {
+            packets_left = packets_left.saturating_sub(1);
+            if packets_left == 0 {
+                apply_block_trim(path, &mut channels, block_start, blocks[block_index].padding)?;
+                block_index += 1;
+                block_start = channels.first().map_or(0, Vec::len);
+                match blocks.get(block_index) {
+                    Some(entry) => packets_left = entry.frames,
+                    None => in_block = false,
+                }
+            }
+        }
     }
 
     let total = channels.first().map_or(0, Vec::len);
@@ -435,8 +476,9 @@ fn decode_opus(
 
     // libopus returns the whole decoded block, including the encoder's pre-skip. Symphonia does
     // not turn the Opus pre-skip into a per-packet trim, so drop it from the start here, using
-    // the value from the identification header. The container's trailing padding is already
-    // surfaced per packet. Together these make the decoded length exact.
+    // the value from the identification header. For Ogg the trailing padding comes from the last
+    // packets' trim; for Matroska the block trims above already removed both ends. Together these
+    // make the decoded length exact.
     let end = total
         .checked_sub(trailing_padding)
         .filter(|end| *end >= pre_skip)
@@ -452,6 +494,40 @@ fn decode_opus(
         plane.drain(..pre_skip);
     }
     Ok(AudioBuffer::new(OPUS_SAMPLE_RATE, channels))
+}
+
+/// Remove one Matroska block's `DiscardPadding` from the decoded audio: a positive value from the
+/// end of the block, a negative value from its start. The block runs from `start` to the current
+/// end of `channels`, which is where every block so far has been appended.
+fn apply_block_trim(
+    path: &Path,
+    channels: &mut [Vec<f32>],
+    start: usize,
+    padding: i64,
+) -> Result<(), DecodeError> {
+    let end = channels.first().map_or(0, Vec::len);
+    let decoded = end.saturating_sub(start);
+    let drop = usize::try_from(padding.unsigned_abs()).unwrap_or(usize::MAX);
+    if drop == 0 {
+        return Ok(());
+    }
+    if drop > decoded {
+        return Err(DecodeError::new(
+            DecodeErrorKind::Malformed,
+            path,
+            "a DiscardPadding is larger than its decoded block",
+        ));
+    }
+    if padding > 0 {
+        for channel in channels.iter_mut() {
+            channel.truncate(end - drop);
+        }
+    } else {
+        for channel in channels.iter_mut() {
+            channel.drain(start..start + drop);
+        }
+    }
+    Ok(())
 }
 
 /// Read the pre-skip from the `OpusHead` identification header in a track's extra data.
