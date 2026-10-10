@@ -196,17 +196,18 @@ fn decode_resampled_sweep_matches_an_analytic_reference_above_80_db() {
 
     let ours = resampled.channel(0).unwrap();
     let frames = ours.len().min(reference.len());
-    // Trim only the measured transients: the resampler's start-up, and its short stop transient.
-    // The old test removed 4000 frames from the end too, which cut the top 3.7 kHz of the sweep.
+    // Trim only the measured transients: the resampler's start-up, and its stop transient, which
+    // ends by frame 64 (SNR is 95.2 dB at 48 and 105.8 dB at 64). The old test removed 4000 frames
+    // from the end, which cut the top 3.7 kHz of the sweep and left the 20 kHz band unscored.
     let skip = 4_000;
-    let end_skip = 200;
+    let end_skip = 64;
     let end = frames - end_skip;
     let snr = snr_db(&reference[skip..end], &ours[skip..end]);
     let top_time = end as f64 / f64::from(TARGET_SAMPLE_RATE);
     let scored_top = 20.0 * (20_000.0f64 / 20.0).powf(top_time / seconds);
     eprintln!("measured: analytic sweep SNR (20 Hz - {scored_top:.0} Hz) = {snr:.1} dB");
     assert!(
-        scored_top >= 19_000.0,
+        scored_top >= 19_900.0,
         "the scored sweep only reaches {scored_top:.0} Hz, short of the required 20 kHz band"
     );
     assert!(
@@ -229,6 +230,27 @@ fn decode_resampled_sweep_matches_an_analytic_reference_above_80_db() {
     let skip = frames / 16;
     let snr = snr_db(&reference[skip..frames - skip], &ours[skip..frames - skip]);
     eprintln!("measured: sweep SNR vs ffmpeg swr (recorded, not gated) = {snr:.1} dB");
+}
+
+/// F8: a steady 20 kHz tone is the top of the audible band and is near the 48 kHz input's
+/// Nyquist. The corrected resampler must pass it to the 44.1 kHz output against the analytic
+/// reference, which puts the gate's coverage at 20 kHz rather than just below it.
+#[test]
+fn decode_resampled_20khz_tone_matches_the_analytic_reference_above_80_db() {
+    let rate = 48_000;
+    let frames = rate as usize;
+    let input = sine(rate, 20_000.0, 0.5, frames);
+    let resampled = AudioBuffer::new(rate, vec![input]).resample_to(TARGET_SAMPLE_RATE);
+    let reference = sine(TARGET_SAMPLE_RATE, 20_000.0, 0.5, TARGET_SAMPLE_RATE as usize);
+
+    let ours = resampled.channel(0).unwrap();
+    let end = ours.len().min(reference.len()) - 2_000;
+    let snr = snr_db(&reference[2_000..end], &ours[2_000..end]);
+    eprintln!("measured: resampled 20 kHz tone SNR = {snr:.1} dB");
+    assert!(
+        snr >= 80.0,
+        "the resampled 20 kHz tone scores {snr:.1} dB, below 80 dB"
+    );
 }
 
 #[test]
