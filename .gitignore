@@ -14,6 +14,9 @@ target/
 *.bin
 tools/export/.cache/
 
+# Generated audio fixtures (built by tools/fixtures/make_fixtures.py)
+crates/melomae-core/tests/fixtures/
+
 # Python and uv
 .venv/
 __pycache__/
