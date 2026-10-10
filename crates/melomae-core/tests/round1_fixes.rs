@@ -151,3 +151,42 @@ fn f5_a_truncated_webm_is_not_a_clean_eof() {
         "a WebM cut inside a cluster must return an error"
     );
 }
+
+/// F7: a valid six-channel Opus file must keep all six channels. Each source channel carries a
+/// distinct tone, and every oracle channel must match exactly one decoded channel, so no channel
+/// was dropped, duplicated, or down-mixed. The decoder emits channels in the `OpusHead` mapping
+/// order, which need not equal ffmpeg's output order, so the match is a permutation.
+#[test]
+fn f7_multichannel_opus_keeps_every_channel() {
+    let fixtures = Fixtures::build();
+    let source = fixtures.multichannel_opus();
+    let decoded = decode_file_native(&source).expect("decode the six-channel Opus");
+
+    assert_eq!(decoded.sample_rate(), 48_000, "Opus decodes at 48 kHz");
+    assert_eq!(decoded.channel_count(), 6, "the decoder must keep six channels");
+
+    let reference = fixtures.reference_for(&source, 48_000, 6, Some("libopus"));
+    let reference = common::planar_from_interleaved(&reference, 6);
+    assert_eq!(
+        decoded.frames(),
+        reference[0].len(),
+        "decoded frames vs the libopus oracle"
+    );
+
+    let mut matched = [false; 6];
+    for (oracle_channel, expected) in reference.iter().enumerate() {
+        let (index, diff) = decoded
+            .channels()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !matched[*index])
+            .map(|(index, plane)| (index, common::max_abs_diff(plane, expected)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .expect("a free decoded channel");
+        assert!(
+            diff <= 1.0e-4,
+            "oracle channel {oracle_channel} has no matching decoded channel (best {index}, diff {diff})"
+        );
+        matched[index] = true;
+    }
+}

@@ -172,6 +172,36 @@ impl Fixtures {
         target
     }
 
+    /// The tones of the six-channel fixture, one per channel, in the source WAV's channel order.
+    /// Six well-separated tones let the decoder's output channels be matched to the oracle's.
+    pub const MULTICHANNEL_TONES: [f64; 6] = [220.0, 330.0, 440.0, 550.0, 660.0, 770.0];
+
+    /// Encode a six-channel WAV with a distinct tone per channel into an Opus file. The WAV has no
+    /// channel mask, so ffmpeg reads its six channels as 5.1 and libopus writes a mapping family 1
+    /// stream with four streams, two of them coupled.
+    pub fn multichannel_opus(&self) -> PathBuf {
+        let rate = 48_000;
+        let frames = rate as usize;
+        let planes: Vec<Vec<f32>> = Self::MULTICHANNEL_TONES
+            .iter()
+            .map(|frequency| sine(rate, *frequency, 0.5, frames))
+            .collect();
+        let wav = self.dir.join("multichannel.wav");
+        write_wav_f32(&wav, rate, &planes);
+
+        let target = self.dir.join("multichannel.opus");
+        run(&[
+            "-i",
+            &wav.display().to_string(),
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "256k",
+            &target.display().to_string(),
+        ]);
+        target
+    }
+
     /// A WebM written with the live muxer option, so its clusters have unknown size.
     pub fn live_webm(&self, source: &Path) -> PathBuf {
         let target = self.dir.join("live.webm");
