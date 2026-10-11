@@ -472,24 +472,63 @@ impl<M: Model> RestoreBackend for ChunkedInference<M> {
     }
 }
 
+/// The one-time ONNX Runtime state of this process.
+enum RuntimeState {
+    /// No load has been attempted.
+    NotTried,
+    /// The runtime loaded from this resolved library path.
+    Loaded(PathBuf),
+    /// The runtime failed to load from this resolved path, with the error text.
+    Failed {
+        /// The resolved path that failed.
+        path: PathBuf,
+        /// The error text ONNX Runtime reported.
+        message: String,
+    },
+}
+
 /// Initialize the ONNX Runtime once per process from an explicit library path.
 ///
 /// The engine loads ONNX Runtime at run time, so it never links the runtime. The
 /// caller gives the shared library: `onnxruntime.dll` on Windows, and
-/// `libonnxruntime.so` on Linux. This must run before any other engine call. A
-/// later call in the same process is a no-op.
+/// `libonnxruntime.so` on Linux. Call this before any other engine call.
+///
+/// The runtime loads once per process. The function resolves the library to a
+/// canonical path and records it. It never unloads or replaces a loaded runtime.
+/// A later call with the same resolved path returns `Ok`. A later call with a
+/// different path, or with a path that does not exist, returns
+/// [`InferenceError::Runtime`] and names the loaded path and the requested path.
 ///
 /// A path that is not a file returns [`InferenceError::Runtime`] before ONNX
-/// Runtime is touched. A library that fails to load also returns a typed error.
-/// ONNX Runtime 2.0.0-rc.13 marks its dylib slot as used even when a load fails,
-/// so a process must not try a second, different library after a failure.
+/// Runtime is touched, so the caller can correct it. After ONNX Runtime itself
+/// fails, the failure is remembered. Every later call returns the same
+/// [`InferenceError::Runtime`] and never touches ONNX Runtime again. ONNX Runtime
+/// 2.0.0-rc.13 marks its dylib slot as used even when a load fails, so a second
+/// load reads uninitialized data and aborts the process. Restart the process to
+/// retry the load after a failure.
 pub fn init_runtime(library: &Path) -> Result<(), InferenceError> {
-    static INITIALIZED: Mutex<Option<PathBuf>> = Mutex::new(None);
-    let mut initialized = INITIALIZED
+    static STATE: Mutex<RuntimeState> = Mutex::new(RuntimeState::NotTried);
+    let mut state = STATE
         .lock()
         .map_err(|_| InferenceError::Runtime("the runtime lock was poisoned".to_string()))?;
-    if initialized.is_some() {
-        return Ok(());
+    match &*state {
+        RuntimeState::Loaded(loaded) => {
+            if std::fs::canonicalize(library).ok().as_deref() == Some(loaded.as_path()) {
+                return Ok(());
+            }
+            return Err(InferenceError::Runtime(format!(
+                "ONNX Runtime is already loaded from `{}`, so the requested library `{}` is not used",
+                loaded.display(),
+                library.display()
+            )));
+        }
+        RuntimeState::Failed { path, message } => {
+            return Err(InferenceError::Runtime(format!(
+                "ONNX Runtime failed to load from `{}`: {message}",
+                path.display()
+            )));
+        }
+        RuntimeState::NotTried => {}
     }
     if !library.is_file() {
         return Err(InferenceError::Runtime(format!(
@@ -497,11 +536,31 @@ pub fn init_runtime(library: &Path) -> Result<(), InferenceError> {
             library.display()
         )));
     }
-    ort::init_from(library)
-        .map_err(|error| InferenceError::Runtime(error.to_string()))?
-        .commit();
-    *initialized = Some(library.to_path_buf());
-    Ok(())
+    let resolved = std::fs::canonicalize(library).map_err(|error| {
+        InferenceError::Runtime(format!(
+            "could not resolve the ONNX Runtime library `{}`: {error}",
+            library.display()
+        ))
+    })?;
+    match ort::init_from(&resolved) {
+        Ok(builder) => {
+            builder.commit();
+            *state = RuntimeState::Loaded(resolved);
+            Ok(())
+        }
+        Err(error) => {
+            let message = error.to_string();
+            let failure = InferenceError::Runtime(format!(
+                "ONNX Runtime failed to load from `{}`: {message}",
+                resolved.display()
+            ));
+            *state = RuntimeState::Failed {
+                path: resolved,
+                message,
+            };
+            Err(failure)
+        }
+    }
 }
 
 /// Load the Apollo ONNX model from a caller-given runtime library and model path.
