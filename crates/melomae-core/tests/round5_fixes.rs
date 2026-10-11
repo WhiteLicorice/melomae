@@ -26,7 +26,7 @@ fn large_id3_case(fixtures: &Fixtures, label: &str, padding: usize) {
         .fold(0usize, |value, byte| (value << 7) | usize::from(*byte));
     let size = old_size + padding;
     let mut tagged = bytes[..10 + old_size].to_vec();
-    tagged.extend(std::iter::repeat(0u8).take(padding));
+    tagged.extend(std::iter::repeat_n(0u8, padding));
     tagged.extend_from_slice(&bytes[10 + old_size..]);
     for index in 0..4 {
         tagged[6 + index] = ((size >> ((3 - index) * 7)) & 127) as u8;
