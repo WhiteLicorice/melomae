@@ -322,12 +322,24 @@ fn decode_format(
     } else {
         None
     };
-    // The container's declared playable frame count, in samples. Symphonia sets `num_frames` only
-    // when the container states it (an MP3 Xing/Info/VBRI header, a WAV or AIFF data size, a FLAC
-    // STREAMINFO total, an Ogg granule, an MP4 track timespan). It is in timebase units, so it is a
-    // sample count only when the timebase is one tick per sample. `None` means no count is
-    // declared, and the decoder keeps today's behavior.
-    let declared_frames = if sample_time_base { track_frames } else { None };
+    // The container's frame count, in samples, when its timebase is one tick per sample. Symphonia
+    // fills `num_frames` from the container, but it is not always a declaration: for MP3 with no
+    // Xing, Info, or VBRI header it estimates the count from the bitrate and the physical length, so
+    // an estimate is not a completeness proof. Every other container here states an exact count (a
+    // WAV or AIFF data size, a FLAC STREAMINFO total, an Ogg granule, an MP4 track timespan), so
+    // only MP3 needs its first frame read. `None` means no count is declared, and the decoder keeps
+    // today's behavior.
+    let declared_frames = if !sample_time_base {
+        None
+    } else if format.format_info().short_name == "mp3" {
+        if mp3_declares_frame_count(path) {
+            track_frames
+        } else {
+            None
+        }
+    } else {
+        track_frames
+    };
     decode_with_symphonia(
         path,
         &mut *format,
@@ -343,6 +355,97 @@ fn decode_format(
 /// (WAV, FLAC, MP3, Vorbis, AIFF) must not even open the edit-list reader.
 fn needs_edit_list(short_name: &str) -> bool {
     short_name == "isomp4"
+}
+
+/// Whether an MP3 stream declares its frame count with a Xing, Info, or VBRI header.
+///
+/// Symphonia estimates `num_frames` from the bitrate and the physical length when no such header
+/// exists, so an estimate is not a declared count. Only the first few KiB are read, to locate the
+/// first MPEG frame and its tag.
+fn mp3_declares_frame_count(path: &Path) -> bool {
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    let mut buffer = [0u8; 8 * 1024];
+    let Ok(read) = file.read(&mut buffer) else {
+        return false;
+    };
+    let data = &buffer[..read];
+    let Some(start) = mp3_frame_start(data) else {
+        return false;
+    };
+    let Some(side_info) = mp3_side_info_len(&data[start..]) else {
+        return false;
+    };
+    // The VBRI header sits a fixed 32 bytes after the frame header; the Xing/Info tag sits after
+    // the side information, whose length depends on the version and the channel mode.
+    if let Some(tag) = data.get(start + 4 + 32..start + 4 + 36) {
+        if tag == b"VBRI" {
+            return true;
+        }
+    }
+    let tag = start + 4 + side_info;
+    match data.get(tag..tag + 4) {
+        Some(kind) if kind == b"Xing" || kind == b"Info" => {
+            // The base Xing/Info tag states a frame count only when bit 0 of its flags is set.
+            read_u32_be(data, tag + 4).map_or(false, |flags| flags & 0x1 != 0)
+        }
+        _ => false,
+    }
+}
+
+/// The first MPEG audio frame offset, skipping an ID3v2 tag when one is present.
+fn mp3_frame_start(data: &[u8]) -> Option<usize> {
+    let mut offset = 0usize;
+    if data.len() >= 10 && &data[..3] == b"ID3" {
+        let size = data[6..10].iter().fold(0usize, |value, byte| {
+            (value << 7) | usize::from(byte & 0x7F)
+        });
+        let footer = data[5] & 0x10 != 0;
+        offset = 10 + size + if footer { 10 } else { 0 };
+    }
+    while offset + 4 <= data.len() {
+        if is_mpeg_frame_header(&data[offset..offset + 4]) {
+            return Some(offset);
+        }
+        offset += 1;
+    }
+    None
+}
+
+/// The side-information length of a frame, from its four-byte header, or `None` when the header is
+/// not a valid MPEG audio frame.
+fn mp3_side_info_len(header: &[u8]) -> Option<usize> {
+    if header.len() < 4 || !is_mpeg_frame_header(&header[..4]) {
+        return None;
+    }
+    let mpeg1 = (header[1] >> 3) & 0x3 == 0b11;
+    let mono = (header[3] >> 6) & 0x3 == 0b11;
+    Some(match (mpeg1, mono) {
+        (true, false) => 32,
+        (true, true) => 17,
+        (false, false) => 17,
+        (false, true) => 9,
+    })
+}
+
+/// Whether four bytes look like an MPEG audio frame header.
+fn is_mpeg_frame_header(header: &[u8]) -> bool {
+    if header.len() < 4 || header[0] != 0xFF || header[1] & 0xE0 != 0xE0 {
+        return false;
+    }
+    let version = (header[1] >> 3) & 0x3;
+    let layer = (header[1] >> 1) & 0x3;
+    let bitrate = (header[2] >> 4) & 0xF;
+    let sample_rate = (header[2] >> 2) & 0x3;
+    version != 0b01 && layer != 0b00 && bitrate != 0x0 && bitrate != 0xF && sample_rate != 0x3
+}
+
+/// A big-endian `u32` at `offset`, when in range.
+fn read_u32_be(data: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_be_bytes(
+        data.get(offset..offset + 4)?.try_into().unwrap(),
+    ))
 }
 
 fn decode_with_symphonia(
@@ -430,9 +533,11 @@ fn decode_with_symphonia(
     // length, so the end is exactly `start + duration`. Formats without an edit list fall back to
     // the track's declared duration, and otherwise keep every decoded frame.
     let decoded_frames = channels[0].len();
-    // A container that declares a frame count must deliver at least that many frames before any
-    // gapless trim. Fewer means the file lost media: a truncated MPEG stream that still ends on a
-    // frame boundary, for example. Do not pad or clamp; report it.
+    // A container that declares a frame count must deliver at least that many frames. Fewer means
+    // the file lost media: a truncated stream that still ends on a frame boundary, for example. The
+    // count and the decoded total are compared in the same terms, because the MP3 decoder trims its
+    // packet delay and padding itself and the declared count excludes those frames. Do not pad or
+    // clamp; report it.
     if let Some(declared) = declared_frames.and_then(|declared| usize::try_from(declared).ok()) {
         if decoded_frames < declared {
             return Err(DecodeError::new(
@@ -440,7 +545,7 @@ fn decode_with_symphonia(
                 path,
                 format!(
                     "the container declares {declared} frames but the decoder produced \
-                     {decoded_frames} before any gapless trim"
+                     {decoded_frames}"
                 ),
             ));
         }
