@@ -8,10 +8,11 @@ license.workspace = true
 flacenc = "0.5.1"
 opusic-c = "1.6.1"
 ort = "=2.0.0-rc.13"
+realfft = "3.5.0"
 rubato = "5.0.1"
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
 symphonia = { version = "0.6.1", features = ["all"] }
 
 [dev-dependencies]
 cargo_metadata = "0.23.1"
-sha2 = "0.10"
+sha2 = "0.10.9"
