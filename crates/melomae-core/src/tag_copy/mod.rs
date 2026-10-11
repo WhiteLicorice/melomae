@@ -132,10 +132,12 @@ fn target_tag_type(format: OutputFormat) -> TagType {
 }
 
 /// A field whose Picard name differs from lofty's generic mapping. The portable name is the
-/// Vorbis key. `id3` is the ID3v2 name, either a frame id or, when `id3_user_text` is set, a
-/// `TXXX` description. `mp4` is the MP4 freeform atom name, without the
-/// `----:com.apple.iTunes:` prefix.
+/// Vorbis key. `key` is the lofty [`ItemKey`] the row overrides when the field arrives as a
+/// standard item, so the reader and writer use the Picard name instead of lofty's. `id3` is the
+/// ID3v2 name, either a frame id or, when `id3_user_text` is set, a `TXXX` description. `mp4` is
+/// the MP4 freeform atom name, without the `----:com.apple.iTunes:` prefix.
 struct PicardMapping {
+    key: Option<ItemKey>,
     portable: &'static str,
     id3: Option<&'static str>,
     id3_user_text: bool,
@@ -147,32 +149,44 @@ struct PicardMapping {
 /// `LABEL`: Picard maps ID3 `TPUB` to Vorbis `LABEL`, but lofty reads `TPUB` as `Publisher` and
 /// writes Vorbis `PUBLISHER`. `SCRIPT` and `RELEASESTATUS` have no ID3 `ItemKey` in lofty, so the
 /// generic layer reports or mis-names them. `ORIGINALYEAR` shares lofty's `OriginalReleaseDate`
-/// with `ORIGINALDATE`, and Picard defines no ID3 frame for it.
+/// with `ORIGINALDATE`, and Picard defines no ID3 frame for it. `ENCODERSETTINGS`: Picard's Vorbis
+/// key is `ENCODERSETTINGS`, but lofty writes `ENCODING` for the same `EncoderSettings` item.
 ///
 /// Source: <https://picard-docs.musicbrainz.org/en/latest/appendices/tag_mapping.html>, checked
 /// 2026-10-11.
 const PICARD_MAPPINGS: &[PicardMapping] = &[
     PicardMapping {
+        key: None,
         portable: "LABEL",
         id3: Some("TPUB"),
         id3_user_text: false,
         mp4: Some("LABEL"),
     },
     PicardMapping {
+        key: None,
         portable: "SCRIPT",
         id3: Some("SCRIPT"),
         id3_user_text: true,
         mp4: Some("SCRIPT"),
     },
     PicardMapping {
+        key: None,
         portable: "RELEASESTATUS",
         id3: Some("MusicBrainz Album Status"),
         id3_user_text: true,
         mp4: Some("MusicBrainz Album Status"),
     },
     PicardMapping {
+        key: None,
         portable: "ORIGINALYEAR",
         id3: None,
+        id3_user_text: false,
+        mp4: None,
+    },
+    PicardMapping {
+        key: Some(ItemKey::EncoderSettings),
+        portable: "ENCODERSETTINGS",
+        id3: Some("TSSE"),
         id3_user_text: false,
         mp4: None,
     },
@@ -181,6 +195,11 @@ const PICARD_MAPPINGS: &[PicardMapping] = &[
 /// The mapping for a portable (Vorbis) name.
 fn picard_mapping(portable: &str) -> Option<&'static PicardMapping> {
     PICARD_MAPPINGS.iter().find(|m| m.portable == portable)
+}
+
+/// The mapping that overrides a standard [`ItemKey`], so its Picard name wins over lofty's.
+fn picard_mapping_for_key(key: ItemKey) -> Option<&'static PicardMapping> {
+    PICARD_MAPPINGS.iter().find(|m| m.key == Some(key))
 }
 
 /// The mapping for an ID3 `TXXX` description. The comparison ignores case, spaces, and
@@ -220,7 +239,13 @@ fn mapped_native(mapping: &PicardMapping, tag_type: TagType) -> Option<&'static 
 }
 
 /// The portable name of a standard field: its Vorbis key where one exists, else its lofty name.
+///
+/// A Picard override wins over lofty's own key, so `EncoderSettings` is named `ENCODERSETTINGS`,
+/// not lofty's `ENCODING`.
 fn standard_name(key: ItemKey) -> String {
+    if let Some(mapping) = picard_mapping_for_key(key) {
+        return mapping.portable.to_string();
+    }
     key.map_key(TagType::VorbisComments)
         .map(str::to_string)
         .unwrap_or_else(|| format!("{key:?}"))
@@ -586,13 +611,24 @@ fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
 /// writes its own vendor, so the field must be a comment to survive.
 fn write_vorbis(path: &Path, tags: &TagSet) -> Result<(), TagError> {
     let mut tag = Tag::new(TagType::VorbisComments);
+    let mut mapped: Vec<(String, String)> = Vec::new();
     for item in &tags.standard {
         if item.key() == ItemKey::EncoderSoftware {
             continue;
         }
-        if standard_is_supported(item, TagType::VorbisComments) {
-            tag.push(item.clone());
+        if !standard_is_supported(item, TagType::VorbisComments) {
+            continue;
         }
+        // A Picard override decides the literal Vorbis key. Lofty's own conversion would name the
+        // field differently: it writes `ENCODING` for the encoder settings, where Picard uses
+        // `ENCODERSETTINGS`. A mapped text value is written by hand so the override wins.
+        if let Some(mapping) = picard_mapping(&standard_name(item.key())) {
+            if let Some(value) = item.value().text() {
+                mapped.push((mapping.portable.to_string(), value.to_string()));
+                continue;
+            }
+        }
+        tag.push(item.clone());
     }
     for picture in &tags.pictures {
         tag.push_picture(picture.clone());
@@ -600,6 +636,9 @@ fn write_vorbis(path: &Path, tags: &TagSet) -> Result<(), TagError> {
 
     let mut comments = VorbisComments::from(tag);
     comments.set_vendor(concat!("melomae ", env!("CARGO_PKG_VERSION")).to_string());
+    for (name, value) in mapped {
+        comments.push(name, value);
+    }
     for item in &tags.standard {
         if item.key() != ItemKey::EncoderSoftware {
             continue;
