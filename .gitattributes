@@ -1,0 +1,5 @@
+# The parity inputs, the model, and the golden are the three committed large
+# files. Each pattern is exact, so no other audio or model file is tracked.
+/tools/parity/input_wav.wav filter=lfs diff=lfs merge=lfs -text
+/tools/parity/golden.wav filter=lfs diff=lfs merge=lfs -text
+/models/apollo.onnx filter=lfs diff=lfs merge=lfs -text

@@ -11,6 +11,7 @@ target/
 
 # Model artifacts
 *.onnx
+!models/apollo.onnx
 *.bin
 tools/export/.cache/
 
