@@ -1,13 +1,13 @@
 # 16 — Triage input files for restoration
 
-**Status:** TODO
+**Status:** DONE
 **Phase:** 2 — Metadata, triage, and provenance
 **Depends on:** 03, 14
 **SRS:** §4
 **Stack:** §D, §G
 **Assigned to:** Agent
-**Started:** —
-**Outcome:** —
+**Started:** 0049784, clean tree. Baseline gate at 0049784: board 53 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 98 passed, pytest 13 passed.
+**Outcome:** DONE. A new `triage` module walks files and folders, measures the spectral cutoff on the task 03 decode, assigns the SRS §4.3 verdicts, and stores rows in `triage_items`. A rescan reads only the files whose size or modification time changed and removes the rows of deleted files. Triage opens every input read-only and never writes one. The thresholds come from the calibration on `fixtures/ori_wav.wav`, committed through Git LFS: the cutoff is 80 dB below the spectrum peak, and the high-bitrate and suspect-lossless lines are both 19500 Hz. Measured verdicts: the source WAV and the lossless FLAC are `lossless` at 22050 Hz, MP3 64/128/192 are `restore` at 11289/16349/18605 Hz, MP3 320 is `low-benefit` at 20015 Hz, AAC 128/256 are `low-benefit` at 19999/22050 Hz, and the FLAC from the 128 kb/s MP3 is `suspect-lossless` at 16349 Hz. A truncated MP3 is `unreadable` with a reason. The 1,000-file scan took 8.82 s, about 113 files per second. `cargo test -p melomae-core` passes 115 tests, and clippy and fmt are clean. The gate `pnpm verify` exits 0: board 53 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 115 passed, pytest 13 passed. See the detail below.
 
 ## Goal
 
@@ -35,6 +35,8 @@ Tell the user which files can gain from restoration before any restore runs.
 
 The thresholds are inferred until this calibration runs. If the measurements contradict the verdict classes in SRS §4.3, stop and report to the owner.
 
+**Changed by the author on 2026-10-11.** `make_fixtures.py` and the conda ffmpeg are gone. The calibration source is `fixtures/ori_wav.wav`, committed through Git LFS. The fixture builders are in `crates/melomae-core/tests/setup/mod.rs`. The full-band source replaced `C:\Lab\Apollo\asserts\input_wav.wav`, which is band-limited near 4.5 kHz and cannot show a codec cutoff. `Outcome detail` records the three measured tables.
+
 ## Out of scope
 
 - The triage screen (task 24)
@@ -50,10 +52,10 @@ Run the tests. They fail because the triage module does not exist.
 
 ## Acceptance criteria
 
-- [ ] `Outcome` records the calibration table and the thresholds.
-- [ ] `Outcome` records the scan time for 1,000 generated files.
-- [ ] The new tests failed first for the expected reason.
-- [ ] `pnpm verify` passes.
+- [x] `Outcome` records the calibration table and the thresholds.
+- [x] `Outcome` records the scan time for 1,000 generated files.
+- [x] The new tests failed first for the expected reason.
+- [x] `pnpm verify` passes.
 
 ## Verify
 
@@ -61,3 +63,118 @@ Run the tests. They fail because the triage module does not exist.
 cargo test -p melomae-core triage
 pnpm verify
 ```
+
+## Outcome detail
+
+### The cutoff method
+
+Triage decodes every file with `melomae_core::decode::decode_file`, then measures the spectral cutoff
+of the decoded 44.1 kHz audio. The method is Welch's method. Every channel is cut into Hann-windowed
+frames of 8192 samples that overlap by half. The magnitude-squared spectrum of each frame is summed,
+and the average is taken. The average is smoothed over 4 bins. The peak bin is the reference. The
+cutoff is the highest frequency that is the top of a run of bins within 80 dB of the peak. The run is
+at least 200 Hz wide, so one spike does not count. The code and the comments are in
+`crates/melomae-core/src/triage/cutoff.rs`.
+
+### Table 1. The first source, rejected
+
+`C:\Lab\Apollo\asserts\input_wav.wav` is band-limited near 4.5 kHz. An independent numpy spectrum
+reads -34 dB at 4 kHz, -113 dB at 5 kHz, and a floor near -125 dB above. The source has no high
+frequency for a codec to remove. Cutoff in Hz:
+
+| Fixture | 60 dB | 80 dB | 100 dB | 120 dB |
+|---|---|---|---|---|
+| MP3 64 | 4339 | 4457 | 4732 | 9921 |
+| MP3 128 | 4344 | 4474 | 4737 | 15638 |
+| MP3 192 | 4344 | 4479 | 4743 | 18244 |
+| MP3 320 | 4344 | 4479 | 4743 | 19762 |
+| AAC 128 | 4344 | 4463 | 7865 | 19267 |
+| AAC 256 | 4344 | 4479 | 6158 | 20650 |
+| FLAC from MP3 128 | 4344 | 4474 | 4737 | 15638 |
+| FLAC lossless | 4344 | 4479 | 4743 | 9921 |
+
+No threshold separates the classes. The lossless FLAC reads like a 64 kb/s MP3. The author approved a
+full-band source on this evidence.
+
+### Table 2. The synthetic source, rejected
+
+A pink-noise, tone, and sweep source built in test setup. The MP3 classes separate. The ffmpeg native
+AAC 128 measures above MP3 320 at every threshold. Cutoff in Hz:
+
+| Fixture | 40 dB | 60 dB | 80 dB | 100 dB | 120 dB |
+|---|---|---|---|---|---|
+| source WAV | 22050 | 22050 | 22050 | 22050 | 22050 |
+| MP3 64 | 11030 | 11197 | 11321 | 11558 | 11908 |
+| MP3 128 | 16548 | 16694 | 16823 | 17027 | 17377 |
+| MP3 192 | 18621 | 18745 | 18901 | 19138 | 19482 |
+| MP3 320 | 20020 | 20150 | 20274 | 20473 | 20850 |
+| AAC 128 | 19983 | 20031 | 22050 | 22050 | 22050 |
+| AAC 256 | 22050 | 22050 | 22050 | 22050 | 22050 |
+| FLAC from MP3 128 | 16548 | 16694 | 16823 | 17027 | 17377 |
+| FLAC lossless | 22050 | 22050 | 22050 | 22050 | 22050 |
+
+### Table 3. `fixtures/ori_wav.wav`, accepted
+
+Real full-band audio, committed through Git LFS. A threshold below 80 dB tracks the source rolloff,
+and no codec shows. At 80 dB and above, each lossy low-pass reads its own corner and the lossless
+control reaches Nyquist. Cutoff in Hz:
+
+| Fixture | 40 dB | 60 dB | 80 dB | 100 dB | 120 dB | 140 dB |
+|---|---|---|---|---|---|---|
+| source WAV | 11375 | 16414 | 22050 | 22050 | 22050 | 22050 |
+| MP3 64 | 10621 | 11160 | 11289 | 11472 | 11919 | 22050 |
+| MP3 128 | 11230 | 15988 | 16349 | 16688 | 16839 | 22050 |
+| MP3 192 | 11262 | 16015 | 18605 | 18782 | 18933 | 22050 |
+| MP3 320 | 11262 | 16349 | 20015 | 20166 | 20284 | 22050 |
+| AAC 128 | 11181 | 16430 | 19999 | 21878 | 22050 | 22050 |
+| AAC 256 | 11262 | 16414 | 22050 | 22050 | 22050 | 22050 |
+| FLAC from MP3 128 | 11230 | 15988 | 16349 | 16688 | 16839 | 22050 |
+| FLAC lossless | 11375 | 16414 | 22050 | 22050 | 22050 | 22050 |
+
+### The thresholds
+
+`DROP_DB = 80` in `cutoff.rs`. `HIGH_BITRATE_CUTOFF_HZ = 19500` and `SUSPECT_LOSSLESS_CUTOFF_HZ =
+19500` in `triage/mod.rs`. The high-bitrate line sits between MP3 192 (18605 Hz) and the high-cutoff
+lossy files (MP3 320 at 20015 Hz). The suspect-lossless line sits between the FLAC from the MP3 128
+(16349 Hz) and the full-band source (22050 Hz). One threshold applies to every file. It is not tuned
+to one file.
+
+### The AAC cause (inferred)
+
+The pinned ffmpeg has only the native `aac` encoder (`aac` and `aac_mf`, no libfdk). The native
+encoder keeps content near 20 kHz at 128 kb/s, so AAC 128 measures 19999 Hz and AAC 256 measures
+22050 Hz, both at or above the high-bitrate line. The author ruled that the verdict is advice and the
+user can restore any file (SRS §4.5), so both keep `low-benefit`. Inferred, not confirmed: a
+band-limiting encoder such as libfdk would put a 128 kb/s AAC near 16 kHz and give `restore`.
+
+### The Apollo training claim
+
+Confirmed. `C:\Lab\Apollo\README.md` line 64 and `C:\Lab\Apollo\Apollo\README.md` line 68 record:
+"We simulated various bitrate scenarios by applying MP3 codecs with bitrates of [24000, 32000, 48000,
+64000, 96000, 128000]." `look2hear/datas/musdb_moisesdb_datamodule.py` line 35 uses
+`random.choice([24000, 32000, 48000, 64000, 96000, 128000])`, and line 37 sets `format: mp3`.
+`configs/apollo.yaml` lines 11 to 14 set `codec_type: mp3`. The range is 24 to 128 kb/s. The paper is
+Li, Kai and Luo, Yi, "Apollo: Band-sequence Modeling for High-Quality Music Restoration in
+Compressed Audio", ICASSP 2025.
+
+### The fixtures and the tests
+
+`fixtures/ori_wav.wav` is 6 s, 44.1 kHz, stereo, 32-bit float. It is stored through Git LFS, with
+`fixtures/ori_wav.sha256` and one `.gitattributes` pattern. `fixtures/README.md` records the source
+and the licence. The calibration test fails with `Run: git lfs pull` when the file is missing or is a
+pointer, and it checks the SHA-256. CI pulls the LFS objects behind an `actions/cache@v4` keyed on
+the OS and the `git lfs ls-files --long` output.
+
+The new tests: 11 unit tests in `src/triage`, the calibration test and the truncated-file test in
+`tests/triage_calibration.rs`, and the scan test, the rescan test, the removal test, the
+never-writes test, the `e2e_triage_scan_a_folder_into_the_store` test, and the 1,000-file scan test
+in `tests/triage_scan.rs`.
+
+### The files
+
+`crates/melomae-core/src/triage/mod.rs` holds the verdicts, the scan, and the store writes.
+`crates/melomae-core/src/triage/cutoff.rs` holds the measurement.
+`crates/melomae-core/src/store/mod.rs` gains `triage_items` and `delete_triage_item`.
+`crates/melomae-core/tests/setup/mod.rs` gains the calibration builders and the LFS guard.
+`Cargo.toml` gains `realfft` and the `sha2` dev-dependency. `.github/workflows/verify.yml` gains the
+LFS cache steps.
