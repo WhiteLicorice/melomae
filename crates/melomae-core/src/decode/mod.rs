@@ -11,6 +11,7 @@ mod resample;
 
 use std::fmt;
 use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use opusic_c::multistream::{Config as OpusMsConfig, Decoder as OpusMsDecoder};
@@ -192,16 +193,64 @@ pub fn decode_file_native(path: &Path) -> Result<AudioBuffer, DecodeError> {
         hint.with_extension(extension);
     }
 
-    let format = symphonia::default::get_probe()
-        .probe(
-            &hint,
-            stream,
-            FormatOptions::default(),
-            MetadataOptions::default(),
-        )
-        .map_err(|e| DecodeError::new(DecodeErrorKind::UnsupportedFormat, path, e.to_string()))?;
+    let format = match symphonia::default::get_probe().probe(
+        &hint,
+        stream,
+        FormatOptions::default(),
+        MetadataOptions::default(),
+    ) {
+        Ok(format) => format,
+        Err(error) => return Err(probe_failure(path, error)),
+    };
 
     decode_format(path, format)
+}
+
+/// The error for a failed probe. An Ogg Opus stream whose header the container probe rejects still
+/// names itself when its mapping family is out of scope: read the `OpusHead` from the first Ogg
+/// page directly, so a family-255 file reports the family rather than the dependency's rejection.
+fn probe_failure(path: &Path, error: SymphoniaError) -> DecodeError {
+    let named = read_ogg_opus_head(path)
+        .and_then(|head| parse_opus_head(path, Some(&head)).err())
+        .filter(|header| header.kind() == DecodeErrorKind::UnsupportedFormat);
+    match named {
+        Some(header) => DecodeError::new(
+            DecodeErrorKind::UnsupportedFormat,
+            path,
+            header.reason().to_string(),
+        ),
+        None => DecodeError::new(DecodeErrorKind::UnsupportedFormat, path, error.to_string()),
+    }
+}
+
+/// The Opus identification packet from the first Ogg page, when the file starts with one.
+///
+/// The `OpusHead` is the first packet of the first page, so the page header and its segment table
+/// locate it. Only the first page is read, into a fixed-size buffer.
+fn read_ogg_opus_head(path: &Path) -> Option<Vec<u8>> {
+    let mut file = File::open(path).ok()?;
+    let mut buffer = [0u8; 64 * 1024];
+    let read = file.read(&mut buffer).ok()?;
+    let data = &buffer[..read];
+    if data.len() < 27 || &data[..4] != b"OggS" {
+        return None;
+    }
+    let table_end = 27usize.checked_add(usize::from(data[26]))?;
+    if data.len() < table_end {
+        return None;
+    }
+    let mut packet_len = 0usize;
+    for &lacing in &data[27..table_end] {
+        packet_len = packet_len.checked_add(usize::from(lacing))?;
+        if lacing < 255 {
+            break;
+        }
+    }
+    let packet_end = table_end.checked_add(packet_len)?;
+    if packet_len < 8 || data.len() < packet_end {
+        return None;
+    }
+    Some(data[table_end..packet_end].to_vec())
 }
 
 fn decode_format(
@@ -628,7 +677,7 @@ fn parse_opus_head(path: &Path, extra_data: Option<&[u8]>) -> Result<OpusHead, D
             }
             (1, u8::from(channels == 2), (0..channels as u8).collect())
         }
-        1 | 255 => {
+        1 => {
             let table_end = 21usize
                 .checked_add(channels)
                 .ok_or_else(|| malformed("the Opus header channel count is out of range"))?;
@@ -661,6 +710,15 @@ fn parse_opus_head(path: &Path, extra_data: Option<&[u8]>) -> Result<OpusHead, D
                 ));
             }
             (stream_count, coupled_count, mapping)
+        }
+        // Ruling for task 03: mapping family 255 is out of scope in every container. It must name
+        // itself and its channel count, never the dependency's container-level rejection.
+        255 => {
+            return Err(DecodeError::new(
+                DecodeErrorKind::UnsupportedFormat,
+                path,
+                format!("the Opus mapping family 255 with {channels} channels is not supported"),
+            ))
         }
         other => {
             return Err(DecodeError::new(
@@ -726,9 +784,9 @@ fn build_opus_backend(path: &Path, head: &OpusHead) -> Result<OpusBackend, Decod
         return Ok(OpusBackend::Single(decoder));
     }
 
-    // Mapping families 1 and 255 use the multistream decoder, whose channel count is a
-    // compile-time constant of at most eight. A legal header outside that scope is unsupported, not
-    // malformed.
+    // Mapping family 1 uses the multistream decoder, whose channel count is a compile-time constant
+    // of at most eight. A legal header outside that scope is unsupported, not malformed. Mapping
+    // family 255 is rejected at the header, before this is reached.
     let total = usize::from(head.stream_count) + usize::from(head.coupled_count);
     if head.channels > 8 || total > head.channels {
         return Err(DecodeError::new(
@@ -736,8 +794,8 @@ fn build_opus_backend(path: &Path, head: &OpusHead) -> Result<OpusBackend, Decod
             path,
             format!(
                 "the Opus mapping family {} with {} channels and {} + {} streams is outside the \
-                 supported range: families 0 and 1, and family 255 up to eight channels whose \
-                 stream and coupled counts sum to no more than the channel count",
+                 supported range: family 0 unpacked mono and stereo, and family 1 up to eight \
+                 channels whose stream and coupled counts sum to no more than the channel count",
                 head.mapping_family, head.channels, head.stream_count, head.coupled_count
             ),
         ));
@@ -939,28 +997,18 @@ mod tests {
         assert!(reason.contains("2") && reason.contains("1"), "{reason}");
     }
 
-    /// B3: a legal nine-channel family 255 header parses, but out-of-scope counts return a typed
-    /// `UnsupportedFormat` that names the family, the channel count, and the stream counts.
+    /// D4: mapping family 255 is out of scope in every container, so the header parse itself
+    /// returns a typed `UnsupportedFormat` that names the family and the channel count. This
+    /// replaces the round-2 tests that expected family 255 within eight channels to build.
     #[test]
-    fn family_255_above_the_backend_scope_is_unsupported() {
-        let head = opus_head(9, 255, 9, 0, &[0, 1, 2, 3, 4, 5, 6, 7, 8]);
-        let parsed = parse_opus_head(Path::new("nine.opus"), Some(&head)).expect("a legal header");
-        let error = match build_opus_backend(Path::new("nine.opus"), &parsed) {
-            Ok(_) => panic!("nine family-255 channels are out of scope"),
-            Err(error) => error,
-        };
+    fn family_255_is_unsupported_and_names_itself() {
+        let head = opus_head(6, 255, 4, 2, &[0, 1, 2, 3, 4, 5]);
+        let error = parse_opus_head(Path::new("f255.opus"), Some(&head))
+            .expect_err("family 255 is out of scope");
         assert_eq!(error.kind(), DecodeErrorKind::UnsupportedFormat);
         let reason = error.reason().to_string();
-        assert!(reason.contains("family 255"), "{reason}");
-        assert!(reason.contains("9 channels"), "{reason}");
-    }
-
-    /// B3: family 255 within the backend's scope (six channels, four streams, two coupled) builds.
-    #[test]
-    fn family_255_within_the_backend_scope_builds() {
-        let head = opus_head(6, 255, 4, 2, &[0, 1, 2, 3, 4, 5]);
-        let parsed = parse_opus_head(Path::new("f255.opus"), Some(&head)).expect("a legal header");
-        assert!(build_opus_backend(Path::new("f255.opus"), &parsed).is_ok());
+        assert!(reason.contains("mapping family 255"), "{reason}");
+        assert!(reason.contains("6 channels"), "{reason}");
     }
 
     /// B3: a version byte whose upper four bits are not zero is incompatible and malformed.

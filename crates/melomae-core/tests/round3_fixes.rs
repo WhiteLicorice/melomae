@@ -41,3 +41,21 @@ fn malformed_edit_list_does_not_fall_back() {
         }
     }
 }
+
+/// D4: a mapping-family 255 Ogg Opus file is out of scope for this task. It must return
+/// `UnsupportedFormat` whose reason names the family and the channel count, not the probe's
+/// rejection of the header.
+#[test]
+fn family_255_opus_names_itself_unsupported() {
+    let fixtures = Fixtures::build();
+    let source = fixtures.multichannel_opus();
+    let file = fixtures.dir().join("family255.opus");
+    setup::rewrite_opus_head(&source, &file, None, Some(255));
+
+    let error = decode_file_native(&file).expect_err("family 255 is out of scope");
+    assert_eq!(error.kind(), DecodeErrorKind::UnsupportedFormat);
+    let reason = error.reason().to_string();
+    eprintln!("family 255: {reason}");
+    assert!(reason.contains("mapping family 255"), "{reason}");
+    assert!(reason.contains("6 channels"), "{reason}");
+}
