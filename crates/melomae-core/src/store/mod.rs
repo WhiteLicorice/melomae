@@ -742,7 +742,7 @@ mod tests {
         let db = TempDb::new("migrate");
         let store = Store::open(db.path()).unwrap();
 
-        assert_eq!(store.schema_version().unwrap(), 1);
+        assert_eq!(store.schema_version().unwrap(), 2);
 
         let triage = columns(&store, "triage_items");
         for column in [
@@ -782,6 +782,52 @@ mod tests {
                 "history is missing {column}"
             );
         }
+    }
+
+    #[test]
+    fn migration_2_clears_triage_rows_and_keeps_the_other_tables() {
+        let db = TempDb::new("migrate2");
+        {
+            let connection = Connection::open(db.path()).unwrap();
+            connection.execute_batch(MIGRATION_1).unwrap();
+            connection
+                .execute_batch("PRAGMA user_version = 1;")
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO triage_items
+                         (path, size_bytes, modified_at, verdict, scanned_at)
+                     VALUES ('/music/a.mp3', 4200000, 1700000000, 'restore', 1700000000)",
+                    [],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO settings (key, value) VALUES ('output_dir', '/music/out')",
+                    [],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO jobs (input_path, restore_enabled, state, created_at)
+                     VALUES ('/music/a.mp3', 1, 'queued', 1700000000)",
+                    [],
+                )
+                .unwrap();
+        }
+
+        let store = Store::open(db.path()).unwrap();
+
+        assert_eq!(store.schema_version().unwrap(), 2);
+        assert!(
+            store.triage_items().unwrap().is_empty(),
+            "migration 2 clears every cached triage row"
+        );
+        assert_eq!(
+            store.setting("output_dir").unwrap().as_deref(),
+            Some("/music/out")
+        );
+        assert_eq!(store.job(1).unwrap().input_path, "/music/a.mp3");
     }
 
     #[test]
