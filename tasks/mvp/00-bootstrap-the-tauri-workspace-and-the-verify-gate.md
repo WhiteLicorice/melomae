@@ -38,7 +38,7 @@ Create a bootable Tauri 2 + React + Vite + TypeScript app, a Cargo workspace, an
    - `crates/melomae-cli`: a binary that prints its version.
    - `src-tauri`: the app.
 6. Create the uv project `tools/` with pytest.
-7. Add `LICENSE` with the GPL-3.0-or-later text. Add a short SPDX header policy to the README.
+7. Add `LICENSE` with the GPL-3.0-only text. Add a short SPDX header policy to the README.
 8. Add a `.gitignore` that ignores `node_modules`, `target`, model artifacts (`*.onnx`, `*.bin`), and the uv environment.
 9. Add `pnpm verify`. It runs the checks in Stack §I, in that order.
 10. Add a GitHub Actions workflow on `windows-latest` and `ubuntu-22.04`. It runs `pnpm verify`. It cannot run until bootstrap item 2 exists.

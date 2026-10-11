@@ -61,8 +61,22 @@ pnpm install
 
 ## License
 
-Melomae is licensed under the GNU General Public License, version 3 or later.
+Melomae is licensed under the GNU General Public License, version 3 only.
+Some files in this repository use other licenses. README.md lists them.
 Copyright (C) 2026 Rene Andre Bedonia Jocsing. The full text is in `LICENSE`.
+
+Files in this repository use these licenses:
+
+| Path | License |
+| --- | --- |
+| The Melomae code | GPL-3.0-only |
+| `models/apollo.onnx` | CC BY-SA 4.0 |
+| `tools/export/vendor/` | CC BY-SA 4.0 |
+| `fixtures/ori_wav.wav` | CC BY-SA 4.0 |
+| `tools/parity/input_wav.wav` | CC BY-SA 4.0 |
+
+`crates/melomae-core/src/inference/mod.rs` and `tools/export/real_dsp.py` carry
+the Apollo attribution.
 
 ## Attribution
 

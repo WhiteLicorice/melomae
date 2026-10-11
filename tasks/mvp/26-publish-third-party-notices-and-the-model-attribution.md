@@ -20,7 +20,7 @@ Ship every license notice that Melomae's bundled components require, and keep th
 
 ## Scope
 
-1. Add `cargo-deny` with a license allowlist to the gate. Every allowed license must be compatible with GPL-3.0-or-later distribution.
+1. Add `cargo-deny` with a license allowlist to the gate. Every allowed license must be compatible with GPL-3.0-only distribution.
 2. Generate `THIRD_PARTY_NOTICES` from the Cargo and pnpm dependency trees. Bundle it with the app.
 3. Add a model notice: the creators, CC BY-SA 4.0 with a link, the source URL, and the modification statement ("converted to ONNX, STFT re-expressed as real arithmetic").
 4. Ship `apollo.onnx` under CC BY-SA 4.0.

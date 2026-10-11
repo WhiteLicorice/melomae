@@ -22,7 +22,7 @@ Take a new user from install to a working app, and credit Apollo as its license 
 2. An About screen:
    - the Apollo credit per CC BY-SA 4.0 §3(a): the creators, the license name and link, the source link, and the modifications
    - the no-endorsement statement (SRS §11.4)
-   - the Melomae license (GPL-3.0-or-later)
+   - the Melomae license (GPL-3.0-only)
    - a link to the third-party notices (task 26)
 3. The copy never claims "lossless", "original quality", or "recovered".
 4. The copy never names or suggests a download tool or streaming service (SRS §1.5).
