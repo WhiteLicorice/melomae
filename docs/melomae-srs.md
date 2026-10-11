@@ -42,7 +42,7 @@ Melomae is a free, open-source desktop app. It restores a music collection that 
    - `lossless`: a lossless container with full bandwidth.
    - `unreadable`: the file does not decode. The verdict shows the reason.
 4. Measured fixtures set the thresholds. Task 16 records them. The verdicts are estimates, and the app says so.
-5. The triage screen selects `restore` and `suspect-lossless` files by default. Restore would only add generated content to audio that lost nothing, so `lossless` files start cleared. `low-benefit` files also start cleared. The user can select or clear any file.
+5. The triage screen selects `restore`, `suspect-lossless`, and `low-benefit` files by default. The verdict is an estimate, so the user decides whether a `low-benefit` file gains from restore. Restore would only add generated content to audio that lost nothing, so `lossless` files start cleared. The user can select or clear any file.
 6. Triage runs offline. A rescan reads only the files whose size or modification time changed.
 7. Triage never changes an input file.
 

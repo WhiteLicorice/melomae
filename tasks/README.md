@@ -190,5 +190,6 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 | B-018 | [Terminate Matroska masters at root and new-document boundaries](backlog/B-018-terminate-matroska-masters-at-root-and-new-document-boundaries.md) | TODO | 03 |
 | B-019 | [Test packet loss and decoder error paths](backlog/B-019-test-packet-loss-and-decoder-error-paths.md) | TODO | 03 |
 | B-020 | [Measure the upper band at high input rates](backlog/B-020-measure-the-upper-band-at-high-input-rates.md) | TODO | 03 |
+| B-021 | [Let the user choose the default triage selection](backlog/B-021-let-the-user-choose-the-default-triage-selection.md) | TODO | 24 |
 
 Each backlog record states why it does not block the MVP. Each record also states its promotion condition.

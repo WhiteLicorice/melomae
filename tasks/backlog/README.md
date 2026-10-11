@@ -30,3 +30,4 @@ Do not place a defect that blocks an MVP user journey here. Put that task in `ta
 | B-018 | [Terminate Matroska masters at root and new-document boundaries](B-018-terminate-matroska-masters-at-root-and-new-document-boundaries.md) |
 | B-019 | [Test packet loss and decoder error paths](B-019-test-packet-loss-and-decoder-error-paths.md) |
 | B-020 | [Measure the upper band at high input rates](B-020-measure-the-upper-band-at-high-input-rates.md) |
+| B-021 | [Let the user choose the default triage selection](B-021-let-the-user-choose-the-default-triage-selection.md) |
