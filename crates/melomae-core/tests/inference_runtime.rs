@@ -1,10 +1,7 @@
 //! The dynamic ONNX Runtime load reports a typed error, and never panics.
 //!
 //! The engine loads ONNX Runtime at run time from a caller-given library path (task 33).
-//! These tests live in their own binary, because the runtime initializes once per process
-//! and ONNX Runtime 2.0.0-rc.13 marks its dylib slot as used even when a load fails. Only
-//! the wrong-library test below may reach `init_from`; the missing-path tests return before
-//! ONNX Runtime is touched, so they are safe to run in any order against it.
+//! These tests live in their own binary, because the runtime initializes once per process.
 
 mod common;
 mod setup;
@@ -26,8 +23,6 @@ fn a_missing_inference_runtime_library_returns_a_typed_error() {
 
 #[test]
 fn a_library_that_is_not_inference_runtime_returns_a_typed_error() {
-    // The only test in this binary that calls `init_from`: a second failing load in one
-    // process would see ONNX Runtime's dylib slot as used and panic.
     let dir = TempDir::new("melomae-ort-wrong");
     let path = dir.join("libonnxruntime.so");
     std::fs::write(&path, b"not an onnx runtime library").expect("write the fake library");
