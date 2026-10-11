@@ -11,6 +11,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = Path(__file__).resolve().parents[1] / "generate_notices.py"
 OUTPUT = REPO_ROOT / "THIRD_PARTY_NOTICES.md"
@@ -22,6 +24,42 @@ def load_module():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def make_component(directory: Path, name: str, version: str, license: str, files: dict) -> dict:
+    """A component source directory with the given license files."""
+    directory.mkdir(parents=True)
+    for filename, text in files.items():
+        (directory / filename).write_text(text, encoding="utf-8")
+    return {"name": name, "version": version, "license": license, "directory": directory}
+
+
+def make_runtime(directory: Path, with_third_party: bool = True) -> Path:
+    """A fixture that stands in for the extracted ONNX Runtime archive."""
+    inner = directory / "onnxruntime-fake-1.28.3"
+    inner.mkdir(parents=True)
+    (inner / "LICENSE").write_text("Fake runtime license text.\n", encoding="utf-8")
+    if with_third_party:
+        (inner / "ThirdPartyNotices.txt").write_text(
+            "Fake third party notices for the runtime.\n", encoding="utf-8"
+        )
+    return directory
+
+
+def patch_sources(monkeypatch, module, components: list, runtime_dir: Path) -> None:
+    """Feed the generator a fixed component list and runtime folder."""
+    monkeypatch.setattr(module, "cargo_metadata", lambda: {})
+    monkeypatch.setattr(module, "rust_components", lambda metadata: components)
+    monkeypatch.setattr(module, "pnpm_components", lambda: [])
+    monkeypatch.setattr(module, "RUNTIME_DIR", runtime_dir, raising=False)
+
+
+def section_with(output: str, needle: str) -> str:
+    """The `### ...` section of the generated notice that holds a line."""
+    for section in output.split("\n### "):
+        if needle in section:
+            return section
+    raise AssertionError(f"no section holds {needle!r}")
 
 
 def test_normalized_flattens_a_license_file_name() -> None:
@@ -127,3 +165,143 @@ def test_e2e_the_committed_notice_matches_the_dependency_trees() -> None:
         encoding="utf-8",
     )
     assert result.returncode == 0, result.stderr
+
+
+MIT_BODY = """MIT License
+
+Copyright (c) {year} {holder}
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+"""
+
+BSD_BODY = """BSD 3-Clause License
+
+Copyright (c) {year}, {holder}
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice.
+2. Redistributions in binary form must reproduce the above copyright notice.
+3. Neither the name of the copyright holder may be used to endorse products.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS".
+"""
+
+
+def test_every_component_keeps_its_own_license_text(tmp_path, monkeypatch) -> None:
+    module = load_module()
+    components = [
+        make_component(
+            tmp_path / "alpha",
+            "alpha",
+            "1.0.0",
+            "MIT",
+            {"LICENSE": MIT_BODY.format(year="2020", holder="Alpha Authors")},
+        ),
+        make_component(
+            tmp_path / "beta",
+            "beta",
+            "2.0.0",
+            "MIT",
+            {"LICENSE": MIT_BODY.format(year="2021", holder="Beta Authors")},
+        ),
+        make_component(
+            tmp_path / "gamma",
+            "gamma",
+            "3.0.0",
+            "BSD-3-Clause",
+            {"LICENSE": BSD_BODY.format(year="2019", holder="Gamma Authors")},
+        ),
+        make_component(
+            tmp_path / "delta",
+            "delta",
+            "4.0.0",
+            "BSD-3-Clause",
+            {"LICENSE": BSD_BODY.format(year="2018", holder="Delta Authors")},
+        ),
+    ]
+    patch_sources(monkeypatch, module, components, make_runtime(tmp_path / "runtime"))
+
+    output = module.build_notices()
+
+    expected = [
+        ("alpha", "1.0.0", "Copyright (c) 2020 Alpha Authors"),
+        ("beta", "2.0.0", "Copyright (c) 2021 Beta Authors"),
+        ("gamma", "3.0.0", "Copyright (c) 2019, Gamma Authors"),
+        ("delta", "4.0.0", "Copyright (c) 2018, Delta Authors"),
+    ]
+    for name, version, copyright_line in expected:
+        assert copyright_line in output, copyright_line
+        assert f"{name} {version}" in section_with(output, copyright_line), name
+
+
+def test_a_notice_file_is_kept_in_full(tmp_path, monkeypatch) -> None:
+    module = load_module()
+    notice = "Beta Project Notice\n\nThis product includes software developed by the Beta Project."
+    components = [
+        make_component(
+            tmp_path / "epsilon",
+            "epsilon",
+            "1.0.0",
+            "Apache-2.0",
+            {
+                "LICENSE": "Apache License\nVersion 2.0, January 2004\nhttp://www.apache.org/licenses/",
+                "NOTICE": notice,
+            },
+        ),
+    ]
+    patch_sources(monkeypatch, module, components, make_runtime(tmp_path / "runtime"))
+
+    output = module.build_notices()
+
+    assert "Apache License" in output
+    assert notice in output
+    assert "epsilon 1.0.0" in section_with(output, "developed by the Beta Project")
+
+
+def test_the_bundled_runtime_documents_are_kept_and_required(tmp_path, monkeypatch) -> None:
+    module = load_module()
+    patch_sources(monkeypatch, module, [], make_runtime(tmp_path / "runtime"))
+
+    output = module.build_notices()
+
+    assert "Fake runtime license text." in output
+    assert "Fake third party notices for the runtime." in output
+    assert "onnxruntime 1.28.3" in section_with(output, "Fake third party notices")
+
+
+def test_a_missing_runtime_document_fails_the_generator(tmp_path, monkeypatch) -> None:
+    module = load_module()
+    patch_sources(
+        monkeypatch,
+        module,
+        [],
+        make_runtime(tmp_path / "runtime", with_third_party=False),
+    )
+
+    with pytest.raises(SystemExit):
+        module.build_notices()
+
+
+def test_the_committed_notice_keeps_the_component_copyrights() -> None:
+    text = OUTPUT.read_text(encoding="utf-8")
+    for expected in (
+        "Meta Platforms",
+        "Douman",
+        "Xiph.Org",
+        "Microsoft",
+        "protocolbuffers/protobuf",
+    ):
+        assert expected in text, expected
