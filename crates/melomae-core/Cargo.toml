@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 flacenc = "0.5.1"
 opusic-c = "1.6.1"
-ort = "=2.0.0-rc.13"
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["load-dynamic", "api-27"] }
 realfft = "3.5.0"
 rubato = "5.0.1"
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }

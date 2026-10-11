@@ -10,10 +10,15 @@
 //! cancel flag. It returns the restored channels. [`OnnxBackend`] is the only
 //! production implementation. The engine runs one channel at a time to halve
 //! peak memory (Stack §C).
+//!
+//! The engine loads ONNX Runtime at run time from a library path the caller
+//! gives. [`init_runtime`] does that once per process, so the engine keeps the
+//! glibc 2.35 baseline of SRS §2. [`load_onnx_backend`] loads the model after
+//! the runtime is up.
 
 mod onnx;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -124,6 +129,8 @@ pub enum InferenceError {
     Model(String),
     /// A file operation failed.
     Io(String),
+    /// The ONNX Runtime shared library failed to load.
+    Runtime(String),
 }
 
 impl std::fmt::Display for InferenceError {
@@ -144,6 +151,9 @@ impl std::fmt::Display for InferenceError {
             }
             Self::Model(reason) => write!(f, "the model failed: {reason}"),
             Self::Io(reason) => write!(f, "{reason}"),
+            Self::Runtime(reason) => {
+                write!(f, "the ONNX Runtime library failed to load: {reason}")
+            }
         }
     }
 }
@@ -462,11 +472,48 @@ impl<M: Model> RestoreBackend for ChunkedInference<M> {
     }
 }
 
-/// Load the Apollo ONNX model from a path.
+/// Initialize the ONNX Runtime once per process from an explicit library path.
 ///
-/// The caller passes the resource path of the shipped app.
-pub fn load_onnx_backend(path: &Path) -> Result<OnnxBackend, InferenceError> {
-    Ok(ChunkedInference::new(onnx::OnnxModel::load(path)?))
+/// The engine loads ONNX Runtime at run time, so it never links the runtime. The
+/// caller gives the shared library: `onnxruntime.dll` on Windows, and
+/// `libonnxruntime.so` on Linux. This must run before any other engine call. A
+/// later call in the same process is a no-op.
+///
+/// A path that is not a file returns [`InferenceError::Runtime`] before ONNX
+/// Runtime is touched. A library that fails to load also returns a typed error.
+/// ONNX Runtime 2.0.0-rc.13 marks its dylib slot as used even when a load fails,
+/// so a process must not try a second, different library after a failure.
+pub fn init_runtime(library: &Path) -> Result<(), InferenceError> {
+    static INITIALIZED: Mutex<Option<PathBuf>> = Mutex::new(None);
+    let mut initialized = INITIALIZED
+        .lock()
+        .map_err(|_| InferenceError::Runtime("the runtime lock was poisoned".to_string()))?;
+    if initialized.is_some() {
+        return Ok(());
+    }
+    if !library.is_file() {
+        return Err(InferenceError::Runtime(format!(
+            "the ONNX Runtime library does not exist: {}",
+            library.display()
+        )));
+    }
+    ort::init_from(library)
+        .map_err(|error| InferenceError::Runtime(error.to_string()))?
+        .commit();
+    *initialized = Some(library.to_path_buf());
+    Ok(())
+}
+
+/// Load the Apollo ONNX model from a caller-given runtime library and model path.
+///
+/// The caller passes the runtime library and the resource path of the shipped app.
+/// [`init_runtime`] runs first, so the process loads ONNX Runtime once.
+pub fn load_onnx_backend(
+    runtime_library: &Path,
+    model: &Path,
+) -> Result<OnnxBackend, InferenceError> {
+    init_runtime(runtime_library)?;
+    Ok(ChunkedInference::new(onnx::OnnxModel::load(model)?))
 }
 
 #[cfg(test)]
