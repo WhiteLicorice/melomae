@@ -33,3 +33,7 @@ Do not place a defect that blocks an MVP user journey here. Put that task in `ta
 | B-021 | [Let the user choose the default triage selection](B-021-let-the-user-choose-the-default-triage-selection.md) |
 | B-022 | [Test the encoder error-cleanup paths](B-022-test-the-encoder-error-cleanup-paths.md) |
 | B-023 | [Reject unrepresentable chunk settings](B-023-reject-unrepresentable-chunk-settings.md) |
+| B-024 | [Bound triage memory on long files](B-024-bound-triage-memory-on-long-files.md) |
+| B-025 | [Explain a zero cutoff in triage](B-025-explain-a-zero-cutoff-in-triage.md) |
+| B-026 | [Handle directory cycles in the triage scan](B-026-handle-directory-cycles-in-the-triage-scan.md) |
+| B-027 | [Verify a cached ONNX Runtime library](B-027-verify-a-cached-onnx-runtime-library.md) |

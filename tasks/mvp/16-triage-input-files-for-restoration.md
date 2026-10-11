@@ -9,6 +9,19 @@
 **Started:** 0049784, clean tree. Baseline gate at 0049784: board 53 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 98 passed, pytest 13 passed.
 **Outcome:** DONE. A new `triage` module walks files and folders, measures the spectral cutoff on the task 03 decode, assigns the SRS §4.3 verdicts, and stores rows in `triage_items`. A rescan reads only the files whose size or modification time changed and removes the rows of deleted files. Triage opens every input read-only and never writes one. The thresholds come from the calibration on `fixtures/ori_wav.wav`, committed through Git LFS: the cutoff is 80 dB below the spectrum peak, and the high-bitrate and suspect-lossless lines are both 19500 Hz. Measured verdicts: the source WAV and the lossless FLAC are `lossless` at 22050 Hz, MP3 64/128/192 are `restore` at 11289/16349/18605 Hz, MP3 320 is `low-benefit` at 20015 Hz, AAC 128/256 are `low-benefit` at 19999/22050 Hz, and the FLAC from the 128 kb/s MP3 is `suspect-lossless` at 16349 Hz. A truncated MP3 is `unreadable` with a reason. The 1,000-file scan took 8.82 s, about 113 files per second. `cargo test -p melomae-core` passes 115 tests, and clippy and fmt are clean. The gate `pnpm verify` exits 0: board 53 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 115 passed, pytest 13 passed. Fix round 1 (review findings B1 to B4) samples positions over the whole file and every channel, stores nanosecond modification times under schema version 2, and reports float PCM and ALAC bit depth. The round-1 gate at `42efe75` exits 0 with 122 cargo tests. Fix round 2 selects the first, central, and last valid start for every file, including short ones. The round-2 gate at `556078d` exits 0 with 125 cargo tests. Fix round 3 caps the start grid at `MAX_POSITIONS - 1`, so the grid plus the central start stays within 128 positions. The round-3 gate at `e9e34ca` exits 0 with 126 cargo tests. See the detail below.
 
+## Merge review
+
+- Executor: `deepseek-v4.1-flash` (high) in CommandCode, one session for the task and three fix rounds. Reviewers: four fresh Codex `gpt-6.1-sol` (medium) runs, adversarial.
+- Author rulings during the task: the calibration source is `fixtures/ori_wav.wav`, committed through Git LFS, because `input_wav.wav` has a low-pass near 4.5 kHz. The verdict is advice (SRS §4.5), so both AAC fixtures get `low-benefit` from their measured cutoff. `low-benefit` files start selected (SRS §4.5 amendment `00e1195`, backlog B-021).
+- Review 1 on `d7ed98e`: FAIL. B1: a silent or narrow-band opening hid the rest of the file. B2: the first channel used the whole FFT budget. B3: a changed modification time inside one second could skip a rescan. B4: float PCM bit depth was stored as unknown. Fix round 1 (tests first at `16375bb`): windows spread over the whole file with every channel at each position, store migration 2 with nanosecond modification times that clears the triage rows, float and ALAC bit depth, and three comments.
+- Review 2 on `5eb50b8`: FAIL. B1b: a file with `0 < span < hop` got one start at 0, so its end was never analyzed. Fix round 2 (tests first at `f123dad`): the first, central, and last starts are always selected when `span > 0`.
+- Review 3 on `8a88080`: FAIL. B1c: the grid could reach `MAX_POSITIONS` and the central start then made 129 starts for an ordinary 12 s file. Fix round 3 (tests first at `3790180`): the grid is capped at `MAX_POSITIONS - 1`.
+- Review 4 on `d358a60`: PASS. Each round's tests fail at their tests-only commit. Core tests 126 passed. Fresh calibration keeps every cutoff and verdict. Fresh 1,000-file scan: 14.68 s. N1d: the unit-test inventory below said eleven tests; it now says twelve (six cutoff, six triage).
+- Gates on the task branch: exit 0 at `0668d69`, `42efe75`, `556078d` (cargo 125), and `e9e34ca` (cargo 126).
+- Integration: `master` had moved to `ac9a07c` with the task 04 engine, so the 18 commits were cherry-picked onto it. Conflicts: `.gitattributes` (now four exact LFS paths), `crates/melomae-core/Cargo.toml` (`ort` and `realfft`), `src/lib.rs` (modules `decode`, `encode`, `inference`, `store`, `triage`), `Cargo.lock` (master's lock plus cargo: one added dependency line, versions equal to the task lock), and `.github/workflows/verify.yml` (both sides added the same LFS steps; master's steps kept). The orchestrator ran the gate on the merged tree: `pnpm verify` exit 0, board 57, tasks unittest 9, Vitest 1, cargo test 172, pytest 14.
+- Backlog filed: B-024 (triage decodes the whole file), B-025 (no diagnostic for a zero cutoff), B-026 (directory cycles in the scan).
+- Hosted CI ran with task 33 on the pushed `master`. Desktop drop and picker behavior belong to task 24.
+
 ## Goal
 
 Tell the user which files can gain from restoration before any restore runs.
@@ -168,7 +181,7 @@ and the licence. The calibration test fails with `Run: git lfs pull` when the fi
 pointer, and it checks the SHA-256. CI pulls the LFS objects behind an `actions/cache@v4` keyed on
 the OS and the `git lfs ls-files --long` output.
 
-The tests: eleven unit tests in `src/triage` (five cutoff, six triage), the calibration test and the
+The tests: twelve unit tests in `src/triage` (six cutoff, six triage), the calibration test and the
 truncated-file test in `tests/triage_calibration.rs`, the scan, rescan, removal, never-writes,
 `e2e_triage_scan_a_folder_into_the_store`, and 1,000-file tests in `tests/triage_scan.rs`, the six
 round-1 fix tests in `tests/triage_round1_fixes.rs`, and the two round-2 fix tests in

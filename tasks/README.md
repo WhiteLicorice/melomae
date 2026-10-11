@@ -194,5 +194,9 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 | B-021 | [Let the user choose the default triage selection](backlog/B-021-let-the-user-choose-the-default-triage-selection.md) | TODO | 24 |
 | B-022 | [Test the encoder error-cleanup paths](backlog/B-022-test-the-encoder-error-cleanup-paths.md) | TODO | 06 |
 | B-023 | [Reject unrepresentable chunk settings](backlog/B-023-reject-unrepresentable-chunk-settings.md) | TODO | 04 |
+| B-024 | [Bound triage memory on long files](backlog/B-024-bound-triage-memory-on-long-files.md) | TODO | 16 |
+| B-025 | [Explain a zero cutoff in triage](backlog/B-025-explain-a-zero-cutoff-in-triage.md) | TODO | 16 |
+| B-026 | [Handle directory cycles in the triage scan](backlog/B-026-handle-directory-cycles-in-the-triage-scan.md) | TODO | 16 |
+| B-027 | [Verify a cached ONNX Runtime library](backlog/B-027-verify-a-cached-onnx-runtime-library.md) | TODO | 33 |
 
 Each backlog record states why it does not block the MVP. Each record also states its promotion condition.
