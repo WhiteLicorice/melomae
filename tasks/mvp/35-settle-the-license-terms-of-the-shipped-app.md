@@ -1,13 +1,13 @@
 # 35 — Settle the license terms of the shipped app
 
-**Status:** TODO
+**Status:** DONE
 **Phase:** 5 — Packaging and release
 **Depends on:** 26
 **SRS:** §11
 **Stack:** §C, §J
 **Assigned to:** Owner
-**Started:** —
-**Outcome:** —
+**Started:** 2fcf1ba, clean worktree `SCRATCH\wt-35` on branch `task/35`. Baseline gate at master `53dd039` (task 34 merged): board 65 records, tasks unittest 9, Vitest 1, cargo test 181, pytest 19.
+**Outcome:** DONE. Part 1 local check (`SCRATCH/evidence-35/part1.txt`). The clone `C:\Lab\Apollo` has origin `WhiteLicorice/Apollo` (a fork) and remote upstream `JusperLee/Apollo`. Its `inference.py` is byte-identical to upstream `JusperLee/Apollo@e84bcac`. `git blame -L 86,221` names Djshinshin and Zakaria Zbitou for the ported lines and the owner for none. Upstream `e84bcac` contains the four chunked functions. Result A holds, so Parts 2 and 3 apply as written. SRS §11 now records GPL-3.0-only (§11.1) and §11.7 through §11.11. `crates/melomae-core/src/inference/mod.rs` and `tools/export/real_dsp.py` carry the CC BY-SA 4.0 §3(a) attribution. `Cargo.toml`, `src-tauri/Cargo.toml` (`license.workspace = true`), `LICENSE`, `README.md`, task 25, task 26 scope, B-012, and the pivot record are relicensed to GPL-3.0-only. The Tauri template `description = "A Tauri App"` and `authors = ["you"]` in `src-tauri/Cargo.toml` are unchanged. Gate `pnpm verify` exit 0 (`SCRATCH/evidence-35/verify.txt`, ending `EXIT=0`): board 66 records valid, tasks unittest 9 passed, Vitest 1 passed, cargo test 181 passed, pytest 19 passed. Cure deadline for §11.11 is 2026-11-10. Task 26 carries the `deny.toml` per-crate LLVM exception and the `models/NOTICE.md` checklist, because both files exist only on the unmerged `task/26` branch.
 
 ## Goal
 
@@ -261,9 +261,9 @@ These steps replace decisions Part 2. Do them in this order. Run `pnpm verify` a
 
 ## Acceptance criteria
 
-- [ ] Each of the three questions has a recorded decision with its reason and sources in SRS §11.
-- [ ] `deny.toml`, `models/NOTICE.md`, and the license fields agree with the decisions.
-- [ ] `pnpm verify` passes.
+- [x] Each of the three questions has a recorded decision with its reason and sources in SRS §11.
+- [x] The license fields agree with the decisions. `deny.toml` and `models/NOTICE.md` are task 26's, and both exist only on the unmerged `task/26` branch.
+- [x] `pnpm verify` passes.
 
 ## Verify
 
