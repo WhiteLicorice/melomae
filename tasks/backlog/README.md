@@ -40,3 +40,6 @@ Do not place a defect that blocks an MVP user journey here. Put that task in `ta
 | B-028 | [Make the encode temporary file name unique](B-028-make-the-encode-temporary-file-name-unique.md) |
 | B-029 | [Isolate the MP4 decode test files](B-029-isolate-the-mp4-decode-test-files.md) |
 | B-030 | [Harden test temporary paths](B-030-harden-test-temporary-paths.md) |
+| B-031 | [Measure chunk timing medians and output parity](B-031-measure-chunk-timing-medians-and-output-parity.md) |
+| B-032 | [Check the chunk budget arithmetic for overflow](B-032-check-the-chunk-budget-arithmetic-for-overflow.md) |
+| B-033 | [Correct the chunk budget record anchors](B-033-correct-the-chunk-budget-record-anchors.md) |

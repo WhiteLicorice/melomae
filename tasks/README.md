@@ -203,5 +203,8 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 | B-028 | [Make the encode temporary file name unique](backlog/B-028-make-the-encode-temporary-file-name-unique.md) | TODO | 03 |
 | B-029 | [Isolate the MP4 decode test files](backlog/B-029-isolate-the-mp4-decode-test-files.md) | TODO | 34 |
 | B-030 | [Harden test temporary paths](backlog/B-030-harden-test-temporary-paths.md) | TODO | 34 |
+| B-031 | [Measure chunk timing medians and output parity](backlog/B-031-measure-chunk-timing-medians-and-output-parity.md) | TODO | 05 |
+| B-032 | [Check the chunk budget arithmetic for overflow](backlog/B-032-check-the-chunk-budget-arithmetic-for-overflow.md) | TODO | 05 |
+| B-033 | [Correct the chunk budget record anchors](backlog/B-033-correct-the-chunk-budget-record-anchors.md) | TODO | 05 |
 
 Each backlog record states why it does not block the MVP. Each record also states its promotion condition.

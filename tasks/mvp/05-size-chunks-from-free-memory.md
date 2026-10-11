@@ -31,6 +31,16 @@ Real-time factor, 6 s parity input, stereo:
 | arena on | 14.342 s | 2.3903 |
 | arena off | 15.174 s | 2.5289 (+5.8%) |
 
+## Merge review
+
+- Executors: `deepseek-v4.1-flash` (high) in CommandCode: a first session, a fresh session for fix round 1, and a fresh session for the rebase. Reviewers: two fresh Codex `gpt-6.1-sol` (medium) runs, adversarial.
+- Review 1 on `8649843`: FAIL. B1: the chooser ignored the engine's whole-file buffers. B2: the below-floor error omitted the 50% budget. B3: `Outcome` had no measurement table. Fix round 1 (tests first at `8616759`): the chooser reserves `(2 x channels + 2) x frames x 4` bytes, the error names the total, the budget, and the available memory, and `Outcome` has the tables.
+- Review 2 on `3e19ed4`: PASS. The reviewer confirmed the reserve, the long mono, long stereo, and six-channel cases, the error text, and the measurements (60 s -0.57%, 600 s -3.93%).
+- Rebase: task 33 changed `load_onnx_backend` to take the runtime library path, so the reviewed commits did not apply to `master`. A fresh executor cherry-picked the eight commits onto `102f78c` as `task/05-rebased`. `load_onnx_backend_with_options(runtime_library, model, options)` calls `init_runtime` first, and `runtime_version(library)` reads `OrtGetApiBase` through `libloading` (already in the lock through `ort`). The orchestrator compared the branches with `git range-diff`: the commits map one to one, and the other differences are formatting. The orchestrator ruled that this adaptation needs no new Codex review.
+- Re-measured on ONNX Runtime 1.28.3 on the rebased tree: 60 s -0.54% (chunk 19 s), 600 s -3.89% (chunk 18 s). Gate on `task/05-rebased`: `pnpm verify` exit 0, board 62, cargo test 191 passed and 3 ignored, pytest 19.
+- Integration: the nine commits cherry-picked onto `master` `2fcf1ba` (task 34 merged, task 35 docs) without conflicts. The orchestrator ran the gate on the merged tree: `pnpm verify` exit 0, board 66, tasks unittest 9, Vitest 1, cargo test 193 passed and 3 ignored, pytest 19.
+- Backlog filed: B-031 (timing medians and 60 s output parity), B-032 (overflow in the peak and reserve arithmetic), B-033 (stale line anchors and error-sign conventions in the records).
+
 ## Goal
 
 Pick the largest chunk that keeps peak inference memory within budget on the current machine. The owner chose adaptive sizing on 2026-09-24.
