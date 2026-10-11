@@ -436,10 +436,9 @@ mod tests {
     }
 
     /// One audio track: its `tkhd` ID, its handler, its media timescale, and its edit entries.
-    fn file_with_tracks(
-        movie_timescale: u32,
-        tracks: &[(u32, [u8; 4], u32, &[(u32, i32)])],
-    ) -> Vec<u8> {
+    type TrackSpec<'a> = (u32, [u8; 4], u32, &'a [(u32, i32)]);
+
+    fn file_with_tracks(movie_timescale: u32, tracks: &[TrackSpec<'_>]) -> Vec<u8> {
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd(movie_timescale));
         for (track_id, handler, media_timescale, entries) in tracks {
