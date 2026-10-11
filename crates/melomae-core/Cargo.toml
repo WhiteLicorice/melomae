@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 flacenc = "0.5.1"
 libloading = "0.9.0"
+lofty = "0.25.4"
 opusic-c = "1.6.1"
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["load-dynamic", "api-27"] }
 realfft = "3.5.0"
