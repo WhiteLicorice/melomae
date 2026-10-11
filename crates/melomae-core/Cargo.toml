@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+flacenc = "0.5.1"
 opusic-c = "1.6.1"
 rubato = "5.0.1"
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
