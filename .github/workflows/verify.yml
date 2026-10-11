@@ -38,6 +38,14 @@ jobs:
           path: .cache/ffmpeg
           key: ffmpeg-${{ runner.os }}-autobuild-2026-08-31-13-27
 
+      # The pinned ONNX Runtime the engine loads at run time (task 33). `pnpm verify` runs
+      # tools/fetch_onnxruntime.py, which downloads it on a cache miss.
+      - name: Cache the pinned ONNX Runtime
+        uses: actions/cache@v4
+        with:
+          path: .cache/onnxruntime
+          key: onnxruntime-${{ runner.os }}-v1.28.3
+
       - name: Install Linux system dependencies
         if: matrix.os == 'ubuntu-22.04'
         run: |

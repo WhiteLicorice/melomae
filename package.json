@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "verify": "python tools/fetch_ffmpeg.py && python tasks/validate_board.py && python -m unittest discover -s tasks -p \"test_*.py\" && tsc --noEmit && eslint . && vitest run && vite build && cargo fmt --check && cargo clippy --workspace -- -D warnings && cargo test --workspace && uv run --project tools pytest"
+    "verify": "python tools/fetch_ffmpeg.py && python tools/fetch_onnxruntime.py && python tasks/validate_board.py && python -m unittest discover -s tasks -p \"test_*.py\" && tsc --noEmit && eslint . && vitest run && vite build && cargo fmt --check && cargo clippy --workspace -- -D warnings && cargo test --workspace && uv run --project tools pytest"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
