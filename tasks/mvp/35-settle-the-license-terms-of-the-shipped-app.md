@@ -108,6 +108,152 @@ Do not decide this item. Report it to the owner.
 - The CC wiki page in §11.7 was blocked by the network policy and was not read directly. The license text of CC BY-SA 4.0 came from the owner.
 - The `include-build`, `exceptions`, and `[graph] exclude` behavior comes from the cargo-deny docs on `main`, not from the pinned version.
 
+## Amendment 1 (2026-10-11)
+
+Date: 2026-10-11. This is not legal advice.
+
+This amendment changes the "Owner decisions (2026-10-11)" section above. Where the two disagree, this amendment wins. It also closes the open item in Part 3 above (the license of `tools/export/real_dsp.py`).
+
+**Orchestrator notes for the executor.**
+
+- `C:\Lab\Apollo` is read-only (author rule). Part 1 step 2 (`git -C C:\Lab\Apollo fetch origin`) writes objects and refs into that clone's `.git`, so do not run it. Clone `https://github.com/JusperLee/Apollo` into the scratch directory. Run steps 3 to 6 against the local clone with read-only commands, and against the scratch clone's `origin/main`. Set `PYTHONDONTWRITEBYTECODE=1`.
+- Part 1 step 9 is answered. On 2026-10-11 the owner said: "No, neither." The owner is not Djshinshin or zbitouzakaria and wrote none of the ported lines. Do not ask again.
+
+### What changes
+
+1. Melomae code is now **GPL-3.0-only**. It was GPL-3.0-or-later. There is no GPLv3 §14 proxy.
+2. The decisions' §11.7 bullet "The shipped app contains no Apollo source" is **false**. `crates/melomae-core/src/inference/mod.rs` ships in the app and translates upstream Apollo code. Part 2 replaces §11.7.
+3. New SRS §11.11 covers the ported Apollo code.
+4. `tools/export/real_dsp.py` is GPL-3.0-only with the Apollo attribution. Decisions Part 3 is closed.
+5. A local check of `C:\Lab\Apollo\inference.py` comes first (Part 1).
+6. A cure date applies: **2026-11-10** (see §11.11).
+
+These parts stay as they were: decisions §11.8, §11.9, §11.10, and decisions steps 2 (`deny.toml`), 3 (`models/NOTICE.md`), and 6 (B-012).
+
+### Part 1: local check (do this first)
+
+The session that wrote this ran in a remote container. It could not read `C:\Lab\Apollo`. These facts came from the repository and from GitHub on 2026-10-11:
+
+- `crates/melomae-core/src/inference/mod.rs:3-4` says it ports `C:\Lab\Apollo\inference.py:86-221`.
+- Lines 191, 241, 253, and 284 name the ported functions: `resolve_chunking`, `chunk_starts`, `crossfade_weights`, and `run_model`.
+- Upstream `JusperLee/Apollo` `main` has all four functions in `inference.py`.
+- Upstream history of `inference.py` on `main`:
+
+| Commit | Author | Date | Message |
+|---|---|---|---|
+| 10b4427 | zbitouzakaria | 2026-08-23 | Clamp the padded chunk start and derive the crop offset from it |
+| 99b3187 | zbitouzakaria | 2026-08-21 | Pad chunk inference and discard the model's degraded edges |
+| 32f7579 | Djshinshin | 2026-08-14 | Add batched chunk inference |
+| 0a91c5f | Djshinshin | 2026-08-14 | Add chunked inference for long audio |
+| 46c09a1 | Djshinshin | 2026-08-13 | Address inference review feedback |
+| e121224 | Djshinshin | 2026-08-13 | Add device-agnostic inference support |
+| fb56d56 | JusperLee | 2024-09-18 | Update inference.py |
+| d72b12c | JusperLee | 2024-09-06 | First Commit |
+
+- Stack §K says the clone's only local change is `32a2d35`, which removes a `print`. The Stack pins upstream commit `e84bcac`.
+
+Run these in PowerShell. Record each output in the Task 35 `Outcome`.
+
+1. `git -C C:\Lab\Apollo remote -v`. Confirm that `origin` is `JusperLee/Apollo`.
+2. `git -C C:\Lab\Apollo fetch origin`. This only reads from the remote. (See the orchestrator notes above: use a scratch clone instead.)
+3. `git -C C:\Lab\Apollo log --format="%h %an %ad %s" --date=short -- inference.py`. Compare the result with the table above.
+4. `git -C C:\Lab\Apollo diff origin/main -- inference.py`. Record any local change.
+5. `git -C C:\Lab\Apollo blame -L 86,221 inference.py`. Record the authors of the ported lines.
+6. `git -C C:\Lab\Apollo rev-parse HEAD`. Then run `git -C C:\Lab\Apollo show e84bcac:inference.py | Select-String "def resolve_chunking"`. Record the clone's commit, and record whether `e84bcac` contains the chunked functions.
+7. Compare each of the four functions with its Rust counterpart in `mod.rs`. Confirm that the Rust code translates them function by function.
+8. Compare the inference tests in `crates/melomae-core/tests` with upstream `tests/test_inference.py`. Record whether the tests translate code or only reuse ideas.
+9. Ask the owner whether they are Djshinshin or zbitouzakaria, or wrote any of the ported lines. (Answered: see the orchestrator notes above.)
+
+Then act on the result:
+
+- **Result A (expected):** others wrote the ported lines upstream. Apply Parts 2 and 3 as written.
+- **Result B:** the owner wrote every ported line. The owner holds that copyright. GPL-3.0-only stands anyway. Change §11.11 to say "a port of the owner's own upstream contribution". Keep the attribution, because it costs nothing.
+- **Result C:** the local file is not upstream code, or it differs from upstream in the ported lines. Stop. Report to the owner before you change any file.
+- If step 8 shows that tests translate upstream code, give those test files the same attribution header as in Part 3 step 4.
+
+### Part 2: SRS §11 text
+
+Replace §11.1:
+
+1. **Melomae code is licensed GPL-3.0-only.** The owner decided this on 2026-10-11. It replaces GPL-3.0-or-later.
+   - The app contains code translated from CC BY-SA 4.0 sources (§11.11). CC BY-SA 4.0 §3(b)(1) and §1(c) accept GPLv3 as the license for that code. They accept a later GPL version only if Creative Commons lists it.
+   - One license for all Melomae code keeps the project simple.
+   - Git history shows the owner as the only human author. The owner can relicense alone today.
+   - Accepted cost: the code has no automatic path to a later GPL version. A later relicense needs the consent of every copyright holder at that time.
+   - Rejected: GPL-3.0-or-later with a §14 proxy, because it adds a decision-maker. Rejected: a mix of GPL-3.0-only and GPL-3.0-or-later files, because it is harder to keep correct.
+
+Replace the decisions' §11.7:
+
+7. **The model is a separate work.** `apollo.onnx` ships beside the app under CC BY-SA 4.0. The app is GPL-3.0-only (§11.1).
+   - The app loads the model at runtime from a path that the caller gives (`crates/melomae-core/src/inference/onnx.rs:3`). The installer adds the model as a resource (Stack §J). The model is not compiled into the app.
+   - GPLv3 §5 calls separate works on one medium an "aggregate" (`LICENSE:243-251`). The GPL does not apply to the model.
+   - The model keeps its own license. It needs no BY-SA Compatible License.
+   - CC BY-SA 4.0 §2(a)(4) can make the ONNX conversion a technical modification and not Adapted Material. The decision holds under both readings.
+   - The installer and the app terms must not restrict the copying of `apollo.onnx`. They must not encrypt the model (CC BY-SA 4.0 §2(a)(5)(c) and §3(b)(3)).
+   - Sources: CC BY-SA 4.0 legal code. GPLv3 (`LICENSE`).
+
+§11.8, §11.9, and §11.10 stay as written in the decisions.
+
+Add §11.11:
+
+11. **Ported Apollo code.** The owner decided this on 2026-10-11.
+    - `crates/melomae-core/src/inference/mod.rs` translates `resolve_chunking`, `chunk_starts`, `crossfade_weights`, and `run_model` from upstream `inference.py` into Rust. Upstream contributors other than the Apollo authors wrote these functions (Part 1 table).
+    - `tools/export/real_dsp.py` computes the same mathematics as `Apollo.spec_band_split`, `Apollo.feature_extractor`, and `Apollo.forward` (`tools/export/vendor/look2hear/models/apollo.py:250-299`), in the same order. It copies no upstream text. The owner treats it as adapted, so that no argument is needed.
+    - The upstream repository is CC BY-SA 4.0. CC BY-SA 4.0 §1(a) names translation as a form of adaptation.
+    - Both files use GPL-3.0-only as the Adapter's License (§3(b)(1)). Both files carry the §3(a) attribution.
+    - Before 2026-10-11, both files carried GPL-3.0-or-later and had no attribution. `mod.rs` named only a local path. Under §6(a), a breach can end the rights. Under §6(b)(1), the rights come back if the breach is cured within 30 days of its discovery. The owner discovered it on 2026-10-11. **Cure deadline: 2026-11-10.** This applies only if the files are Adapted Material.
+    - Optional: the owner can ask the upstream copyright holders for other terms (§6(c)). For `inference.py`, those holders include Djshinshin and zbitouzakaria, as well as JusperLee.
+
+### Part 3: executor steps
+
+These steps replace decisions Part 2. Do them in this order. Run `pnpm verify` after each step.
+
+1. Do the local check in Part 1. Stop if you get Result C.
+2. Apply Part 2 to `docs/melomae-srs.md`. Add §11.8, §11.9, and §11.10 from the decisions.
+3. Do decisions step 2 (`deny.toml`) without change. Then change Task 26 scope line 23 from "GPL-3.0-or-later distribution" to "GPL-3.0-only distribution". No allowlist entry changes. Every license that is compatible with GPL-3.0-or-later is also compatible with GPL-3.0-only. This is inferred, not checked license by license.
+4. Add the attribution headers.
+   - In `mod.rs`, replace the local path at lines 3-4 with the upstream link and the commit that Part 1 recorded. Add this to the module doc comment:
+     ```
+     //! Portions of this file translate `resolve_chunking`, `chunk_starts`,
+     //! `crossfade_weights`, and `run_model` from `inference.py` in Apollo
+     //! (https://github.com/JusperLee/Apollo/blob/<commit>/inference.py),
+     //! by Kai Li, Yi Luo, and the Apollo contributors, licensed CC BY-SA 4.0
+     //! (https://creativecommons.org/licenses/by-sa/4.0/). Changes: translated
+     //! from Python to Rust, with batch size one. This file is licensed
+     //! GPL-3.0-only under CC BY-SA 4.0 Section 3(b)(1).
+     ```
+   - In `real_dsp.py`, add this paragraph to the module docstring:
+     ```
+     The forward pass follows the computation of Apollo.spec_band_split,
+     Apollo.feature_extractor, and Apollo.forward in
+     look2hear/models/apollo.py (https://github.com/JusperLee/Apollo), by
+     Kai Li and Yi Luo, licensed CC BY-SA 4.0
+     (https://creativecommons.org/licenses/by-sa/4.0/). Changes: the STFT and
+     iSTFT use real arithmetic, and the three methods are merged into one.
+     This file is licensed GPL-3.0-only under CC BY-SA 4.0 Section 3(b)(1).
+     ```
+5. Relicense to GPL-3.0-only:
+   - `Cargo.toml:8`: set `license = "GPL-3.0-only"`.
+   - `src-tauri/Cargo.toml`: add `license.workspace = true`. Its `description = "A Tauri App"` and `authors = ["you"]` are Tauri template values. Report them to the owner. Do not change them without approval.
+   - `LICENSE` lines 4-5: write "Melomae is licensed under the GNU General Public License, version 3 only. Some files in this repository use other licenses. README.md lists them." Keep the full GPL text below.
+   - `README.md:64`: use the same wording as `LICENSE`.
+   - Task 25 scope (`tasks/mvp/25-add-the-first-run-setup-and-the-attribution-screen.md:25`): change it to GPL-3.0-only.
+   - `tasks/backlog/B-012-offer-optional-hosted-restore.md:17`: change "GPL-3.0-or-later" to "GPL-3.0-only".
+   - `docs/evidence/2026-10-10-pivot.md:11`: do not rewrite this historical record. Add after decision 5: "Superseded on 2026-10-11 by SRS §11.1. The client is GPL-3.0-only."
+   - Then search the repository for "or-later" and "or later". The only allowed hits are the GPL text, tool version requirements, the pivot record, and the Task 35 history.
+6. Add a license section to `README.md` that gives the license of each path. This replaces decisions step 4.
+   - GPL-3.0-only: the Melomae code. `mod.rs` and `real_dsp.py` carry the Apollo attribution.
+   - CC BY-SA 4.0: `models/apollo.onnx`, `tools/export/vendor/`, `fixtures/ori_wav.wav`, and `tools/parity/input_wav.wav`.
+7. Do decisions step 3 (`models/NOTICE.md`) and decisions step 6 (B-012 line) without change.
+8. Run `pnpm verify`. Record in the Task 35 `Outcome`: the Part 1 output, the result (A, B, or C), the gate result, and the cure date 2026-11-10.
+
+### Evidence limits
+
+- This amendment comes from a session that could not read `C:\Lab\Apollo`. Part 1 closes that gap.
+- The upstream history came from the GitHub page for `main` on 2026-10-11. It does not show whether `e84bcac` contains the chunked functions.
+- The 30-day reading of §6(b)(1) comes from the license text that the owner supplied. It applies only if the files are Adapted Material.
+- The `deny.toml` key name (`crate` or `name`) still needs checking against the cargo-deny version that the gate pins.
+
 ## Out of scope
 
 - Legal advice. The author may consult a lawyer. The task records the decision and its sources.
