@@ -1,8 +1,9 @@
 //! Choose the restore chunk size from the memory available at job start.
 //!
 //! SRS §6.4 and §12.3 require that a long file does not exhaust RAM. The peak
-//! inference memory is modeled as a baseline plus a cost per padded
-//! channel-second:
+//! memory of a restore is the whole-file reserve plus the peak inference memory
+//! of one chunk. The inference peak is modeled as a baseline plus a cost per
+//! padded channel-second:
 //!
 //! ```text
 //! peak = PEAK_BASE_BYTES + PEAK_BYTES_PER_CHANNEL_SECOND x (chunk + 2 x pad)
@@ -16,6 +17,10 @@
 //! are fitted on that shipping path. The engine runs one channel at a time
 //! (Stack §C), so a padded second is one padded channel-second. The two values
 //! are decimal bytes (1 GB = 1e9 bytes).
+//!
+//! The whole-file reserve ([`file_reserve_bytes`]) does not depend on the
+//! chunk. The chooser reserves it before it picks a chunk, because the engine
+//! holds whole-file buffers that grow with the file length (review finding B1).
 
 use std::fmt;
 
@@ -42,6 +47,40 @@ pub const PEAK_BASE_BYTES: u64 = 206_745_941;
 /// engine path (task 05).
 pub const PEAK_BYTES_PER_CHANNEL_SECOND: u64 = 541_471_232;
 
+/// The size of one `f32` sample, in bytes.
+const BYTES_PER_SAMPLE: u64 = 4;
+
+/// The frame count and channel count of the file a restore will process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileShape {
+    /// The number of frames in the file.
+    pub frames: u64,
+    /// The number of channels in the file.
+    pub channels: u64,
+}
+
+/// The whole-file buffers a restore holds for a file of this shape, in bytes.
+///
+/// The chunked engine (`run_chunked`) allocates two buffers the length
+/// of the file, `output_sum` (`inference/mod.rs:362`) and `weight_sum` (`:363`),
+/// and one more for the normalized channel (`:411`). It also keeps every
+/// finished channel in the restore accumulator (`:467`). While the last channel
+/// is normalized, the engine holds `(channels + 2) x frames` samples of `f32`.
+/// The caller holds the decoded input as well, `channels x frames` samples of
+/// `f32`. The reserve is the sum:
+///
+/// ```text
+/// reserve = (2 x channels + 2) x frames x 4 bytes
+/// ```
+///
+/// This confirms the reviewer's engine estimate of `(channels + 2) x frames x 4`
+/// bytes and adds the decoded input, which is resident by the time a chunk runs.
+/// The reserve does not depend on the chunk. It does not count the ONNX
+/// allocations or the per-chunk tensors, which the inference peak covers.
+pub fn file_reserve_bytes(shape: FileShape) -> u64 {
+    (2 * shape.channels + 2) * shape.frames * BYTES_PER_SAMPLE
+}
+
 /// The chunk the chooser picks, with the memory numbers behind it.
 ///
 /// A caller logs this with its [`Display`](fmt::Display) implementation
@@ -50,20 +89,37 @@ pub const PEAK_BYTES_PER_CHANNEL_SECOND: u64 = 541_471_232;
 pub struct ChunkBudget {
     /// The chosen chunk length, in whole seconds.
     pub chunk_seconds: u64,
+    /// The whole-file reserve for this file, in bytes ([`file_reserve_bytes`]).
+    pub reserve_bytes: u64,
     /// The predicted peak memory of one padded chunk, in bytes.
     pub predicted_peak_bytes: u64,
-    /// The share of the available memory the peak may use, in bytes.
+    /// The share of the available memory the restore may use, in bytes.
     pub budget_bytes: u64,
     /// The memory available when the chooser ran, in bytes.
     pub available_bytes: u64,
+}
+
+impl ChunkBudget {
+    /// The whole-file reserve plus the predicted inference peak, in bytes.
+    ///
+    /// This is the total the restore may hold against the budget.
+    pub fn total_bytes(&self) -> u64 {
+        self.reserve_bytes + self.predicted_peak_bytes
+    }
 }
 
 impl fmt::Display for ChunkBudget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "chunk {}s: predicted peak {} bytes, budget {} bytes, available {} bytes",
-            self.chunk_seconds, self.predicted_peak_bytes, self.budget_bytes, self.available_bytes
+            "chunk {}s: reserve {} bytes, predicted inference peak {} bytes, total {} bytes, \
+             budget {} bytes, available {} bytes",
+            self.chunk_seconds,
+            self.reserve_bytes,
+            self.predicted_peak_bytes,
+            self.total_bytes(),
+            self.budget_bytes,
+            self.available_bytes
         )
     }
 }
@@ -77,30 +133,37 @@ pub fn predicted_peak_bytes(chunk_seconds: u64) -> u64 {
     PEAK_BASE_BYTES + PEAK_BYTES_PER_CHANNEL_SECOND * (chunk_seconds + 2 * PAD_SECONDS)
 }
 
-/// The largest chunk in the allowed range whose predicted peak fits the budget.
+/// The largest chunk in the allowed range whose reserve and predicted peak fit
+/// the budget.
 ///
 /// Returns `None` when even [`MIN_CHUNK_SECONDS`] does not fit.
-pub fn largest_chunk_within(budget_bytes: u64) -> Option<u64> {
+pub fn largest_chunk_within(budget_bytes: u64, reserve_bytes: u64) -> Option<u64> {
     (MIN_CHUNK_SECONDS..=MAX_CHUNK_SECONDS)
         .rev()
-        .find(|chunk| predicted_peak_bytes(*chunk) <= budget_bytes)
+        .find(|chunk| reserve_bytes + predicted_peak_bytes(*chunk) <= budget_bytes)
 }
 
 /// Choose a chunk from the memory available at job start.
 ///
-/// The budget is one [`BUDGET_DIVISOR`]th of the available memory. The pure
-/// function takes the available memory as an argument, so a caller can inject
-/// it. The wrapper [`choose_chunk_for_machine`] reads it from the system.
-pub fn choose_chunk(available_bytes: u64) -> Result<ChunkBudget, InferenceError> {
+/// The budget is one [`BUDGET_DIVISOR`]th of the available memory. The chooser
+/// reserves the file's whole-file buffers ([`file_reserve_bytes`]) and picks the
+/// largest chunk whose reserve plus predicted inference peak fits the budget.
+/// The pure function takes the available memory and the file shape as
+/// arguments, so a caller can inject them. The wrapper
+/// [`choose_chunk_for_machine`] reads the memory from the system.
+pub fn choose_chunk(available_bytes: u64, shape: FileShape) -> Result<ChunkBudget, InferenceError> {
     let budget_bytes = available_bytes / BUDGET_DIVISOR;
-    let Some(chunk_seconds) = largest_chunk_within(budget_bytes) else {
+    let reserve_bytes = file_reserve_bytes(shape);
+    let Some(chunk_seconds) = largest_chunk_within(budget_bytes, reserve_bytes) else {
         return Err(InferenceError::InsufficientMemory {
-            needed: predicted_peak_bytes(MIN_CHUNK_SECONDS),
+            needed: reserve_bytes + predicted_peak_bytes(MIN_CHUNK_SECONDS),
+            budget: budget_bytes,
             available: available_bytes,
         });
     };
     Ok(ChunkBudget {
         chunk_seconds,
+        reserve_bytes,
         predicted_peak_bytes: predicted_peak_bytes(chunk_seconds),
         budget_bytes,
         available_bytes,
@@ -110,10 +173,10 @@ pub fn choose_chunk(available_bytes: u64) -> Result<ChunkBudget, InferenceError>
 /// Read the memory available on this machine and choose a chunk.
 ///
 /// The pipeline calls this once at job start (task 05 scope 2).
-pub fn choose_chunk_for_machine() -> Result<ChunkBudget, InferenceError> {
+pub fn choose_chunk_for_machine(shape: FileShape) -> Result<ChunkBudget, InferenceError> {
     let mut system = sysinfo::System::new();
     system.refresh_memory();
-    choose_chunk(system.available_memory())
+    choose_chunk(system.available_memory(), shape)
 }
 
 #[cfg(test)]

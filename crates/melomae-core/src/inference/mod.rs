@@ -128,8 +128,12 @@ pub enum InferenceError {
     UncoveredOutput,
     /// Even the smallest chunk does not fit the memory budget.
     InsufficientMemory {
-        /// The peak the smallest chunk needs, in bytes.
+        /// The total the restore needs: the whole-file reserve plus the peak of
+        /// the smallest chunk, in bytes.
         needed: u64,
+        /// The memory the restore may use: half of the available memory, in
+        /// bytes.
+        budget: u64,
         /// The memory available at job start, in bytes.
         available: u64,
     },
@@ -157,10 +161,14 @@ impl std::fmt::Display for InferenceError {
             Self::UncoveredOutput => {
                 write!(f, "the chunk overlap-add left uncovered output samples")
             }
-            Self::InsufficientMemory { needed, available } => write!(
+            Self::InsufficientMemory {
+                needed,
+                budget,
+                available,
+            } => write!(
                 f,
-                "the smallest chunk needs at least {needed} bytes of memory, but only \
-                 {available} bytes are available"
+                "the restore needs at least {needed} bytes, more than the {budget}-byte budget, \
+                 which is half of the {available} bytes available"
             ),
             Self::Model(reason) => write!(f, "the model failed: {reason}"),
             Self::Io(reason) => write!(f, "{reason}"),
