@@ -323,4 +323,65 @@ mod tests {
             assert!(starts.len() >= 3, "too few starts for span {span}");
         }
     }
+
+    #[test]
+    fn analysis_starts_stay_within_the_position_budget() {
+        let window = 8192usize;
+        let hop = window / 2;
+        let rate = 44_100usize;
+
+        // Short spans, spans around the grid cap, and three ordinary track lengths.
+        let mut cases = vec![
+            window,
+            window + hop / 2,
+            window + hop,
+            window + 3 * hop,
+            window + (MAX_POSITIONS - 2) * hop,
+            window + (MAX_POSITIONS - 1) * hop,
+            window + MAX_POSITIONS * hop,
+            window + (MAX_POSITIONS + 1) * hop,
+        ];
+        for seconds in [12usize, 30, 240] {
+            cases.push(rate * seconds);
+        }
+
+        for frames in cases {
+            let span = frames - window;
+            let starts = analysis_starts(frames, window);
+
+            let mut sorted = starts.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(
+                sorted, starts,
+                "the starts are not sorted and unique for {frames} frames"
+            );
+            assert!(
+                starts.iter().all(|start| *start <= span),
+                "a start is past the last valid start for {frames} frames"
+            );
+            assert!(
+                starts.len() <= MAX_POSITIONS,
+                "{frames} frames: {} starts exceeds the {MAX_POSITIONS} budget",
+                starts.len()
+            );
+
+            if span == 0 {
+                assert_eq!(starts, vec![0], "a zero span must use one start");
+                continue;
+            }
+            assert!(
+                starts.contains(&0),
+                "the first start is missing for {frames} frames"
+            );
+            assert!(
+                starts.contains(&span),
+                "the last start is missing for {frames} frames"
+            );
+            assert!(
+                starts.contains(&(span / 2)),
+                "the central start is missing for {frames} frames"
+            );
+        }
+    }
 }
