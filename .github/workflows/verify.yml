@@ -46,6 +46,14 @@ jobs:
           path: .cache/onnxruntime
           key: onnxruntime-${{ runner.os }}-v1.28.3
 
+      # The pinned cargo-deny (task 26). `pnpm verify` runs tools/cargo_deny.py, which
+      # downloads it on a cache miss.
+      - name: Cache the pinned cargo-deny
+        uses: actions/cache@v4
+        with:
+          path: .cache/cargo-deny
+          key: cargo-deny-${{ runner.os }}-0.20.2
+
       - name: Install Linux system dependencies
         if: matrix.os == 'ubuntu-22.04'
         run: |
