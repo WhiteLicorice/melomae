@@ -104,6 +104,7 @@ The validator rejects any other status value.
 | 07 | [Add the restore command-line entry](mvp/07-add-the-restore-command-line-entry.md) | TODO | 04, 05, 06, 33 |
 | 08 | [Add GPU execution with CPU fallback](mvp/08-add-gpu-execution-with-cpu-fallback.md) | TODO | 07 |
 | 33 | [Load ONNX Runtime dynamically for the glibc 2.35 baseline](mvp/33-load-onnx-runtime-dynamically-on-linux.md) | DONE | 04 |
+| 34 | [Make test temporary directories unique](mvp/34-make-test-temporary-directories-unique.md) | TODO | 03 |
 
 ## Phase 2 — Metadata, triage, and provenance
 
