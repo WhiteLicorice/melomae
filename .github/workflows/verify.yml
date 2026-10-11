@@ -14,6 +14,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The model and the parity inputs are in Git LFS. Checkout does not fetch
+      # them, so list them, restore `.git/lfs` from the cache, then pull. The
+      # cache key changes only when the committed LFS objects change, so CI
+      # spends LFS bandwidth on a cache miss only.
+      - name: Write the Git LFS object list
+        run: git lfs ls-files --long > .git/lfs-objects.txt
+
+      - name: Cache the Git LFS objects
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ runner.os }}-${{ hashFiles('.git/lfs-objects.txt') }}
+
+      - name: Fetch the Git LFS objects
+        run: git lfs pull
+
       # The pinned ffmpeg for the decode tests. `pnpm verify` runs tools/fetch_ffmpeg.py, which
       # downloads it on a cache miss. Do not use apt or choco ffmpeg: the versions differ.
       - name: Cache the pinned ffmpeg
