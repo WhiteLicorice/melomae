@@ -48,14 +48,27 @@ pub struct TempDir {
 
 impl TempDir {
     /// Create a fresh unique temporary directory.
+    ///
+    /// The name carries the process id, the time stamp, and a process-wide counter. The counter
+    /// makes every call distinct, even when two tests read the clock in the same 100 ns step. The
+    /// directory is created with `create_dir`, so a repeated name fails instead of reusing a
+    /// directory that another test will remove.
     pub fn new(prefix: &str) -> TempDir {
+        use std::sync::atomic::{AtomicU64, Ordering};
         use std::time::{SystemTime, UNIX_EPOCH};
+
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!("{prefix}-{}-{stamp}", std::process::id()));
-        fs::create_dir_all(&path).expect("create the temporary directory");
+        let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "{prefix}-{}-{stamp}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir(&path).expect("create the temporary directory");
         TempDir { path }
     }
 

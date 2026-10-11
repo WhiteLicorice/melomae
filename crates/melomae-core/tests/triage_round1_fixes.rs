@@ -25,13 +25,18 @@ struct TempDb {
 
 impl TempDb {
     fn new(tag: &str) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut path = std::env::temp_dir();
         path.push(format!(
-            "melomae-fix16-{tag}-{}-{nanos}.db",
+            "melomae-fix16-{tag}-{}-{nanos}-{sequence}.db",
             std::process::id()
         ));
         Self { path }
