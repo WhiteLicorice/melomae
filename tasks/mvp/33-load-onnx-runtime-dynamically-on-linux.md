@@ -1,13 +1,13 @@
 # 33 — Load ONNX Runtime dynamically for the glibc 2.35 baseline
 
-**Status:** TODO
+**Status:** DONE
 **Phase:** 1 — Restoration engine
 **Depends on:** 04
 **SRS:** §2
 **Stack:** §C, §J
 **Assigned to:** Agent
-**Started:** —
-**Outcome:** —
+**Started:** 2026-10-11 — Base commit ac9a07c, clean tree, `git lfs pull` in the worktree. Baseline gate at ac9a07c: board 57 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 144 passed, pytest 14 passed.
+**Outcome:** DONE 2026-10-11. `melomae-core` loads ONNX Runtime at run time and links no prebuilt runtime, so the glibc 2.35 baseline of SRS §2 holds. `ort` is pinned at 2.0.0-rc.13 with `default-features = false` and `features = ["load-dynamic", "api-27"]`. `inference::init_runtime(&Path)` loads the runtime once per process from a caller-given library path and returns `InferenceError::Runtime` for a missing or wrong library, never a panic. `inference::load_onnx_backend(runtime_library, model)` initializes the runtime and then loads `apollo.onnx`; the app passes its resource paths. `tools/fetch_onnxruntime.py` pins one Microsoft release and `pnpm verify` runs it before the tests. Release: ONNX Runtime v1.28.3, whose C API matches the pinned `ort` (`ort` v2.0.0 uses ONNX Runtime 1.28.0; `MINOR_VERSION` is 27). SHA-256: `onnxruntime-linux-x64-1.28.3.tgz` `db14e4863bd37893fc59729d986ab2a0d043d10b7d44da1913c4982b7e3d009c` and `onnxruntime-win-x64-1.28.3.zip` `1d6fab48e85f948436af7c8c971d2c145cf224e2c444755dec894f8b0de11a83`. Both hashes matched the GitHub release digests on download. glibc requirement: the newest versioned glibc symbol of `libonnxruntime.so.1.28.3` is `GLIBC_2.27`, read from the ELF version-need table; it holds no `__isoc23_*` symbol and needs libstdc++ up to `GLIBCXX_3.4.21`. Ubuntu 22.04 has glibc 2.35 and a newer libstdc++, so both are satisfied. The pyke.io binary that `ort`'s default features download needs `__isoc23_strtol`, `__isoc23_strtoll`, and `__isoc23_strtoull` (glibc 2.38 and later), which is the link failure the dynamic load removes. Red-first: `cargo test -p melomae-core inference` failed with `unresolved import melomae_core::inference::init_runtime`, a `load_onnx_backend` arity error, and a missing `InferenceError::Runtime` variant before the change. Finding: ONNX Runtime 2.0.0-rc.13 marks its dylib slot as used even when a load fails, so a second `init_from` in one process reads a garbage handle and later panics; `init_runtime` checks the path with `is_file()` before it reaches `ort`, and the missing-path tests return before `ort` is touched. Gate: `pnpm verify` exit 0. Board 57 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 148 passed, pytest 19 passed. The cargo count adds the four new Rust tests, and the pytest count adds the five new fetch-script tests. Not confirmed here: the hosted CI. Only the `ubuntu-22.04` job can prove the Linux link and run; the orchestrator pushes the branch to trigger it. Evidence: `SCRATCH/evidence-33/`.
 
 ## Goal
 
@@ -42,9 +42,9 @@ Make the inference engine build and run on Linux with glibc 2.35, as SRS §2 req
 ## Acceptance criteria
 
 - [ ] Hosted CI passes on `ubuntu-22.04` and `windows-latest` with the parity test running on both.
-- [ ] `Outcome` records the ONNX Runtime release, its SHA-256 values, and its glibc requirement.
-- [ ] The new tests failed first for the expected reason.
-- [ ] `pnpm verify` passes.
+- [x] `Outcome` records the ONNX Runtime release, its SHA-256 values, and its glibc requirement.
+- [x] The new tests failed first for the expected reason.
+- [x] `pnpm verify` passes.
 
 ## Verify
 
