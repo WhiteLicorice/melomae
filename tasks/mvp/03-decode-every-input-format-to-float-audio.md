@@ -7,7 +7,7 @@
 **Stack:** §D
 **Assigned to:** Agent
 **Started:** fd62a4e, clean tree. Baseline gate at fd62a4e: board 45 records, unittest 9 passed, Vitest 1 passed, cargo test 1 passed, pytest 8 passed.
-**Outcome:** DONE. `melomae_core::decode` decodes MP3, AAC/M4A, Opus (Ogg and WebM), Vorbis, FLAC, ALAC, WAV, and AIFF to planar f32 at 44.1 kHz. Crates: symphonia 0.6.1 (demux and non-Opus codecs), opusic-c 1.6.1 / opusic-sys 0.7.5 (libopus 1.6.1, vendored source), rubato 5.0.1. Measured: every fixture length equals the ffmpeg reference (1 sample, Opus 1 ms); the 48 kHz Opus decode sits within max |diff| 1.5e-5 of the conda libopus 1.6.1 reference (tolerance 1e-4); the resampled 1 kHz tone gives THD+N −136.0 dB; the analytic 20 Hz–20 kHz sweep scores SNR 105.8 dB; the ffmpeg swr comparison reads 105.7 dB and is recorded, not gated. Fix round 1 resolved the eight review findings (F1–F8), including F7 (mapped multichannel Opus) and F8 (a 20 kHz gate). Fix round 2 resolved the five blocking findings (B1–B5) and three required gaps (C1–C3): a truncated stream is a typed error unless a Matroska structural scan proves a valid end; the `OpusHead` output gain is applied once; the MP4 edit list is selected by `tkhd` and a repeated, discontinuous, or non-unit-rate sequence is a typed `UnsupportedFormat` error; the Matroska scanner is bounded to the physical file and the nearest finite ancestor with a block-table budget; and the Opus mapping families are scoped with a version check. Supported Opus mappings: family 0, family 1, and family 255 up to eight channels whose stream and coupled counts sum to no more than the channel count; other legal headers return `UnsupportedFormat`. `cargo test -p melomae-core` passes 55 lib, 4 e2e, 9 format, 1 dependency, 8 round-1, 2 round-2, and 8 store tests; `cargo clippy -p melomae-core --all-targets -- -D warnings` and `cargo fmt --all -- --check` are clean. These are local counts; the fix-round-2 `pnpm verify` gate counts are recorded here after it runs. See Outcome detail.
+**Outcome:** DONE. `melomae_core::decode` decodes MP3, AAC/M4A, Opus (Ogg and WebM), Vorbis, FLAC, ALAC, WAV, and AIFF to planar f32 at 44.1 kHz. Crates: symphonia 0.6.1 (demux and non-Opus codecs), opusic-c 1.6.1 / opusic-sys 0.7.5 (libopus 1.6.1, vendored source), rubato 5.0.1. Measured: every fixture length equals the ffmpeg reference (1 sample, Opus 1 ms); the 48 kHz Opus decode sits within max |diff| 1.5e-5 of the conda libopus 1.6.1 reference (tolerance 1e-4); the resampled 1 kHz tone gives THD+N −136.0 dB; the analytic 20 Hz–20 kHz sweep scores SNR 105.8 dB; the ffmpeg swr comparison reads 105.7 dB and is recorded, not gated. Fix round 1 resolved the eight review findings (F1–F8), including F7 (mapped multichannel Opus) and F8 (a 20 kHz gate). Fix round 2 resolved the five blocking findings (B1–B5) and three required gaps (C1–C3): a truncated stream is a typed error unless a Matroska structural scan proves a valid end; the `OpusHead` output gain is applied once; the MP4 edit list is selected by `tkhd` and a repeated, discontinuous, or non-unit-rate sequence is a typed `UnsupportedFormat` error; the Matroska scanner is bounded to the physical file and the nearest finite ancestor with a block-table budget; and the Opus mapping families are scoped with a version check. Supported Opus mappings: family 0, family 1, and family 255 up to eight channels whose stream and coupled counts sum to no more than the channel count; other legal headers return `UnsupportedFormat`. `cargo test -p melomae-core` passes 55 lib, 4 e2e, 9 format, 1 dependency, 8 round-1, 2 round-2, and 8 store tests; `cargo clippy -p melomae-core --all-targets -- -D warnings` and `cargo fmt --all -- --check` are clean. These are local counts. Fix-round-2 gate `pnpm verify` exit 0 (`SCRATCH/evidence-03/verify-round2.txt`, ending `EXIT=0`): fetch_ffmpeg ok; board 47 records valid; Python unittest 9 passed; tsc and eslint ok; Vitest 1 passed; vite build ok; `cargo fmt --check` clean; `cargo clippy --workspace -- -D warnings` clean; `cargo test --workspace` 87 passed, 0 failed (55 lib, 4 e2e, 9 format, 1 dependency, 8 round-1, 2 round-2, 1 store e2e, 2 store recovery, 5 store regressions); pytest 13 passed, 1 pre-existing FutureWarning. See Outcome detail.
 
 ## Goal
 
@@ -103,6 +103,23 @@ multistream decoder, the `OpusHead` mapping is validated, and a bad header retur
 F8: the analytic gate trims only the measured stop transient and requires the scored band to reach
 19.9 kHz, and a steady 20 kHz tone gate scores 100.4 dB. Each finding has a red run saved before
 its fix.
+
+Fix round 2 (2026-10-10) resolved the five blocking findings and three gaps. B1: `UnexpectedEof` is
+an error by default, accepted as a clean end only when the Matroska scanner proved the stream ends
+at a valid boundary; the live-WebM acceptance is pinned to 288000 frames. B2: the scanner records
+the physical file length once and bounds every header and body against the file and the nearest
+finite ancestor, checks each block-header read against the block end, accepts a physical end of file
+only under an unknown-size master, and refuses a block table past its budget. B3: the Opus mapping
+families are scoped to 0, 1, and 255 within the backend's eight-channel limit, the parser enforces
+the RFC limit N + M <= 255, and the version's upper four bits are validated; a legal header outside
+the scope returns `UnsupportedFormat` naming the family, the channel count, and the stream counts.
+B4: the signed Q7.8 `OpusHead` output gain is applied once as a float scale, with no clipping. B5
+and C1: the MP4 edit-list reader takes the selected track ID, matches `tkhd`, parses `media_rate`,
+and returns `Result<Option<EditListTrim>, DecodeError>`; initial empty edits followed by one
+contiguous unit-rate media range are accepted, and a repeated, discontinuous, or non-unit-rate
+sequence is a typed `UnsupportedFormat` error. C2: `AudioBuffer::channels` documents the codec's
+native (Vorbis) channel order, and the six-channel test checks the fixed expected permutation. C3:
+the steady 20 kHz tone test uses the measured 96-frame margin.
 
 ## Verify
 
