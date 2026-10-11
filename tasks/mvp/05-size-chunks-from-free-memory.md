@@ -1,13 +1,13 @@
 # 05 — Size chunks from free memory
 
-**Status:** TODO
+**Status:** DONE
 **Phase:** 1 — Restoration engine
 **Depends on:** 04
 **SRS:** §6, §12
 **Stack:** §C, §K
 **Assigned to:** Agent
-**Started:** —
-**Outcome:** —
+**Started:** 2026-10-11 — Base commit `af021d8`, clean tree. Baseline gate at the merged task 04 tree: board 56 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 144 passed, pytest 14 passed.
+**Outcome:** DONE 2026-10-11. `inference::chunk_budget` picks the largest chunk in 4 s to 30 s whose predicted peak fits half the available memory. `choose_chunk` is pure and takes the available memory, so the tests inject it. `choose_chunk_for_machine` reads the memory with `sysinfo` 0.39.6, license MIT. The peak is `206,745,941 bytes + 541,471,232 bytes x (chunk + 2 x pad)`, fitted on the shipping engine path. The result type carries the chunk, the predicted peak, the budget, and the available memory, and its `Display` names all four for the job log. Task 05 found that the ONNX Runtime CPU memory arena grew the peak from about 11 GB after the first chunk to 22 GB after the last on a 60 s input, so the engine now loads the session with the arena off and the memory pattern off (`OnnxOptions`). The runtime is ONNX Runtime 1.28.0, from `ort-sys` 2.0.0-rc.13. Task 01 used 1.30.0. Diagnosis, chunk 17 s on the 60 s input, one-channel prediction 11,380,000,000 B: (a) stereo arena on, peak 22,318,972,928 B, +96.1 percent; (b) stereo arena off, peak 10,493,063,168 B, -7.8 percent; (c) mono arena on, peak 22,299,820,032 B, +95.9 percent. The arena-off peak is flat after the first chunk. Mono doubles too, so the growth is per run, not per channel. Real-time factor on the 6 s parity input: 2.5289 arena off against 2.3903 arena on, +5.8 percent, under the 10 percent limit. Fit points on the shipping path (chunk, padded seconds, measured, fit): 4 s, 6, 3,456,028,672, 3,455,573,333; 8 s, 10, 5,620,547,584, 5,621,458,261; 12 s, 14, 7,787,798,528, 7,787,343,189. R squared 1.000000. Acceptance, 60 s input with the new chooser: chunk 9 s, available 13,398,614,016 B, budget 6,699,307,008 B, predicted 6,162,929,493 B, measured 6,161,948,672 B, error -0.02 percent. With the calibrated model the injected 2 GiB and 4 GiB cases are below the floor and fail with the memory message; the 8 GiB and 16 GiB cases pick 5 s and 13 s. Gate: `pnpm verify` exit 0. Board 56 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 150 passed and 2 ignored, pytest 14 passed. Evidence: `SCRATCH/evidence-05/`. Task 33 replaces the ONNX Runtime build with a pinned official release. The orchestrator re-runs the 60 s measurement on the merged tree after both tasks merge.
 
 ## Goal
 
@@ -41,9 +41,9 @@ Run the tests. They fail because the function does not exist.
 
 ## Acceptance criteria
 
-- [ ] A restore of a 60 s fixture peaks within ±15% of the predicted value. The numbers are in `Outcome`.
-- [ ] The new tests failed first for the expected reason.
-- [ ] `pnpm verify` passes.
+- [x] A restore of a 60 s fixture peaks within ±15% of the predicted value. The numbers are in `Outcome`.
+- [x] The new tests failed first for the expected reason.
+- [x] `pnpm verify` passes.
 
 ## Verify
 
