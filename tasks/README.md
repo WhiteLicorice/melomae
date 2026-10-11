@@ -184,5 +184,11 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 | B-012 | [Offer optional hosted restore](backlog/B-012-offer-optional-hosted-restore.md) | TODO | 17 |
 | B-013 | [Check the losing error in the competing-transition test](backlog/B-013-check-the-losing-error-in-the-competing-transition-test.md) | TODO | 14 |
 | B-014 | [Make the gate independent of NODE_ENV](backlog/B-014-make-the-gate-independent-of-node-env.md) | TODO | 00 |
+| B-015 | [Test padded audio in laced Matroska blocks](backlog/B-015-test-padded-audio-in-laced-matroska-blocks.md) | TODO | 03 |
+| B-016 | [Detect truncated MP3 files without a frame-count header](backlog/B-016-detect-truncated-mp3-files-without-a-frame-count-header.md) | TODO | 03 |
+| B-017 | [Support Opus mapping family 255 and unassigned channels](backlog/B-017-support-opus-mapping-family-255-and-unassigned-channels.md) | TODO | 03 |
+| B-018 | [Terminate Matroska masters at root and new-document boundaries](backlog/B-018-terminate-matroska-masters-at-root-and-new-document-boundaries.md) | TODO | 03 |
+| B-019 | [Test packet loss and decoder error paths](backlog/B-019-test-packet-loss-and-decoder-error-paths.md) | TODO | 03 |
+| B-020 | [Measure the upper band at high input rates](backlog/B-020-measure-the-upper-band-at-high-input-rates.md) | TODO | 03 |
 
 Each backlog record states why it does not block the MVP. Each record also states its promotion condition.

@@ -24,3 +24,9 @@ Do not place a defect that blocks an MVP user journey here. Put that task in `ta
 | B-012 | [Offer optional hosted restore](B-012-offer-optional-hosted-restore.md) |
 | B-013 | [Check the losing error in the competing-transition test](B-013-check-the-losing-error-in-the-competing-transition-test.md) |
 | B-014 | [Make the gate independent of NODE_ENV](B-014-make-the-gate-independent-of-node-env.md) |
+| B-015 | [Test padded audio in laced Matroska blocks](B-015-test-padded-audio-in-laced-matroska-blocks.md) |
+| B-016 | [Detect truncated MP3 files without a frame-count header](B-016-detect-truncated-mp3-files-without-a-frame-count-header.md) |
+| B-017 | [Support Opus mapping family 255 and unassigned channels](B-017-support-opus-mapping-family-255-and-unassigned-channels.md) |
+| B-018 | [Terminate Matroska masters at root and new-document boundaries](B-018-terminate-matroska-masters-at-root-and-new-document-boundaries.md) |
+| B-019 | [Test packet loss and decoder error paths](B-019-test-packet-loss-and-decoder-error-paths.md) |
+| B-020 | [Measure the upper band at high input rates](B-020-measure-the-upper-band-at-high-input-rates.md) |
