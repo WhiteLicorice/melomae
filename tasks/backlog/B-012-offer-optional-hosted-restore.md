@@ -14,7 +14,9 @@ The MVP is free and local (SRS §2.4). The `RestoreBackend` trait (task 04) leav
 
 ## Expected behavior
 
-The user chooses local or hosted restore for a batch. The app shows the cost before upload. The hosted backend is closed source. The client stays GPL-3.0-or-later. Licensing notes are in `docs/evidence/2026-10-10-pivot.md`.
+The user chooses local or hosted restore for a batch. The app shows the cost before upload. The hosted backend is closed source. The client stays GPL-3.0-only. Licensing notes are in `docs/evidence/2026-10-10-pivot.md`.
+
+SRS §11.10 records the license terms for hosted use of the model.
 
 ## Promotion condition
 

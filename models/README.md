@@ -34,6 +34,9 @@ The Apollo code and weights use CC BY-SA 4.0. The repository `LICENSE` file and
 the Hugging Face model card both state that license. There is no NonCommercial
 term.
 
+CC BY-SA 4.0 Section 5 offers the model as-is and disclaims warranties. The
+model comes with no warranty.
+
 Melomae does not imply that the Apollo authors, Tsinghua University, or Tencent
 AI Lab endorse Melomae.
 
