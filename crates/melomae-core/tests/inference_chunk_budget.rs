@@ -153,9 +153,9 @@ fn e2e_chunk_budget_feeds_the_restore_engine() {
     let audio = decode_file(&path).expect("decode the stereo fixture");
     let channels = audio.channels().to_vec();
 
-    // 16 GiB selects a 12 s chunk, so the 13 s file needs two chunks.
-    let budget = choose_chunk(16 * GIB).expect("16 GiB must fit a chunk");
-    assert_eq!(budget.chunk_seconds, 12);
+    // 8 GiB selects a 5 s chunk, so the 13 s file needs three chunks.
+    let budget = choose_chunk(8 * GIB).expect("8 GiB must fit a chunk");
+    assert_eq!(budget.chunk_seconds, 5);
 
     let settings = RestoreSettings {
         chunk_seconds: Some(budget.chunk_seconds as f64),

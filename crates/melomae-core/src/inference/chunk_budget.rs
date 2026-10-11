@@ -1,16 +1,21 @@
 //! Choose the restore chunk size from the memory available at job start.
 //!
 //! SRS §6.4 and §12.3 require that a long file does not exhaust RAM. The peak
-//! inference memory is modeled from the task 01 measurement
-//! (`docs/evidence/01-onnx-spike.md:147`):
+//! inference memory is modeled as a baseline plus a cost per padded
+//! channel-second:
 //!
 //! ```text
-//! peak = 0.36 GB + 0.58 GB x (chunk + 2 x pad)
+//! peak = PEAK_BASE_BYTES + PEAK_BYTES_PER_CHANNEL_SECOND x (chunk + 2 x pad)
 //! ```
 //!
-//! The engine runs one channel at a time (Stack §C), so the channel-second
-//! count is the padded length of one chunk. Task 01 measured the peak working
-//! set, so the two values are decimal units (1 GB = 1e9 bytes).
+//! Task 01 first fitted `0.36 GB + 0.58 GB x channel-seconds` on a single
+//! session run. Task 05 measured the real engine and found that the ONNX
+//! Runtime CPU memory arena grew the peak across chunks, from about 11 GB after
+//! the first chunk to 22 GB after the last on a 60 s input. The engine now
+//! turns the arena off (see `inference::OnnxOptions`), and the constants below
+//! are fitted on that shipping path. The engine runs one channel at a time
+//! (Stack §C), so a padded second is one padded channel-second. The two values
+//! are decimal bytes (1 GB = 1e9 bytes).
 
 use std::fmt;
 
@@ -30,11 +35,12 @@ pub const PAD_SECONDS: u64 = 1;
 /// (task 05 scope 3).
 pub const BUDGET_DIVISOR: u64 = 2;
 
-/// The peak baseline, in bytes, from task 01.
-pub const PEAK_BASE_BYTES: u64 = 360_000_000;
+/// The peak baseline, in bytes, fitted on the shipping engine path (task 05).
+pub const PEAK_BASE_BYTES: u64 = 206_745_941;
 
-/// The peak growth per padded channel-second, in bytes, from task 01.
-pub const PEAK_BYTES_PER_CHANNEL_SECOND: u64 = 580_000_000;
+/// The peak growth per padded channel-second, in bytes, fitted on the shipping
+/// engine path (task 05).
+pub const PEAK_BYTES_PER_CHANNEL_SECOND: u64 = 541_471_232;
 
 /// The chunk the chooser picks, with the memory numbers behind it.
 ///
@@ -64,8 +70,9 @@ impl fmt::Display for ChunkBudget {
 
 /// The predicted peak inference memory of one padded chunk, in bytes.
 ///
-/// The model is the task 01 line: a baseline plus a fixed cost per padded
-/// channel-second, with both pads counted (task 05 scope 1).
+/// The model is a baseline plus a fixed cost per padded channel-second, with
+/// both pads counted (task 05 scope 1). The constants are fitted on the
+/// shipping engine path (task 05).
 pub fn predicted_peak_bytes(chunk_seconds: u64) -> u64 {
     PEAK_BASE_BYTES + PEAK_BYTES_PER_CHANNEL_SECOND * (chunk_seconds + 2 * PAD_SECONDS)
 }
@@ -119,8 +126,8 @@ mod tests {
     #[test]
     fn chunk_budget_chooses_the_largest_chunk_that_fits() {
         let cases = [
-            (8 * GIB, 4u64),
-            (16 * GIB, 12),
+            (8 * GIB, 5u64),
+            (16 * GIB, 13),
             (64 * GIB, MAX_CHUNK_SECONDS),
         ];
         for (available, expected) in cases {
@@ -168,9 +175,9 @@ mod tests {
     #[test]
     fn chunk_budget_display_names_the_chunk_and_the_numbers() {
         let budget = choose_chunk(16 * GIB).expect("the memory must fit a chunk");
-        assert_eq!(budget.chunk_seconds, 12);
+        assert_eq!(budget.chunk_seconds, 13);
         let text = budget.to_string();
-        assert!(text.contains("12"), "the chunk must show: {text}");
+        assert!(text.contains("13"), "the chunk must show: {text}");
         assert!(
             text.contains(&budget.predicted_peak_bytes.to_string()),
             "the predicted peak must show: {text}"
@@ -187,13 +194,35 @@ mod tests {
 
     #[test]
     fn predicted_peak_grows_per_padded_channel_second() {
-        // The task 01 line, with both pads counted.
-        assert_eq!(predicted_peak_bytes(4), 3_840_000_000);
-        assert_eq!(predicted_peak_bytes(6), 5_000_000_000);
-        assert_eq!(predicted_peak_bytes(30), 18_920_000_000);
+        // The fitted line, with both pads counted.
+        assert_eq!(predicted_peak_bytes(4), 3_455_573_333);
+        assert_eq!(predicted_peak_bytes(8), 5_621_458_261);
+        assert_eq!(predicted_peak_bytes(12), 7_787_343_189);
+        assert_eq!(predicted_peak_bytes(30), 17_533_825_365);
         assert_eq!(
             predicted_peak_bytes(10) - predicted_peak_bytes(9),
             PEAK_BYTES_PER_CHANNEL_SECOND
         );
+    }
+
+    #[test]
+    fn predicted_peak_matches_the_measured_engine_peaks() {
+        // The peaks task 05 measured on the shipping path (arena off), on a
+        // 60 s stereo input at chunk 4, 8, and 12 seconds
+        // (`SCRATCH/evidence-05/probe-fit.txt`). The fit uses these points, so
+        // the model must reproduce each within the 15% acceptance band.
+        let measured = [
+            (4u64, 3_456_028_672u64),
+            (8, 5_620_547_584),
+            (12, 7_787_798_528),
+        ];
+        for (chunk, peak) in measured {
+            let predicted = predicted_peak_bytes(chunk);
+            let error = (predicted as f64 - peak as f64) / peak as f64;
+            assert!(
+                error.abs() <= 0.15,
+                "chunk {chunk}s: predicted {predicted} against measured {peak} is {error:.4}"
+            );
+        }
     }
 }

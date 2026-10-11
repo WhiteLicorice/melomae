@@ -14,23 +14,17 @@ use super::{InferenceError, Model, MODEL_INPUT, MODEL_OUTPUT};
 
 /// The session options the engine builds a model session with.
 ///
-/// The default matches the task 04 engine. A measurement varies `memory_arena`
-/// and `memory_pattern` to find how the ONNX Runtime arena affects the peak.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The derived `Default` is `false` for both fields. It turns the ONNX Runtime
+/// CPU memory arena off. Task 05 measured the arena growing the peak from about
+/// 11 GB after the first chunk to 22 GB after the last on a 60 s input. With
+/// the arena off the peak stays at the one-chunk prediction. The memory pattern
+/// optimization goes with it, as the measured configuration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OnnxOptions {
     /// Use the ONNX Runtime CPU memory arena.
     pub memory_arena: bool,
     /// Use the ONNX Runtime memory pattern optimization.
     pub memory_pattern: bool,
-}
-
-impl Default for OnnxOptions {
-    fn default() -> Self {
-        Self {
-            memory_arena: true,
-            memory_pattern: true,
-        }
-    }
 }
 
 /// An ONNX Runtime session over `apollo.onnx`.
