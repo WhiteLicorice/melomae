@@ -11,8 +11,8 @@ use std::process::Command;
 
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::AudioFile;
-use lofty::id3::v2::Id3v2Tag;
-use lofty::mp4::{AtomIdent, Ilst};
+use lofty::id3::v2::{Frame, Id3v2Tag};
+use lofty::mp4::{AtomData, AtomIdent, Ilst};
 use lofty::ogg::OggPictureStorage;
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::prelude::TagExt;
@@ -66,10 +66,12 @@ pub const MEDIA: &str = "CD";
 pub const SCRIPT: &str = "Latn";
 /// The release type.
 pub const RELEASE_TYPE: &str = "album";
-/// The release status. This has no standard field in any output format.
+/// The release status.
 pub const RELEASE_STATUS: &str = "official";
 /// The release country.
 pub const RELEASE_COUNTRY: &str = "US";
+/// The original release year. Picard defines it for Vorbis comments only.
+pub const ORIGINAL_YEAR: &str = "1999";
 /// The six MusicBrainz identifiers.
 pub const MUSICBRAINZ_IDS: [(&str, &str); 6] = [
     (
@@ -98,8 +100,14 @@ pub const MUSICBRAINZ_IDS: [(&str, &str); 6] = [
 pub const CUSTOM_NAME: &str = "MYCUSTOM";
 /// The custom field value.
 pub const CUSTOM_VALUE: &str = "custom one";
-/// The custom release-status field name, which is how the field crosses every format.
+/// The portable release-status name: the Vorbis key.
 pub const RELEASE_STATUS_NAME: &str = "RELEASESTATUS";
+/// The native release-status name Picard uses in ID3 and MP4.
+pub const RELEASE_STATUS_NATIVE: &str = "MusicBrainzAlbumStatus";
+/// The native script name Picard uses in ID3 and MP4.
+pub const SCRIPT_NATIVE: &str = "SCRIPT";
+/// The native original-year name, which Picard defines for Vorbis comments only.
+pub const ORIGINAL_YEAR_NAME: &str = "ORIGINALYEAR";
 /// The cover's description.
 pub const COVER_DESCRIPTION: &str = "Cover (front)";
 
@@ -284,12 +292,11 @@ impl TagFixtures {
         fields
     }
 
-    /// The custom fields, in order.
-    fn extra_custom() -> [(String, Vec<&'static str>); 2] {
-        [
-            (RELEASE_STATUS_NAME.to_string(), vec![RELEASE_STATUS]),
-            (CUSTOM_NAME.to_string(), vec![CUSTOM_VALUE]),
-        ]
+    /// The custom fields that cross every format by name, apart from the release status. The
+    /// release status uses the native Picard name of each format, which differs from the portable
+    /// name, so each writer adds it separately.
+    fn extra_custom() -> [(&'static str, &'static str); 1] {
+        [(CUSTOM_NAME, CUSTOM_VALUE)]
     }
 
     /// The front cover, built from the ffmpeg-made JPEG.
@@ -315,9 +322,16 @@ impl TagFixtures {
         for frame in Id3v2Tag::from(extra) {
             id3.insert(frame);
         }
-        for (name, values) in Self::extra_custom() {
-            id3.insert_user_text(name, values.join("\0"));
+        for (name, value) in Self::extra_custom() {
+            id3.insert_user_text(name.to_string(), value.to_string());
         }
+        // The release status and the script use the Picard native `TXXX` names. Lofty's generic
+        // layer has no ID3 frame for either, so the fixture writes them natively.
+        id3.insert_user_text(
+            RELEASE_STATUS_NATIVE.to_string(),
+            RELEASE_STATUS.to_string(),
+        );
+        id3.insert_user_text(SCRIPT_NATIVE.to_string(), SCRIPT.to_string());
         id3.insert_picture(self.cover(cover_bytes));
         id3.save_to_path(&path, WriteOptions::default())
             .expect("write the MP3 tags");
@@ -338,11 +352,11 @@ impl TagFixtures {
                 comments.push(native.to_string(), value.to_string());
             }
         }
-        for (name, values) in Self::extra_custom() {
-            for value in values {
-                comments.push(name.clone(), value.to_string());
-            }
+        for (name, value) in Self::extra_custom() {
+            comments.push(name.to_string(), value.to_string());
         }
+        comments.push(RELEASE_STATUS_NAME.to_string(), RELEASE_STATUS.to_string());
+        comments.push(ORIGINAL_YEAR_NAME.to_string(), ORIGINAL_YEAR.to_string());
         comments
             .insert_picture(self.cover(cover_bytes), None)
             .expect("insert the FLAC picture");
@@ -364,17 +378,23 @@ impl TagFixtures {
         for atom in Ilst::from(extra) {
             ilst.insert(atom);
         }
-        for (name, values) in Self::extra_custom() {
-            for value in values {
-                ilst.insert(lofty::mp4::Atom::new(
-                    AtomIdent::Freeform {
-                        mean: "com.apple.iTunes".into(),
-                        name: name.clone().into(),
-                    },
-                    lofty::mp4::AtomData::UTF8(value.to_string()),
-                ));
-            }
+        for (name, value) in Self::extra_custom() {
+            ilst.insert(lofty::mp4::Atom::new(
+                AtomIdent::Freeform {
+                    mean: "com.apple.iTunes".into(),
+                    name: (*name).into(),
+                },
+                lofty::mp4::AtomData::UTF8(value.to_string()),
+            ));
         }
+        // The release status uses its native Picard freeform name, not the portable Vorbis key.
+        ilst.insert(lofty::mp4::Atom::new(
+            AtomIdent::Freeform {
+                mean: "com.apple.iTunes".into(),
+                name: RELEASE_STATUS_NATIVE.into(),
+            },
+            lofty::mp4::AtomData::UTF8(RELEASE_STATUS.to_string()),
+        ));
         ilst.insert_picture(self.cover(cover_bytes));
         ilst.save_to_path(&path, WriteOptions::default())
             .expect("write the M4A tags");
@@ -403,6 +423,334 @@ fn musicbrainz_key(name: &str) -> ItemKey {
             ItemKey::MusicBrainzWorkId
         }
     }
+}
+
+/// The expected portable manifest of a source: one `(name, value)` pair per value, so a
+/// multi-value field repeats its name. Every field the task's Test-first plan lists appears once,
+/// except the original year, which Picard defines for a Vorbis source only.
+pub fn expected_manifest(source: Source) -> Vec<(&'static str, &'static str)> {
+    let mut fields = vec![
+        ("TITLE", TITLE),
+        ("ARTIST", ARTIST),
+        ("ALBUM", ALBUM),
+        ("ALBUMARTIST", ALBUM_ARTIST),
+        ("TRACKNUMBER", TRACK),
+        ("TRACKTOTAL", TRACK_TOTAL),
+        ("DISCNUMBER", DISC),
+        ("DISCTOTAL", DISC_TOTAL),
+        ("DATE", DATE),
+        ("ORIGINALDATE", ORIGINAL_DATE),
+        ("GENRE", GENRE),
+        ("ISRC", ISRC),
+        ("BARCODE", BARCODE),
+        ("CATALOGNUMBER", CATALOG_NUMBER),
+        ("LABEL", LABEL),
+        ("COPYRIGHT", COPYRIGHT),
+        ("COMPOSER", COMPOSERS[0]),
+        ("COMPOSER", COMPOSERS[1]),
+        ("LYRICIST", LYRICIST),
+        ("ARTISTSORT", ARTIST_SORT),
+        ("ALBUMARTISTSORT", ALBUM_ARTIST_SORT),
+        ("MEDIA", MEDIA),
+        ("SCRIPT", SCRIPT),
+        ("RELEASETYPE", RELEASE_TYPE),
+        ("RELEASESTATUS", RELEASE_STATUS),
+        ("RELEASECOUNTRY", RELEASE_COUNTRY),
+        ("MYCUSTOM", CUSTOM_VALUE),
+    ];
+    for (name, value) in MUSICBRAINZ_IDS {
+        fields.push((name, value));
+    }
+    if source == Source::Flac {
+        fields.push(("ORIGINALYEAR", ORIGINAL_YEAR));
+    }
+    fields
+}
+
+/// The kind of native tag a manifest reader reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeKind {
+    /// An ID3v2 tag in an MP3.
+    Mp3,
+    /// An ID3v2 tag in a WAV.
+    Wav,
+    /// MP4 atoms.
+    M4a,
+    /// Vorbis comments in a FLAC.
+    Flac,
+    /// Vorbis comments in an Ogg Opus stream.
+    Opus,
+}
+
+/// The native tag of one source family.
+pub fn source_kind(source: Source) -> NativeKind {
+    match source {
+        Source::Mp3 => NativeKind::Mp3,
+        Source::M4a => NativeKind::M4a,
+        Source::Flac => NativeKind::Flac,
+    }
+}
+
+/// Read a file's native tag and return its portable manifest, one `(name, value)` pair per value.
+///
+/// This is the independent checker: it reads the format-specific tag, not `read_tags`, so it can
+/// catch a field the fixture never wrote or that the generic tag layer loses. A native key with no
+/// manifest mapping, such as a cover atom or ffmpeg's encoder field, is ignored.
+pub fn native_manifest(path: &Path, kind: NativeKind) -> Vec<(String, String)> {
+    native_items(path, kind)
+        .into_iter()
+        .filter_map(|(key, value)| portable_of(&key).map(|name| (name.to_string(), value)))
+        .collect()
+}
+
+/// The raw native keys of a file, before the portable mapping. A test uses this to assert a
+/// literal target name such as `TPUB` or `TXXX:SCRIPT`.
+pub fn native_keys(path: &Path, kind: NativeKind) -> Vec<String> {
+    native_items(path, kind)
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect()
+}
+
+/// The native tag items of a file, as `(key, value)` pairs. An ID3v2 `TXXX` frame key is
+/// `TXXX:<description>`, and an MP4 freeform atom key is `----:com.apple.iTunes:<name>`.
+fn native_items(path: &Path, kind: NativeKind) -> Vec<(String, String)> {
+    let mut native: Vec<(String, String)> = Vec::new();
+    match kind {
+        NativeKind::Mp3 | NativeKind::Wav => {
+            for frame in read_native_id3(path, kind) {
+                match frame {
+                    Frame::UserText(frame) => {
+                        native.push((
+                            format!("TXXX:{}", frame.description),
+                            frame.content.to_string(),
+                        ));
+                    }
+                    Frame::Text(frame) => {
+                        let id = frame.id().as_str();
+                        for value in frame.value.split('\0') {
+                            match id {
+                                "TRCK" => push_number_pair(
+                                    &mut native,
+                                    "TRACKNUMBER",
+                                    "TRACKTOTAL",
+                                    value,
+                                ),
+                                "TPOS" => {
+                                    push_number_pair(&mut native, "DISCNUMBER", "DISCTOTAL", value)
+                                }
+                                _ => native.push((id.to_string(), value.to_string())),
+                            }
+                        }
+                    }
+                    Frame::Timestamp(frame) => {
+                        let date = format_timestamp(&frame.timestamp);
+                        native.push((frame.id().as_str().to_string(), date));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        NativeKind::M4a => {
+            for atom in read_native_ilst(path) {
+                match atom.ident() {
+                    AtomIdent::Freeform { name, .. } => {
+                        for data in atom.data() {
+                            if let AtomData::UTF8(text) = data {
+                                native.push((
+                                    format!("----:com.apple.iTunes:{name}"),
+                                    text.to_string(),
+                                ));
+                            }
+                        }
+                    }
+                    AtomIdent::Fourcc(fourcc) => {
+                        if fourcc == b"trkn" || fourcc == b"disk" {
+                            let (number, total) = mp4_number_pair(&atom);
+                            let (number_name, total_name) = if fourcc == b"trkn" {
+                                ("TRACKNUMBER", "TRACKTOTAL")
+                            } else {
+                                ("DISCNUMBER", "DISCTOTAL")
+                            };
+                            native.push((number_name.to_string(), number));
+                            native.push((total_name.to_string(), total));
+                            continue;
+                        }
+                        let Some(key) = fourcc_key(fourcc) else {
+                            continue;
+                        };
+                        for data in atom.data() {
+                            if let AtomData::UTF8(text) = data {
+                                native.push((key.to_string(), text.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        NativeKind::Flac | NativeKind::Opus => {
+            for (key, value) in read_native_vorbis(path, kind) {
+                native.push((key, value));
+            }
+        }
+    }
+    native
+}
+
+/// Split a `3/12` text pair, such as ID3 `TRCK`, into its number and total.
+fn push_number_pair(out: &mut Vec<(String, String)>, number: &str, total: &str, value: &str) {
+    let mut parts = value.splitn(2, '/');
+    out.push((
+        number.to_string(),
+        parts.next().unwrap_or_default().to_string(),
+    ));
+    if let Some(rest) = parts.next() {
+        out.push((total.to_string(), rest.to_string()));
+    }
+}
+
+/// The number and total of a `trkn` or `disk` atom. The pair is two big-endian `u16` values after
+/// a two-byte reserved field.
+fn mp4_number_pair(atom: &lofty::mp4::Atom<'static>) -> (String, String) {
+    for data in atom.data() {
+        if let AtomData::Unknown { data, .. } = data {
+            if data.len() >= 6 {
+                let number = u16::from_be_bytes([data[2], data[3]]);
+                let total = u16::from_be_bytes([data[4], data[5]]);
+                return (number.to_string(), total.to_string());
+            }
+        }
+    }
+    (String::new(), String::new())
+}
+
+/// The manifest name of an MP4 four-character atom, or `None` for a field that is not manifest.
+fn fourcc_key(fourcc: &[u8; 4]) -> Option<&'static str> {
+    Some(match fourcc {
+        b"\xa9nam" => "TITLE",
+        b"\xa9ART" => "ARTIST",
+        b"\xa9alb" => "ALBUM",
+        b"aART" => "ALBUMARTIST",
+        b"\xa9day" => "DATE",
+        b"\xa9gen" => "GENRE",
+        b"\xa9wrt" => "COMPOSER",
+        b"cprt" => "COPYRIGHT",
+        b"soar" => "ARTISTSORT",
+        b"soaa" => "ALBUMARTISTSORT",
+        _ => return None,
+    })
+}
+
+/// The portable manifest name of a native key, or `None` when the key is not a manifest field.
+///
+/// The lookup strips a `TXXX:` or `----:com.apple.iTunes:` prefix, then ignores case, spaces, and
+/// underscores, so `MUSICBRAINZ_ARTISTID`, `MusicBrainzArtistId`, and `MusicBrainz Artist Id` all
+/// resolve to the same name.
+fn portable_of(key: &str) -> Option<&'static str> {
+    let name = key.rsplit(':').next().unwrap_or(key);
+    let normalized: String = name
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '_')
+        .flat_map(char::to_uppercase)
+        .collect();
+    Some(match normalized.as_str() {
+        "TITLE" | "TIT2" => "TITLE",
+        "ARTIST" | "TPE1" => "ARTIST",
+        "ALBUM" | "TALB" => "ALBUM",
+        "ALBUMARTIST" | "TPE2" => "ALBUMARTIST",
+        "TRACKNUMBER" => "TRACKNUMBER",
+        "TRACKTOTAL" => "TRACKTOTAL",
+        "DISCNUMBER" => "DISCNUMBER",
+        "DISCTOTAL" => "DISCTOTAL",
+        "DATE" | "TDRC" => "DATE",
+        "ORIGINALDATE" | "TDOR" | "TORY" => "ORIGINALDATE",
+        "ORIGINALYEAR" => "ORIGINALYEAR",
+        "GENRE" | "TCON" => "GENRE",
+        "ISRC" | "TSRC" => "ISRC",
+        "BARCODE" => "BARCODE",
+        "CATALOGNUMBER" => "CATALOGNUMBER",
+        "LABEL" | "TPUB" => "LABEL",
+        "COPYRIGHT" | "TCOP" => "COPYRIGHT",
+        "COMPOSER" | "TCOM" => "COMPOSER",
+        "LYRICIST" | "TEXT" => "LYRICIST",
+        "ARTISTSORT" | "TSOP" => "ARTISTSORT",
+        "ALBUMARTISTSORT" | "TSO2" => "ALBUMARTISTSORT",
+        "MEDIA" | "TMED" => "MEDIA",
+        "SCRIPT" => "SCRIPT",
+        "RELEASETYPE" | "MUSICBRAINZALBUMTYPE" => "RELEASETYPE",
+        "RELEASESTATUS" | "MUSICBRAINZALBUMSTATUS" => "RELEASESTATUS",
+        "RELEASECOUNTRY" | "MUSICBRAINZALBUMRELEASECOUNTRY" => "RELEASECOUNTRY",
+        "MUSICBRAINZARTISTID" => "MUSICBRAINZ_ARTISTID",
+        "MUSICBRAINZALBUMARTISTID" => "MUSICBRAINZ_ALBUMARTISTID",
+        "MUSICBRAINZALBUMID" => "MUSICBRAINZ_ALBUMID",
+        "MUSICBRAINZRELEASEGROUPID" => "MUSICBRAINZ_RELEASEGROUPID",
+        "MUSICBRAINZRELEASETRACKID" => "MUSICBRAINZ_RELEASETRACKID",
+        "MUSICBRAINZWORKID" => "MUSICBRAINZ_WORKID",
+        "MYCUSTOM" => "MYCUSTOM",
+        _ => return None,
+    })
+}
+
+/// Format an ID3 timestamp the way the other formats write a date.
+fn format_timestamp(timestamp: &lofty::tag::items::Timestamp) -> String {
+    let mut date = format!("{:04}", timestamp.year);
+    if let Some(month) = timestamp.month {
+        date.push_str(&format!("-{month:02}"));
+    }
+    if let Some(day) = timestamp.day {
+        date.push_str(&format!("-{day:02}"));
+    }
+    date
+}
+
+/// The ID3v2 tag of an MP3 or a WAV output.
+fn read_native_id3(path: &Path, kind: NativeKind) -> Id3v2Tag {
+    let mut file = fs::File::open(path).expect("open the ID3 file");
+    match kind {
+        NativeKind::Mp3 => lofty::mpeg::MpegFile::read_from(&mut file, ParseOptions::new())
+            .expect("read the MP3")
+            .id3v2()
+            .cloned()
+            .unwrap_or_default(),
+        NativeKind::Wav => lofty::iff::wav::WavFile::read_from(&mut file, ParseOptions::new())
+            .expect("read the WAV")
+            .id3v2()
+            .cloned()
+            .unwrap_or_default(),
+        _ => unreachable!("only MP3 and WAV carry an ID3v2 tag here"),
+    }
+}
+
+/// The `ilst` of an M4A output.
+fn read_native_ilst(path: &Path) -> Ilst {
+    let mut file = fs::File::open(path).expect("open the M4A");
+    lofty::mp4::Mp4File::read_from(&mut file, ParseOptions::new())
+        .expect("read the M4A")
+        .ilst()
+        .cloned()
+        .unwrap_or_else(Ilst::new)
+}
+
+/// The Vorbis comments of a FLAC or Opus output.
+fn read_native_vorbis(path: &Path, kind: NativeKind) -> Vec<(String, String)> {
+    let mut file = fs::File::open(path).expect("open the Vorbis file");
+    let options = ParseOptions::new();
+    let comments = match kind {
+        NativeKind::Flac => lofty::flac::FlacFile::read_from(&mut file, options)
+            .expect("read the FLAC")
+            .vorbis_comments()
+            .cloned()
+            .unwrap_or_default(),
+        NativeKind::Opus => lofty::ogg::OpusFile::read_from(&mut file, options)
+            .expect("read the Opus")
+            .vorbis_comments()
+            .clone(),
+        _ => unreachable!("only FLAC and Opus carry Vorbis comments here"),
+    };
+    comments
+        .items()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect()
 }
 
 /// Run ffmpeg, failing the test when it exits non-zero.
