@@ -7,7 +7,7 @@
 **Stack:** §D, §G
 **Assigned to:** Agent
 **Started:** 0049784, clean tree. Baseline gate at 0049784: board 53 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 98 passed, pytest 13 passed.
-**Outcome:** DONE. A new `triage` module walks files and folders, measures the spectral cutoff on the task 03 decode, assigns the SRS §4.3 verdicts, and stores rows in `triage_items`. A rescan reads only the files whose size or modification time changed and removes the rows of deleted files. Triage opens every input read-only and never writes one. The thresholds come from the calibration on `fixtures/ori_wav.wav`, committed through Git LFS: the cutoff is 80 dB below the spectrum peak, and the high-bitrate and suspect-lossless lines are both 19500 Hz. Measured verdicts: the source WAV and the lossless FLAC are `lossless` at 22050 Hz, MP3 64/128/192 are `restore` at 11289/16349/18605 Hz, MP3 320 is `low-benefit` at 20015 Hz, AAC 128/256 are `low-benefit` at 19999/22050 Hz, and the FLAC from the 128 kb/s MP3 is `suspect-lossless` at 16349 Hz. A truncated MP3 is `unreadable` with a reason. The 1,000-file scan took 8.82 s, about 113 files per second. `cargo test -p melomae-core` passes 115 tests, and clippy and fmt are clean. The gate `pnpm verify` exits 0: board 53 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 115 passed, pytest 13 passed. See the detail below.
+**Outcome:** DONE. A new `triage` module walks files and folders, measures the spectral cutoff on the task 03 decode, assigns the SRS §4.3 verdicts, and stores rows in `triage_items`. A rescan reads only the files whose size or modification time changed and removes the rows of deleted files. Triage opens every input read-only and never writes one. The thresholds come from the calibration on `fixtures/ori_wav.wav`, committed through Git LFS: the cutoff is 80 dB below the spectrum peak, and the high-bitrate and suspect-lossless lines are both 19500 Hz. Measured verdicts: the source WAV and the lossless FLAC are `lossless` at 22050 Hz, MP3 64/128/192 are `restore` at 11289/16349/18605 Hz, MP3 320 is `low-benefit` at 20015 Hz, AAC 128/256 are `low-benefit` at 19999/22050 Hz, and the FLAC from the 128 kb/s MP3 is `suspect-lossless` at 16349 Hz. A truncated MP3 is `unreadable` with a reason. The 1,000-file scan took 8.82 s, about 113 files per second. `cargo test -p melomae-core` passes 115 tests, and clippy and fmt are clean. The gate `pnpm verify` exits 0: board 53 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 115 passed, pytest 13 passed. Fix round 1 (review findings B1 to B4) samples positions over the whole file and every channel, stores nanosecond modification times under schema version 2, and reports float PCM and ALAC bit depth. The round-1 gate at `42efe75` exits 0 with 122 cargo tests. See the detail below.
 
 ## Goal
 
@@ -69,12 +69,14 @@ pnpm verify
 ### The cutoff method
 
 Triage decodes every file with `melomae_core::decode::decode_file`, then measures the spectral cutoff
-of the decoded 44.1 kHz audio. The method is Welch's method. Every channel is cut into Hann-windowed
-frames of 8192 samples that overlap by half. The magnitude-squared spectrum of each frame is summed,
-and the average is taken. The average is smoothed over 4 bins. The peak bin is the reference. The
-cutoff is the highest frequency that is the top of a run of bins within 80 dB of the peak. The run is
-at least 200 Hz wide, so one spike does not count. The code and the comments are in
-`crates/melomae-core/src/triage/cutoff.rs`.
+of the decoded 44.1 kHz audio. The method is Welch's method. The spectrum is averaged over
+Hann-windowed frames of 8192 samples. The frames are taken at up to 128 start positions spread
+evenly over the whole file, from the first valid start to the last, and every channel is analyzed at
+every selected position. A silent or narrow-band opening therefore cannot hide the rest of the file,
+and a silent channel cannot hide the others. The average is smoothed by a moving average that spans
+five bins. The peak bin is the reference. The cutoff is the highest frequency that is the top of a
+run of bins within 80 dB of the peak. The run is at least 200 Hz wide, so one spike does not count.
+The code and the comments are in `crates/melomae-core/src/triage/cutoff.rs`.
 
 ### Table 1. The first source, rejected
 
@@ -178,3 +180,43 @@ in `tests/triage_scan.rs`.
 `crates/melomae-core/tests/setup/mod.rs` gains the calibration builders and the LFS guard.
 `Cargo.toml` gains `realfft` and the `sha2` dev-dependency. `.github/workflows/verify.yml` gains the
 LFS cache steps.
+
+### Fix round 1 (review findings B1 to B4)
+
+The review failed the task with four blocking findings. The fixes are:
+
+- B1 and B2. The window selection was a prefix, and the first channel could use the whole budget.
+  `averaged_spectrum` now takes up to 128 start positions spread evenly over the whole file and
+  analyzes every channel at every position. The position count is the budget.
+- B3. `modified_at` was whole seconds, so a fast same-size edit could be skipped. It is now
+  nanoseconds since the Unix epoch. Store migration 2 deletes every cached `triage_items` row, so a
+  whole-second value cannot match. `scanned_at` stays in seconds.
+- B4. A float PCM WAV reported no depth. The depth now comes from the codec id (32 for F32, 64 for
+  F64), and ALAC's depth comes from byte 5 of its magic cookie. A lossy codec reports no depth.
+
+Record fixes for review items 2 and 4: the bitrate comment now says the average file rate includes
+tags and cover art, and the smoothing and threshold-direction comments are corrected. The smoothing
+behavior did not change.
+
+The re-run calibration at the fix head. Cutoff in Hz, at 80 dB:
+
+| Fixture | Before | After | Verdict |
+|---|---|---|---|
+| source WAV | 22050 | 22050 | lossless |
+| MP3 64 | 11289 | 11294 | restore |
+| MP3 128 | 16349 | 16349 | restore |
+| MP3 192 | 18605 | 18605 | restore |
+| MP3 320 | 20015 | 20020 | low-benefit |
+| AAC 128 | 19999 | 19999 | low-benefit |
+| AAC 256 | 22050 | 22050 | low-benefit |
+| FLAC from MP3 128 | 16349 | 16349 | suspect-lossless |
+| FLAC lossless | 22050 | 22050 | lossless |
+
+Every verdict holds. The two moved cutoffs moved by one bin (5.38 Hz). The source WAV now also
+reports bit depth 32.
+
+Red first: `SCRATCH/evidence-16/red-round1-triage.txt` and `red-round1-store.txt` show all eight new
+tests failing on the pre-fix code for the expected reasons. Green: `green-round1.txt`.
+
+The round-1 gate at `42efe75` exits 0: board 53 records, tasks unittest 9 passed, Vitest 1 passed,
+cargo test 122 passed, pytest 13 passed.
