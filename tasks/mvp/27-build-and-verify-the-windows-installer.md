@@ -23,7 +23,7 @@ Produce a Windows installer that a non-technical user can run, and prove it work
 
 1. Build a per-user NSIS installer that needs no admin rights.
 2. Use the WebView2 download bootstrapper.
-3. Bundle the ONNX Runtime libraries, the chosen GPU provider files (task 08), and `apollo.onnx` as resources.
+3. Bundle the ONNX Runtime libraries, the chosen GPU provider files (task 08), `apollo.onnx`, `THIRD_PARTY_NOTICES.md`, and `models/NOTICE.md` as resources. Task 26 leaves the resources list empty.
 4. Build `apollo.onnx` in the release path from the pinned checkpoint with `tools/export`. Verify the checkpoint SHA-256.
 5. Keep the installer at 150 MB or less.
 6. Apply the signing decision from bootstrap item 4.

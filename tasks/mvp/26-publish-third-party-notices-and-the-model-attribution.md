@@ -1,12 +1,12 @@
 # 26 — Publish third-party notices and the model attribution
 
-**Status:** TODO
+**Status:** IN PROGRESS
 **Phase:** 5 — Packaging and release
 **Depends on:** 03, 04, 06
 **SRS:** §11
 **Stack:** §C, §D, §I
 **Assigned to:** Agent
-**Started:** —
+**Started:** 3690b93 (2026-10-11)
 **Outcome:** —
 
 ## Goal

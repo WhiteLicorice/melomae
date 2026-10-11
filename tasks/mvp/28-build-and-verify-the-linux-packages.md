@@ -23,6 +23,7 @@ Produce Linux packages and run them as far as this Windows machine allows.
 1. Build an AppImage and a .deb on Ubuntu 22.04 (glibc 2.35 baseline) against WebKitGTK 4.1. The CI workflow runs this build once bootstrap item 2 exists.
 2. Build locally in WSL2 Ubuntu. Installing the Tauri prerequisites in WSL writes system packages. Ask the owner first.
 3. Smoke-run the AppImage under WSLg: complete a CPU restore and an A/B playback.
+4. Add `THIRD_PARTY_NOTICES.md` and `models/NOTICE.md` to the bundle resources in `src-tauri/tauri.conf.json` when the list does not name them. Confirm the AppImage and the .deb hold both files.
 
 ## Out of scope
 
