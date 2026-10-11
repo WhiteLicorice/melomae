@@ -123,31 +123,49 @@ mod tests {
     /// One gibibyte, as a binary multiple.
     const GIB: u64 = 1024 * 1024 * 1024;
 
+    /// One second of audio at 44.1 kHz.
+    const SECOND: u64 = 44_100;
+
+    /// The shape of a file of `seconds` seconds and `channels` channels.
+    fn shape(seconds: u64, channels: u64) -> FileShape {
+        FileShape {
+            frames: SECOND * seconds,
+            channels,
+        }
+    }
+
     #[test]
     fn chunk_budget_chooses_the_largest_chunk_that_fits() {
+        // A short file, so the whole-file reserve is small.
+        let short = shape(13, 2);
         let cases = [
             (8 * GIB, 5u64),
             (16 * GIB, 13),
             (64 * GIB, MAX_CHUNK_SECONDS),
         ];
         for (available, expected) in cases {
-            let budget = choose_chunk(available).expect("the memory must fit a chunk");
+            let budget = choose_chunk(available, short).expect("the memory must fit a chunk");
             assert_eq!(
                 budget.chunk_seconds, expected,
                 "available {available} bytes"
             );
             assert_eq!(budget.available_bytes, available);
             assert_eq!(budget.budget_bytes, available / BUDGET_DIVISOR);
+            assert_eq!(budget.reserve_bytes, file_reserve_bytes(short));
             assert_eq!(
                 budget.predicted_peak_bytes,
                 predicted_peak_bytes(expected),
                 "the result must carry the predicted peak"
             );
-            assert!(budget.predicted_peak_bytes <= budget.budget_bytes);
+            assert_eq!(
+                budget.total_bytes(),
+                budget.reserve_bytes + budget.predicted_peak_bytes
+            );
+            assert!(budget.total_bytes() <= budget.budget_bytes);
             // The next chunk up, when there is one, must not fit.
             if expected < MAX_CHUNK_SECONDS {
                 assert!(
-                    predicted_peak_bytes(expected + 1) > budget.budget_bytes,
+                    budget.reserve_bytes + predicted_peak_bytes(expected + 1) > budget.budget_bytes,
                     "chunk {} must not fit",
                     expected + 1
                 );
@@ -156,11 +174,92 @@ mod tests {
     }
 
     #[test]
+    fn chunk_budget_accepts_an_exact_budget_match() {
+        // The `<=` predicate must include a chunk whose total equals the budget.
+        let short = shape(13, 2);
+        let reserve = file_reserve_bytes(short);
+        let available = (reserve + predicted_peak_bytes(13)) * BUDGET_DIVISOR;
+        let budget = choose_chunk(available, short).expect("the exact match must fit");
+        assert_eq!(budget.chunk_seconds, 13);
+        assert_eq!(budget.total_bytes(), budget.budget_bytes);
+    }
+
+    #[test]
+    fn chunk_budget_reserves_the_whole_file_buffers() {
+        // The engine holds output_sum, weight_sum, the normalized channel, and
+        // every finished channel; the caller holds the decoded input.
+        for (seconds, channels) in [(1u64, 1u64), (60, 2), (600, 2), (3_600, 6)] {
+            let file = shape(seconds, channels);
+            let engine = (channels + 2) * file.frames * 4;
+            let input = channels * file.frames * 4;
+            assert_eq!(file_reserve_bytes(file), engine + input);
+        }
+    }
+
+    #[test]
+    fn chunk_budget_shortens_the_chunk_for_a_long_stereo_file() {
+        let available = 16 * GIB;
+        let long = shape(600, 2);
+        // With no file reserve, 16 GiB fits a 13 s chunk.
+        assert_eq!(
+            largest_chunk_within(available / BUDGET_DIVISOR, 0),
+            Some(13)
+        );
+        let budget = choose_chunk(available, long).expect("the memory must fit a chunk");
+        assert_eq!(budget.chunk_seconds, 12);
+        assert!(budget.total_bytes() <= budget.budget_bytes);
+    }
+
+    #[test]
+    fn chunk_budget_shortens_the_chunk_for_a_long_mono_file() {
+        let available = 16 * GIB;
+        let long = shape(3_600, 1);
+        assert_eq!(
+            largest_chunk_within(available / BUDGET_DIVISOR, 0),
+            Some(13)
+        );
+        let budget = choose_chunk(available, long).expect("the memory must fit a chunk");
+        assert_eq!(budget.chunk_seconds, 8);
+        assert!(budget.total_bytes() <= budget.budget_bytes);
+    }
+
+    #[test]
+    fn chunk_budget_rejects_a_one_hour_six_channel_file() {
+        // Port of the reviewer's rev05_long_six_channel_file_must_fit_the_restore_budget.
+        // At 8649843 the chooser accepted the file even though the engine's
+        // whole-file buffers alone exceed the budget.
+        let available = 8 * GIB;
+        let long = shape(3_600, 6);
+        let engine = (long.channels + 2) * long.frames * 4;
+        assert!(
+            engine > available / BUDGET_DIVISOR,
+            "the case must prove the reserve exceeds the budget"
+        );
+        let error = choose_chunk(available, long).expect_err("the reserve must not fit");
+        let message = error.to_string();
+        let budget = available / BUDGET_DIVISOR;
+        assert!(
+            message.contains(&budget.to_string()),
+            "the message must name the budget {budget}: {message}"
+        );
+        assert!(
+            message.contains(&available.to_string()),
+            "the message must name the available memory {available}: {message}"
+        );
+        let needed = file_reserve_bytes(long) + predicted_peak_bytes(MIN_CHUNK_SECONDS);
+        assert!(
+            message.contains(&needed.to_string()),
+            "the message must name the total {needed}: {message}"
+        );
+    }
+
+    #[test]
     fn chunk_budget_rejects_memory_below_the_floor() {
+        let short = shape(60, 2);
         for available in [2 * GIB, 4 * GIB] {
-            let error = choose_chunk(available).expect_err("the memory must be too small");
+            let error = choose_chunk(available, short).expect_err("the memory must be too small");
             let message = error.to_string();
-            let needed = predicted_peak_bytes(MIN_CHUNK_SECONDS);
+            let needed = file_reserve_bytes(short) + predicted_peak_bytes(MIN_CHUNK_SECONDS);
             assert!(
                 message.contains(&needed.to_string()),
                 "the message must name the needed memory {needed}: {message}"
@@ -173,23 +272,44 @@ mod tests {
     }
 
     #[test]
+    fn chunk_budget_floor_error_names_the_half_ram_budget() {
+        // Port of the reviewer's rev05_floor_error_must_explain_the_half_ram_budget.
+        // The message must name the limiting budget, the total, and the available.
+        let available = 4 * GIB;
+        let short = shape(60, 2);
+        let error = choose_chunk(available, short).expect_err("the memory must be too small");
+        let message = error.to_string();
+        let budget = available / BUDGET_DIVISOR;
+        let needed = file_reserve_bytes(short) + predicted_peak_bytes(MIN_CHUNK_SECONDS);
+        assert!(
+            message.contains(&budget.to_string()),
+            "rejection must name the limiting budget {budget}: {message}"
+        );
+        assert!(
+            message.contains(&needed.to_string()),
+            "rejection must name the required total {needed}: {message}"
+        );
+        assert!(
+            message.contains(&available.to_string()),
+            "rejection must name the available memory {available}: {message}"
+        );
+    }
+
+    #[test]
     fn chunk_budget_display_names_the_chunk_and_the_numbers() {
-        let budget = choose_chunk(16 * GIB).expect("the memory must fit a chunk");
+        let budget = choose_chunk(16 * GIB, shape(13, 2)).expect("the memory must fit a chunk");
         assert_eq!(budget.chunk_seconds, 13);
         let text = budget.to_string();
-        assert!(text.contains("13"), "the chunk must show: {text}");
-        assert!(
-            text.contains(&budget.predicted_peak_bytes.to_string()),
-            "the predicted peak must show: {text}"
-        );
-        assert!(
-            text.contains(&budget.budget_bytes.to_string()),
-            "the budget must show: {text}"
-        );
-        assert!(
-            text.contains(&budget.available_bytes.to_string()),
-            "the available memory must show: {text}"
-        );
+        for value in [
+            budget.chunk_seconds.to_string(),
+            budget.reserve_bytes.to_string(),
+            budget.predicted_peak_bytes.to_string(),
+            budget.total_bytes().to_string(),
+            budget.budget_bytes.to_string(),
+            budget.available_bytes.to_string(),
+        ] {
+            assert!(text.contains(&value), "{value} must show: {text}");
+        }
     }
 
     #[test]

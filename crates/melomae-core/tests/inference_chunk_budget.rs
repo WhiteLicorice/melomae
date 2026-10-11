@@ -14,7 +14,9 @@ use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use melomae_core::decode::decode_file;
-use melomae_core::inference::chunk_budget::{choose_chunk, choose_chunk_for_machine, PAD_SECONDS};
+use melomae_core::inference::chunk_budget::{
+    choose_chunk, choose_chunk_for_machine, FileShape, PAD_SECONDS,
+};
 use melomae_core::inference::{
     load_onnx_backend, load_onnx_backend_with_options, runtime_version, ChunkedInference,
     InferenceError, Model, OnnxOptions, RestoreBackend, RestoreOutcome, RestoreSettings,
@@ -127,18 +129,26 @@ fn peak_working_set_bytes() -> u64 {
     panic!("no VmHWM line in /proc/self/status");
 }
 
-/// Build the 60 s stereo input as ten copies of the committed 6 s input.
-fn tiled_60s(source: &[Vec<f32>]) -> Vec<Vec<f32>> {
+/// Build a longer input as `copies` copies of the committed 6 s input.
+fn tiled(source: &[Vec<f32>], copies: usize) -> Vec<Vec<f32>> {
     source
         .iter()
         .map(|channel| {
-            let mut tiled = Vec::with_capacity(channel.len() * 10);
-            for _ in 0..10 {
+            let mut tiled = Vec::with_capacity(channel.len() * copies);
+            for _ in 0..copies {
                 tiled.extend_from_slice(channel);
             }
             tiled
         })
         .collect()
+}
+
+/// The shape of a decoded input.
+fn file_shape(channels: &[Vec<f32>]) -> FileShape {
+    FileShape {
+        frames: channels.first().map_or(0, Vec::len) as u64,
+        channels: channels.len() as u64,
+    }
 }
 
 #[test]
@@ -154,7 +164,7 @@ fn e2e_chunk_budget_feeds_the_restore_engine() {
     let channels = audio.channels().to_vec();
 
     // 8 GiB selects a 5 s chunk, so the 13 s file needs three chunks.
-    let budget = choose_chunk(8 * GIB).expect("8 GiB must fit a chunk");
+    let budget = choose_chunk(8 * GIB, file_shape(&channels)).expect("8 GiB must fit a chunk");
     assert_eq!(budget.chunk_seconds, 5);
 
     let settings = RestoreSettings {
@@ -196,7 +206,7 @@ fn chunk_budget_60s_restore_peaks_within_15_percent_of_the_prediction() {
     committed_bytes(&model_path);
 
     let source = decode_file(&input_path).expect("decode the committed 6 s input");
-    let input = tiled_60s(source.channels());
+    let input = tiled(source.channels(), 10);
     assert_eq!(
         input[0].len(),
         SAMPLE_RATE as usize * 60,
@@ -204,7 +214,8 @@ fn chunk_budget_60s_restore_peaks_within_15_percent_of_the_prediction() {
     );
 
     // The chunk this machine would pick at job start.
-    let budget = choose_chunk_for_machine().expect("the machine must fit a chunk");
+    let budget =
+        choose_chunk_for_machine(file_shape(&input)).expect("the machine must fit a chunk");
     let settings = RestoreSettings {
         chunk_seconds: Some(budget.chunk_seconds as f64),
         overlap_seconds: OVERLAP_SECONDS,
@@ -222,12 +233,76 @@ fn chunk_budget_60s_restore_peaks_within_15_percent_of_the_prediction() {
     );
 
     let measured = peak_working_set_bytes();
-    let predicted = budget.predicted_peak_bytes;
+    let predicted = budget.total_bytes();
     let error_percent = (measured as f64 - predicted as f64) / predicted as f64 * 100.0;
     println!(
-        "chunk {}s, available {} bytes, budget {} bytes, predicted peak {} bytes, \
-         measured peak {} bytes, error {error_percent:.2}%",
-        budget.chunk_seconds, budget.available_bytes, budget.budget_bytes, predicted, measured,
+        "chunk {}s, reserve {} bytes, available {} bytes, budget {} bytes, predicted peak \
+         {} bytes, measured peak {} bytes, error {error_percent:.2}%",
+        budget.chunk_seconds,
+        budget.reserve_bytes,
+        budget.available_bytes,
+        budget.budget_bytes,
+        predicted,
+        measured,
+    );
+    assert!(
+        error_percent.abs() <= 15.0,
+        "the measured peak is off by {error_percent:.2}% (limit 15%)"
+    );
+}
+
+#[test]
+#[ignore = "measurement: 10 min stereo, uses about 7 GiB; run it alone while holding the gate slot"]
+fn chunk_budget_10min_stereo_restore_peaks_within_15_percent_of_the_prediction() {
+    let input_path = repo_root()
+        .join("tools")
+        .join("parity")
+        .join("input_wav.wav");
+    let model_path = env::var_os("MELOMAE_APOLLO_ONNX")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo_root().join("models").join("apollo.onnx"));
+    committed_bytes(&input_path);
+    committed_bytes(&model_path);
+
+    // Build a 10 min stereo input from 100 copies of the committed 6 s input.
+    let source = decode_file(&input_path).expect("decode the committed 6 s input");
+    let input = tiled(source.channels(), 100);
+    assert_eq!(
+        input[0].len(),
+        SAMPLE_RATE as usize * 600,
+        "the tiled input must be 10 min"
+    );
+
+    let budget =
+        choose_chunk_for_machine(file_shape(&input)).expect("the machine must fit a chunk");
+    let settings = RestoreSettings {
+        chunk_seconds: Some(budget.chunk_seconds as f64),
+        overlap_seconds: OVERLAP_SECONDS,
+        chunk_pad_seconds: PAD_SECONDS as f64,
+    };
+
+    let backend =
+        load_onnx_backend(setup::ort_library(), &model_path).expect("load the Apollo ONNX model");
+    let outcome = backend
+        .restore(&input, &settings, &mut |_| {}, &AtomicBool::new(false))
+        .expect("run the restore");
+    assert!(
+        matches!(outcome, RestoreOutcome::Complete(_)),
+        "the run must not cancel"
+    );
+
+    let measured = peak_working_set_bytes();
+    let predicted = budget.total_bytes();
+    let error_percent = (measured as f64 - predicted as f64) / predicted as f64 * 100.0;
+    println!(
+        "10MIN chunk {}s, reserve {} bytes, available {} bytes, budget {} bytes, predicted \
+         {} bytes, measured {} bytes, error {error_percent:.2}%",
+        budget.chunk_seconds,
+        budget.reserve_bytes,
+        budget.available_bytes,
+        budget.budget_bytes,
+        predicted,
+        measured,
     );
     assert!(
         error_percent.abs() <= 15.0,
@@ -311,7 +386,7 @@ fn chunk_budget_peak_probe() {
     }
 
     let source = decode_file(&input_path).expect("decode the committed 6 s input");
-    let tiled = tiled_60s(source.channels());
+    let tiled = tiled(source.channels(), 10);
     let is_mono = flag("MELOMAE_PROBE_MONO");
     let input = if is_mono {
         first_channel(&tiled)
