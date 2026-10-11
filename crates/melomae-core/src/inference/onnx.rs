@@ -34,15 +34,23 @@ impl OnnxModel {
 
 impl Model for OnnxModel {
     fn infer(&mut self, samples: &[f32]) -> Result<Vec<f32>, InferenceError> {
-        let shape = vec![1i64, 1i64, samples.len() as i64];
-        let tensor = Tensor::from_array((shape, samples.to_vec())).map_err(model_error)?;
+        let expected = [1i64, 1i64, samples.len() as i64];
+        let tensor =
+            Tensor::from_array((expected.to_vec(), samples.to_vec())).map_err(model_error)?;
         let outputs = self
             .session
             .run(ort::inputs![MODEL_INPUT => tensor])
             .map_err(model_error)?;
-        let (_shape, data) = outputs[MODEL_OUTPUT]
-            .try_extract_tensor::<f32>()
-            .map_err(model_error)?;
+        let output = outputs.get(MODEL_OUTPUT).ok_or_else(|| {
+            InferenceError::Model(format!("the model has no output named {MODEL_OUTPUT}"))
+        })?;
+        let (shape, data) = output.try_extract_tensor::<f32>().map_err(model_error)?;
+        let dims: Vec<i64> = shape.iter().copied().collect();
+        if dims != expected {
+            return Err(InferenceError::Model(format!(
+                "the model output shape {dims:?} does not match {expected:?}"
+            )));
+        }
         Ok(data.to_vec())
     }
 }

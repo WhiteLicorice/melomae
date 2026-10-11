@@ -27,8 +27,8 @@ Shenzhen, China. The Look2Hear group at Tsinghua University develops Apollo.
 
 Cite this paper for Apollo:
 
-> Li, Kai and Luo, Yi. "Apollo: Band-sequence Modeling for High-Quality Music
-> Restoration in Compressed Audio." ICASSP, 2025. arXiv:2409.08514.
+> Li, Kai and Luo, Yi. "Apollo: Band-sequence Modeling for High-Quality Audio
+> Restoration." ICASSP, 2025. arXiv:2409.08514.
 
 The Apollo code and weights use CC BY-SA 4.0. The repository `LICENSE` file and
 the Hugging Face model card both state that license. There is no NonCommercial

@@ -111,6 +111,13 @@ pub enum InferenceError {
         /// The length the model returned.
         got: usize,
     },
+    /// The retained output holds a sample that is not finite.
+    NonFinite {
+        /// The channel of the bad sample.
+        channel: usize,
+        /// The sample index in the channel.
+        index: usize,
+    },
     /// The overlap-add left at least one output sample with no weight.
     UncoveredOutput,
     /// The model failed.
@@ -127,6 +134,10 @@ impl std::fmt::Display for InferenceError {
                 f,
                 "the model output is shorter than the corresponding input segment: \
                  expected at least {expected} samples, got {got}"
+            ),
+            Self::NonFinite { channel, index } => write!(
+                f,
+                "channel {channel} has a non-finite sample at index {index}"
             ),
             Self::UncoveredOutput => {
                 write!(f, "the chunk overlap-add left uncovered output samples")
@@ -266,21 +277,40 @@ fn run_channel<M: Model>(
     model: &mut M,
     samples: &[f32],
     chunk: Option<ChunkSizes>,
+    channel: usize,
     progress: &mut dyn FnMut(usize, usize),
     cancel: &AtomicBool,
 ) -> Result<Option<Vec<f32>>, InferenceError> {
     let total = samples.len();
     match chunk {
-        None => run_full_file(model, samples, progress, cancel),
-        Some(sizes) if total <= sizes.chunk => run_full_file(model, samples, progress, cancel),
-        Some(sizes) => run_chunked(model, samples, sizes, progress, cancel),
+        None => run_full_file(model, samples, channel, progress, cancel),
+        Some(sizes) if total <= sizes.chunk => {
+            run_full_file(model, samples, channel, progress, cancel)
+        }
+        Some(sizes) => run_chunked(model, samples, sizes, channel, progress, cancel),
     }
+}
+
+/// Return an error for the first non-finite sample in the retained output.
+///
+/// `start` is the sample index of `samples[0]` in the channel.
+fn check_finite(samples: &[f32], start: usize, channel: usize) -> Result<(), InferenceError> {
+    for (offset, sample) in samples.iter().enumerate() {
+        if !sample.is_finite() {
+            return Err(InferenceError::NonFinite {
+                channel,
+                index: start + offset,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The whole-file path: one model call with no padding.
 fn run_full_file<M: Model>(
     model: &mut M,
     samples: &[f32],
+    channel: usize,
     progress: &mut dyn FnMut(usize, usize),
     cancel: &AtomicBool,
 ) -> Result<Option<Vec<f32>>, InferenceError> {
@@ -288,7 +318,18 @@ fn run_full_file<M: Model>(
         return Ok(None);
     }
     progress(0, 1);
-    Ok(Some(model.infer(samples)?))
+    let output = model.infer(samples)?;
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(None);
+    }
+    if output.len() < samples.len() {
+        return Err(InferenceError::ShortOutput {
+            expected: samples.len(),
+            got: output.len(),
+        });
+    }
+    check_finite(&output, 0, channel)?;
+    Ok(Some(output))
 }
 
 /// The chunked path: padded chunks with normalized overlap-add.
@@ -296,6 +337,7 @@ fn run_chunked<M: Model>(
     model: &mut M,
     samples: &[f32],
     sizes: ChunkSizes,
+    channel: usize,
     progress: &mut dyn FnMut(usize, usize),
     cancel: &AtomicBool,
 ) -> Result<Option<Vec<f32>>, InferenceError> {
@@ -330,6 +372,9 @@ fn run_chunked<M: Model>(
         segment[..take].copy_from_slice(&samples[padded_start..padded_start + take]);
 
         let output = model.infer(&segment)?;
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
         if output.len() < padded_chunk {
             return Err(InferenceError::ShortOutput {
                 expected: padded_chunk,
@@ -339,6 +384,7 @@ fn run_chunked<M: Model>(
 
         let valid_start = start - padded_start;
         let chunk_output = &output[valid_start..valid_start + valid];
+        check_finite(chunk_output, start, channel)?;
         let weights = crossfade_weights(valid, sizes.overlap, index > 0, index < chunks - 1);
         for offset in 0..valid {
             output_sum[start + offset] += chunk_output[offset] * weights[offset];
@@ -397,10 +443,20 @@ impl<M: Model> RestoreBackend for ChunkedInference<M> {
                     channel: channel_index,
                 });
             };
-            match run_channel(&mut *model, channel, chunk, &mut on_chunk, cancel)? {
+            match run_channel(
+                &mut *model,
+                channel,
+                chunk,
+                channel_index,
+                &mut on_chunk,
+                cancel,
+            )? {
                 Some(output) => restored.push(output),
                 None => return Ok(RestoreOutcome::Cancelled),
             }
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(RestoreOutcome::Cancelled);
         }
         Ok(RestoreOutcome::Complete(restored))
     }
@@ -628,6 +684,7 @@ mod tests {
             &mut model,
             &samples,
             Some(sizes),
+            0,
             &mut |_, _| {},
             &AtomicBool::new(false),
         )
