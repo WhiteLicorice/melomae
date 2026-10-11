@@ -249,3 +249,159 @@ fn e2e_encode_leaves_only_the_target_behind() {
         .collect();
     assert_eq!(entries, vec!["restored.flac".to_string()]);
 }
+
+/// The sorted file names in a directory.
+fn directory_entries(path: &Path) -> Vec<String> {
+    let mut entries: Vec<String> = std::fs::read_dir(path)
+        .expect("read the directory")
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    entries.sort();
+    entries
+}
+
+/// A normal stereo tone with one chosen sample value at the given channel and frame.
+fn tone_with(channel: usize, frame: usize, value: f32) -> AudioBuffer {
+    let mut planes = stereo_tone(44_100, 4_410);
+    planes[channel][frame] = value;
+    AudioBuffer::new(44_100, planes)
+}
+
+/// Fix round 1, B1: a NaN sample must be rejected with a named error, for every format.
+#[test]
+fn e2e_encode_rejects_a_nan_sample_in_every_format() {
+    let dir = TempDir::new("melomae-encode-nan");
+    for (format, name) in [
+        (OutputFormat::Flac, "nan.flac"),
+        (OutputFormat::Wav, "nan.wav"),
+        (OutputFormat::Opus, "nan.opus"),
+    ] {
+        let target = dir.join(name);
+        let error = encode(&tone_with(1, 10, f32::NAN), &target, format)
+            .expect_err("a NaN sample must be rejected");
+        let message = error.to_string();
+        assert!(message.contains("channel 1"), "{name}: {message}");
+        assert!(message.contains("frame 10"), "{name}: {message}");
+        assert!(
+            !target.exists(),
+            "{name}: a rejected encode must not create the target"
+        );
+    }
+    assert!(
+        directory_entries(dir.path()).is_empty(),
+        "no file may remain"
+    );
+}
+
+/// Fix round 1, B1: either infinity sign must be rejected. FLAC carries the positive sign and Opus
+/// the negative sign.
+#[test]
+fn e2e_encode_rejects_infinities() {
+    let dir = TempDir::new("melomae-encode-infinity");
+
+    let error = encode(
+        &tone_with(1, 5, f32::INFINITY),
+        &dir.join("infinity.flac"),
+        OutputFormat::Flac,
+    )
+    .expect_err("positive infinity must be rejected");
+    assert!(error.to_string().contains("frame 5"), "{error}");
+
+    let error = encode(
+        &tone_with(0, 7, f32::NEG_INFINITY),
+        &dir.join("negative.opus"),
+        OutputFormat::Opus,
+    )
+    .expect_err("negative infinity must be rejected");
+    assert!(error.to_string().contains("frame 7"), "{error}");
+
+    assert!(
+        directory_entries(dir.path()).is_empty(),
+        "no file may remain"
+    );
+}
+
+/// Fix round 1, B1: a rejected encode must not touch an older target and must leave no temporary
+/// file.
+#[test]
+fn e2e_encode_rejects_without_touching_an_older_target() {
+    let dir = TempDir::new("melomae-encode-older-target");
+    let target = dir.join("restored.flac");
+    let older = b"an older restored file".to_vec();
+    std::fs::write(&target, &older).expect("write the older target");
+
+    encode(&tone_with(0, 3, f32::NAN), &target, OutputFormat::Flac)
+        .expect_err("a NaN sample must be rejected");
+
+    assert_eq!(
+        std::fs::read(&target).expect("read the older target"),
+        older,
+        "the older target must stay byte-identical"
+    );
+    assert_eq!(
+        directory_entries(dir.path()),
+        vec!["restored.flac".to_string()],
+        "no temporary file may remain"
+    );
+}
+
+/// Fix round 1, B1: a rejected encode must not create the output folder.
+#[test]
+fn e2e_encode_creates_no_folder_for_a_rejected_input() {
+    let dir = TempDir::new("melomae-encode-no-folder");
+    let missing = dir.path().join("missing");
+    let target = missing.join("restored.wav");
+
+    encode(&tone_with(0, 1, f32::NAN), &target, OutputFormat::Wav)
+        .expect_err("a NaN sample must be rejected");
+
+    assert!(!missing.exists(), "a rejected encode must create no folder");
+}
+
+/// Fix round 1, N1: a sample rate other than 44100 Hz must be rejected before any file is written.
+#[test]
+fn e2e_encode_rejects_an_unsupported_sample_rate() {
+    let dir = TempDir::new("melomae-encode-rate");
+    for rate in [0u32, 48_000] {
+        for (format, name) in [
+            (OutputFormat::Flac, "rate.flac"),
+            (OutputFormat::Wav, "rate.wav"),
+            (OutputFormat::Opus, "rate.opus"),
+        ] {
+            let target = dir.join(&format!("{rate}-{name}"));
+            let source = AudioBuffer::new(rate, stereo_tone(44_100, 1_024));
+            let error = encode(&source, &target, format)
+                .expect_err("a rate other than 44100 must be rejected");
+            assert!(error.to_string().contains("44100"), "rate {rate}: {error}");
+            assert!(!target.exists(), "rate {rate}: no target may remain");
+        }
+    }
+    assert!(
+        directory_entries(dir.path()).is_empty(),
+        "no file may remain"
+    );
+}
+
+/// Fix round 1, N2: an empty buffer must be rejected for every format.
+#[test]
+fn e2e_encode_rejects_an_empty_buffer() {
+    let dir = TempDir::new("melomae-encode-empty");
+    for (format, name) in [
+        (OutputFormat::Flac, "empty.flac"),
+        (OutputFormat::Wav, "empty.wav"),
+        (OutputFormat::Opus, "empty.opus"),
+    ] {
+        let target = dir.join(name);
+        let source = AudioBuffer::new(44_100, vec![Vec::new(), Vec::new()]);
+        let error = encode(&source, &target, format).expect_err("an empty buffer must be rejected");
+        assert!(error.to_string().contains("no frames"), "{name}: {error}");
+        assert!(
+            !target.exists(),
+            "{name}: a rejected encode must not create the target"
+        );
+    }
+    assert!(
+        directory_entries(dir.path()).is_empty(),
+        "no file may remain"
+    );
+}
