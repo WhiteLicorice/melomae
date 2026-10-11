@@ -1,0 +1,58 @@
+# cargo-deny configuration. The gate runs `cargo deny check licenses`
+# (Stack section I, task 26).
+#
+# The allow list holds each license that the dependency tree uses and that is
+# compatible with the GPL-3.0-or-later distribution of Melomae. Each entry names
+# its source. No entry has unclear compatibility.
+#
+# The list is not legal advice. The Free Software Foundation (FSF) license list
+# is the source of each compatibility statement:
+# https://www.gnu.org/licenses/license-list.html
+
+[licenses]
+version = 2
+# The Melomae workspace crates are not third-party components.
+private = { ignore = true }
+allow = [
+    # Expat (commonly called MIT). FSF: "compatible with the GNU GPL."
+    # https://www.gnu.org/licenses/license-list.html#Expat
+    "MIT",
+    # Apache License 2.0. FSF: "compatible with version 3 of the GNU GPL."
+    # https://www.gnu.org/licenses/license-list.html#apache2
+    "Apache-2.0",
+    # Apache 2.0 with the LLVM exception. The exception adds permissions, so the
+    # combination keeps the Apache-2.0 GPLv3 compatibility.
+    # https://www.gnu.org/licenses/license-list.html#apache2
+    # https://spdx.org/licenses/LLVM-exception.html
+    "Apache-2.0 WITH LLVM-exception",
+    # Modified BSD (3-clause BSD). FSF: "compatible with the GNU GPL."
+    # https://www.gnu.org/licenses/license-list.html#ModifiedBSD
+    "BSD-3-Clause",
+    # ISC License. FSF: "compatible with the GNU GPL."
+    # https://www.gnu.org/licenses/license-list.html#ISC
+    "ISC",
+    # Zlib License. FSF: "compatible with the GPL."
+    # https://www.gnu.org/licenses/license-list.html#ZLib
+    "Zlib",
+    # Mozilla Public License 2.0. FSF: GPL-compatible by default (section 3.3).
+    # https://www.gnu.org/licenses/license-list.html#MPL-2.0
+    "MPL-2.0",
+    # The Unlicense. FSF: the license "is compatible with the GNU GPL."
+    # https://www.gnu.org/licenses/license-list.html#Unlicense
+    "Unlicense",
+    # Zero-clause BSD (0BSD). FSF: "compatible with the GNU GPL."
+    # https://www.gnu.org/licenses/license-list.html#Zero-BSD
+    "0BSD",
+    # Creative Commons Zero 1.0. FSF: "compatible with the GNU GPL."
+    # https://www.gnu.org/licenses/license-list.html#CC0
+    "CC0-1.0",
+    # Expat No Attribution (MIT-0). FSF applies the Zero-clause BSD comments.
+    # https://www.gnu.org/licenses/license-list.html#Expat0
+    "MIT-0",
+    # Unicode License v3. FSF: "compatible with all versions of the GNU GPL."
+    # https://www.gnu.org/licenses/license-list.html#Unicodev3
+    "Unicode-3.0",
+    # The Melomae license. The tree uses it in the workspace crates, which are
+    # private, and it is compatible with itself.
+    "GPL-3.0-or-later",
+]
