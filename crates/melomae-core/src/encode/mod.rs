@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::decode::AudioBuffer;
+use crate::tag_copy::TagSet;
 
 /// The output format of a restore.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,6 +174,25 @@ pub fn encode(
     }
 }
 
+/// Encode `source` to `target`, and write `tags` into the same file before it is renamed into
+/// place.
+///
+/// The tags land in the temporary file, so `target` never appears without its tags. A tag that the
+/// output format cannot hold is named in the returned list, and never dropped in silence. Pass
+/// `None` to write no tag; [`encode`] does that.
+pub fn encode_with_tags(
+    source: &AudioBuffer,
+    target: &Path,
+    format: OutputFormat,
+    tags: Option<&TagSet>,
+) -> Result<(EncodeOutcome, Vec<String>), EncodeError> {
+    let (result, unsupported) = encode_transaction(source, target, format, tags, &NEVER_CANCELLED)?;
+    match result {
+        EncodeResult::Complete(outcome) => Ok((outcome, unsupported)),
+        EncodeResult::Cancelled => unreachable!("the never-cancelled flag cannot be set"),
+    }
+}
+
 /// Encode `source` to `target`, checking `cancel` while the stream is written and once more before
 /// the final rename.
 ///
@@ -186,6 +206,21 @@ pub fn encode_with_cancel(
     format: OutputFormat,
     cancel: &AtomicBool,
 ) -> Result<EncodeResult, EncodeError> {
+    encode_transaction(source, target, format, None, cancel).map(|(result, _unsupported)| result)
+}
+
+/// Encode one stream and, when given, its tags, in the one order that keeps the completion
+/// boundary honest: write the audio, check `cancel`, write the tags, check `cancel` once more, then
+/// rename. Every cancel or error before the rename removes the temporary file, so `target` is only
+/// ever replaced by a finished encode. The returned list names the fields the target could not
+/// hold.
+fn encode_transaction(
+    source: &AudioBuffer,
+    target: &Path,
+    format: OutputFormat,
+    tags: Option<&TagSet>,
+    cancel: &AtomicBool,
+) -> Result<(EncodeResult, Vec<String>), EncodeError> {
     validate(source).map_err(|reason| EncodeError::new(target, reason))?;
 
     if let Some(parent) = target.parent() {
@@ -197,7 +232,7 @@ pub fn encode_with_cancel(
     }
 
     if cancel.load(Ordering::Relaxed) {
-        return Ok(EncodeResult::Cancelled);
+        return Ok((EncodeResult::Cancelled, Vec::new()));
     }
 
     let temporary = temporary_path(target);
@@ -205,7 +240,7 @@ pub fn encode_with_cancel(
         Ok(outcome) => outcome,
         Err(EncodeFailure::Cancelled) => {
             let _ = fs::remove_file(&temporary);
-            return Ok(EncodeResult::Cancelled);
+            return Ok((EncodeResult::Cancelled, Vec::new()));
         }
         Err(reason) => {
             let _ = fs::remove_file(&temporary);
@@ -215,7 +250,21 @@ pub fn encode_with_cancel(
 
     if cancel.load(Ordering::Relaxed) {
         let _ = fs::remove_file(&temporary);
-        return Ok(EncodeResult::Cancelled);
+        return Ok((EncodeResult::Cancelled, Vec::new()));
+    }
+
+    let mut unsupported = Vec::new();
+    if let Some(tags) = tags {
+        if let Err(error) = crate::tag_copy::write_into(&temporary, format, tags) {
+            let _ = fs::remove_file(&temporary);
+            return Err(EncodeError::new(target, format!("write the tags: {error}")));
+        }
+        unsupported = tags.unsupported_for(format);
+    }
+
+    if cancel.load(Ordering::Relaxed) {
+        let _ = fs::remove_file(&temporary);
+        return Ok((EncodeResult::Cancelled, Vec::new()));
     }
 
     if let Err(error) = fs::rename(&temporary, target) {
@@ -225,7 +274,7 @@ pub fn encode_with_cancel(
             format!("rename the completed file into place: {error}"),
         ));
     }
-    Ok(EncodeResult::Complete(outcome))
+    Ok((EncodeResult::Complete(outcome), unsupported))
 }
 
 /// Check the input against the output contract, and return the reason for the first problem.
