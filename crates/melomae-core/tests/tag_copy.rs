@@ -13,7 +13,8 @@ mod setup;
 
 use std::path::Path;
 
-use lofty::config::WriteOptions;
+use lofty::config::{ParseOptions, WriteOptions};
+use lofty::file::AudioFile;
 use lofty::id3::v2::{Frame, FrameId, Id3v2Tag, TextInformationFrame};
 use lofty::picture::PictureType;
 use lofty::prelude::TagExt;
@@ -36,6 +37,10 @@ const OUTPUTS: [(OutputFormat, NativeKind, &str); 3] = [
     (OutputFormat::Wav, NativeKind::Wav, "wav"),
     (OutputFormat::Opus, NativeKind::Opus, "opus"),
 ];
+
+/// The encoder-settings value. Picard maps ID3 `TSSE` to Vorbis `ENCODERSETTINGS`. Made up, like the
+/// other fixture values.
+const ENCODER_SETTINGS: &str = "Fixture Encoder Settings";
 
 /// Sort `(name, value)` pairs, so two manifests compare as multisets.
 fn sorted(mut pairs: Vec<(String, String)>) -> Vec<(String, String)> {
@@ -408,6 +413,110 @@ fn original_year_and_date_stay_separate() {
     );
 }
 
+/// Fix round 2, finding 1: the encoder settings keep the Picard identity. An ID3 `TSSE` source and
+/// a Vorbis `ENCODERSETTINGS` source both write the literal Vorbis key `ENCODERSETTINGS` in FLAC
+/// and Opus, and the ID3 `TSSE` frame in WAV. Lofty's own Vorbis key, `ENCODING`, must not appear.
+#[test]
+fn picard_encoder_settings_keeps_its_identity_in_every_output() {
+    let fixtures = TagFixtures::build();
+    let outputs = setup::TempDir::new("melomae-tag-encodersettings");
+
+    // An ID3 source carries the encoder settings in a native `TSSE` frame; a Vorbis source carries
+    // them in a native `ENCODERSETTINGS` comment. Both must reach every output unchanged.
+    append_id3(&fixtures.path(Source::Mp3), |tag| {
+        tag.insert(text_frame("TSSE", ENCODER_SETTINGS));
+    });
+    append_vorbis(
+        &fixtures.path(Source::Flac),
+        "ENCODERSETTINGS",
+        ENCODER_SETTINGS,
+    );
+
+    for (source, kind, native_key) in [
+        (Source::Mp3, NativeKind::Mp3, "TSSE"),
+        (Source::Flac, NativeKind::Flac, "ENCODERSETTINGS"),
+    ] {
+        let path = fixtures.path(source);
+        assert!(
+            native_keys(&path, kind).iter().any(|key| key == native_key),
+            "{source:?}: the fixture must hold a native {native_key} field"
+        );
+        assert!(
+            native_manifest(&path, kind)
+                .contains(&("ENCODERSETTINGS".to_string(), ENCODER_SETTINGS.to_string())),
+            "{source:?}: the native source must read as ENCODERSETTINGS={ENCODER_SETTINGS:?}"
+        );
+
+        let tags = read_tags(&path).expect("read the source tags");
+        let audio = decode_file(&path).expect("decode the source");
+
+        for (format, out_kind, extension) in OUTPUTS {
+            let target = outputs.join(&format!("{source:?}.{extension}"));
+            let (_, unsupported) = encode_with_tags(&audio, &target, format, Some(&tags))
+                .unwrap_or_else(|error| panic!("{source:?} -> {extension}: {error}"));
+            let keys = native_keys(&target, out_kind);
+            let written = native_manifest(&target, out_kind);
+
+            assert!(
+                written.contains(&("ENCODERSETTINGS".to_string(), ENCODER_SETTINGS.to_string())),
+                "{source:?} -> {extension}: the encoder settings must survive as ENCODERSETTINGS, got {keys:?}"
+            );
+            if format == OutputFormat::Wav {
+                assert!(
+                    keys.iter().any(|key| key == "TSSE"),
+                    "{source:?} -> {extension}: a WAV output keeps the TSSE frame, got {keys:?}"
+                );
+            } else {
+                assert!(
+                    !keys.iter().any(|key| key == "ENCODING"),
+                    "{source:?} -> {extension}: lofty's ENCODING alias must not appear, got {keys:?}"
+                );
+            }
+            assert!(
+                !unsupported.contains(&"ENCODERSETTINGS".to_string()),
+                "{source:?} -> {extension}: the encoder settings are supported, got {unsupported:?}"
+            );
+        }
+    }
+}
+
+/// Fix round 2, ruling 2: two encoder-settings values in a Vorbis source stay two values in the
+/// Vorbis targets.
+#[test]
+fn two_encoder_settings_values_stay_two_in_vorbis_targets() {
+    let fixtures = TagFixtures::build();
+    let outputs = setup::TempDir::new("melomae-tag-encodersettings-two");
+    let path = fixtures.path(Source::Flac);
+    append_vorbis(&path, "ENCODERSETTINGS", "Fixture Settings One");
+    append_vorbis(&path, "ENCODERSETTINGS", "Fixture Settings Two");
+
+    let tags = read_tags(&path).expect("read the source tags");
+    let audio = decode_file(&path).expect("decode the source");
+
+    for (format, kind, extension) in [
+        (OutputFormat::Flac, NativeKind::Flac, "flac"),
+        (OutputFormat::Opus, NativeKind::Opus, "opus"),
+    ] {
+        let target = outputs.join(&format!("two.{extension}"));
+        let (_, unsupported) = encode_with_tags(&audio, &target, format, Some(&tags))
+            .unwrap_or_else(|error| panic!("-> {extension}: {error}"));
+        let written = native_manifest(&target, kind);
+        for value in ["Fixture Settings One", "Fixture Settings Two"] {
+            assert!(
+                written.contains(&("ENCODERSETTINGS".to_string(), value.to_string())),
+                "{extension}: the encoder setting {value:?} must survive, got {written:?}"
+            );
+        }
+        assert!(
+            !native_keys(&target, kind)
+                .iter()
+                .any(|key| key == "ENCODING"),
+            "{extension}: lofty's ENCODING alias must not appear"
+        );
+        assert!(unsupported.is_empty(), "{extension}: got {unsupported:?}");
+    }
+}
+
 /// Scope item 7: a field the target cannot hold is named in the returned list.
 #[test]
 fn e2e_tag_copy_reports_a_field_the_target_cannot_hold() {
@@ -667,6 +776,34 @@ fn write_id3(path: &Path, build: impl FnOnce(&mut Id3v2Tag)) {
     build(&mut tag);
     tag.save_to_path(path, WriteOptions::default())
         .expect("write the ID3 tag");
+}
+
+/// Add frames to an existing MP3's ID3v2 tag, keeping the fixture's other frames. The reviewer's
+/// contract test writes its own native source keys rather than fixture keys produced by the copier.
+fn append_id3(path: &Path, build: impl FnOnce(&mut Id3v2Tag)) {
+    let mut file = std::fs::File::open(path).expect("open the MP3");
+    let mut tag = lofty::mpeg::MpegFile::read_from(&mut file, ParseOptions::new())
+        .expect("read the MP3")
+        .id3v2()
+        .cloned()
+        .unwrap_or_default();
+    build(&mut tag);
+    tag.save_to_path(path, WriteOptions::default())
+        .expect("write the MP3 tag");
+}
+
+/// Append a Vorbis comment to an existing FLAC, keeping the fixture's other comments.
+fn append_vorbis(path: &Path, key: &str, value: &str) {
+    let mut file = std::fs::File::open(path).expect("open the FLAC");
+    let mut comments = lofty::flac::FlacFile::read_from(&mut file, ParseOptions::new())
+        .expect("read the FLAC")
+        .vorbis_comments()
+        .cloned()
+        .unwrap_or_default();
+    comments.push(key.to_string(), value.to_string());
+    comments
+        .save_to_path(path, WriteOptions::default())
+        .expect("write the FLAC comments");
 }
 
 /// A UTF-8 ID3v2 text frame. A value with a null separator becomes a v2.4 multi-value frame.

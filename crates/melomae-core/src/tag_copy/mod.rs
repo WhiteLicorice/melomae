@@ -702,6 +702,24 @@ mod tests {
     }
 
     #[test]
+    fn the_encoder_settings_use_the_picard_vorbis_key() {
+        // Picard names the Vorbis key `ENCODERSETTINGS`; lofty's generic key for the same field is
+        // `ENCODING`, so the override must win. The ID3 frame stays `TSSE`.
+        assert_eq!(standard_name(ItemKey::EncoderSettings), "ENCODERSETTINGS");
+        let tags = set(
+            vec![item(ItemKey::EncoderSettings, "Fixture Encoder Settings")],
+            Vec::new(),
+        );
+        assert!(standard_is_supported(
+            &tags.standard[0],
+            TagType::VorbisComments
+        ));
+        assert!(standard_is_supported(&tags.standard[0], TagType::Id3v2));
+        assert!(tags.unsupported_for(OutputFormat::Flac).is_empty());
+        assert!(tags.unsupported_for(OutputFormat::Wav).is_empty());
+    }
+
+    #[test]
     fn the_mapping_carries_a_field_between_the_three_output_formats() {
         // The album artist is TPE2 in ID3, aART in MP4, and ALBUMARTIST in Vorbis. The portable
         // name is the Vorbis key, and the target mapping is what the writers use.

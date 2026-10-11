@@ -677,6 +677,7 @@ fn portable_of(key: &str) -> Option<&'static str> {
         "ARTISTSORT" | "TSOP" => "ARTISTSORT",
         "ALBUMARTISTSORT" | "TSO2" => "ALBUMARTISTSORT",
         "MEDIA" | "TMED" => "MEDIA",
+        "ENCODERSETTINGS" | "TSSE" => "ENCODERSETTINGS",
         "SCRIPT" => "SCRIPT",
         "RELEASETYPE" | "MUSICBRAINZALBUMTYPE" => "RELEASETYPE",
         "RELEASESTATUS" | "MUSICBRAINZALBUMSTATUS" => "RELEASESTATUS",
