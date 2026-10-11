@@ -7,7 +7,7 @@
 **Stack:** §D, §G
 **Assigned to:** Agent
 **Started:** 0049784, clean tree. Baseline gate at 0049784: board 53 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 98 passed, pytest 13 passed.
-**Outcome:** DONE. A new `triage` module walks files and folders, measures the spectral cutoff on the task 03 decode, assigns the SRS §4.3 verdicts, and stores rows in `triage_items`. A rescan reads only the files whose size or modification time changed and removes the rows of deleted files. Triage opens every input read-only and never writes one. The thresholds come from the calibration on `fixtures/ori_wav.wav`, committed through Git LFS: the cutoff is 80 dB below the spectrum peak, and the high-bitrate and suspect-lossless lines are both 19500 Hz. Measured verdicts: the source WAV and the lossless FLAC are `lossless` at 22050 Hz, MP3 64/128/192 are `restore` at 11289/16349/18605 Hz, MP3 320 is `low-benefit` at 20015 Hz, AAC 128/256 are `low-benefit` at 19999/22050 Hz, and the FLAC from the 128 kb/s MP3 is `suspect-lossless` at 16349 Hz. A truncated MP3 is `unreadable` with a reason. The 1,000-file scan took 8.82 s, about 113 files per second. `cargo test -p melomae-core` passes 115 tests, and clippy and fmt are clean. The gate `pnpm verify` exits 0: board 53 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 115 passed, pytest 13 passed. Fix round 1 (review findings B1 to B4) samples positions over the whole file and every channel, stores nanosecond modification times under schema version 2, and reports float PCM and ALAC bit depth. The round-1 gate at `42efe75` exits 0 with 122 cargo tests. Fix round 2 selects the first, central, and last valid start for every file, including short ones. The round-2 gate at `556078d` exits 0 with 125 cargo tests. See the detail below.
+**Outcome:** DONE. A new `triage` module walks files and folders, measures the spectral cutoff on the task 03 decode, assigns the SRS §4.3 verdicts, and stores rows in `triage_items`. A rescan reads only the files whose size or modification time changed and removes the rows of deleted files. Triage opens every input read-only and never writes one. The thresholds come from the calibration on `fixtures/ori_wav.wav`, committed through Git LFS: the cutoff is 80 dB below the spectrum peak, and the high-bitrate and suspect-lossless lines are both 19500 Hz. Measured verdicts: the source WAV and the lossless FLAC are `lossless` at 22050 Hz, MP3 64/128/192 are `restore` at 11289/16349/18605 Hz, MP3 320 is `low-benefit` at 20015 Hz, AAC 128/256 are `low-benefit` at 19999/22050 Hz, and the FLAC from the 128 kb/s MP3 is `suspect-lossless` at 16349 Hz. A truncated MP3 is `unreadable` with a reason. The 1,000-file scan took 8.82 s, about 113 files per second. `cargo test -p melomae-core` passes 115 tests, and clippy and fmt are clean. The gate `pnpm verify` exits 0: board 53 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 115 passed, pytest 13 passed. Fix round 1 (review findings B1 to B4) samples positions over the whole file and every channel, stores nanosecond modification times under schema version 2, and reports float PCM and ALAC bit depth. The round-1 gate at `42efe75` exits 0 with 122 cargo tests. Fix round 2 selects the first, central, and last valid start for every file, including short ones. The round-2 gate at `556078d` exits 0 with 125 cargo tests. Fix round 3 caps the start grid at `MAX_POSITIONS - 1`, so the grid plus the central start stays within 128 positions. The round-3 gate at `e9e34ca` exits 0 with 126 cargo tests. See the detail below.
 
 ## Goal
 
@@ -70,11 +70,12 @@ pnpm verify
 
 Triage decodes every file with `melomae_core::decode::decode_file`, then measures the spectral cutoff
 of the decoded 44.1 kHz audio. The method is Welch's method. The spectrum is averaged over
-Hann-windowed frames of 8192 samples. The frames are taken at up to 128 start positions spread
-evenly over the whole file, from the first valid start to the last, and every channel is analyzed at
-every selected position. A silent or narrow-band opening therefore cannot hide the rest of the file,
-and a silent channel cannot hide the others. The average is smoothed by a moving average that spans
-five bins. The peak bin is the reference. The cutoff is the highest frequency that is the top of a
+Hann-windowed frames of 8192 samples. The frames are taken at the start positions of
+`analysis_starts`: the first valid start (0), the last valid start (`span`), the central start
+(`span / 2`), and an evenly spread grid that reserves one slot for the central start, so at most 128
+starts. Every channel is analyzed at every selected position. A silent or narrow-band opening
+therefore cannot hide the rest of the file, and a silent channel cannot hide the others. The average
+is smoothed by a moving average that spans five bins. The peak bin is the reference. The cutoff is the highest frequency that is the top of a
 run of bins within 80 dB of the peak. The run is at least 200 Hz wide, so one spike does not count.
 The code and the comments are in `crates/melomae-core/src/triage/cutoff.rs`.
 
@@ -246,3 +247,21 @@ runtime with `suspect-lossless` at cutoff 0, and the selection unit test failing
 
 The round-2 gate at `556078d` exits 0: board 53 records, tasks unittest 9 passed, Vitest 1 passed,
 cargo test 125 passed, pytest 13 passed.
+
+### Fix round 3 (review finding B1c)
+
+The re-review found one blocking finding. The round-2 selector could return 129 starts: the grid
+could hold all 128 positions, and the central start `span / 2` is not a grid point for an even grid,
+so it added a 129th. A normal 12-second file at 44.1 kHz hit it.
+
+- The grid is now capped at `MAX_POSITIONS - 1`, which reserves one slot for the central start, so
+  the grid plus the midpoint is at most 128. The endpoints, the midpoint, the sort, the dedup, the
+  zero-span case, and every channel at every start are unchanged.
+
+The re-run calibration at the fix head is unchanged: every verdict holds and no cutoff moved.
+
+Red first: `SCRATCH/evidence-16/red-round3.txt` shows the budget unit test failing with
+`528384 frames: 129 starts exceeds the 128 budget`. Green: `green-round3.txt`.
+
+The round-3 gate at `e9e34ca` exits 0: board 53 records, tasks unittest 9 passed, Vitest 1 passed,
+cargo test 126 passed, pytest 13 passed.
