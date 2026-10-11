@@ -162,7 +162,8 @@ fn averaged_spectrum(audio: &AudioBuffer) -> Option<Spectrum> {
 /// `window` is the frame length, so `span = frames - window` is the highest valid start. When `span`
 /// is zero there is one start, at 0. Otherwise the selection always includes the first start (0),
 /// the last start (`span`), and the central start `span / 2`. It also includes an evenly spread grid
-/// of up to [`MAX_POSITIONS`] starts. Duplicate starts are removed and the result is sorted.
+/// of up to `MAX_POSITIONS - 1` starts, which reserves one slot for the central start. The total is
+/// therefore at most [`MAX_POSITIONS`]. Duplicate starts are removed and the result is sorted.
 fn analysis_starts(frames: usize, window: usize) -> Vec<usize> {
     let span = frames.saturating_sub(window);
     if span == 0 {
@@ -170,7 +171,7 @@ fn analysis_starts(frames: usize, window: usize) -> Vec<usize> {
     }
 
     let hop = (window / 2).max(1);
-    let grid = MAX_POSITIONS.min(span / hop + 1);
+    let grid = (MAX_POSITIONS - 1).min(span / hop + 1);
     let mut starts: Vec<usize> = (0..grid)
         .map(|index| {
             if grid == 1 {
