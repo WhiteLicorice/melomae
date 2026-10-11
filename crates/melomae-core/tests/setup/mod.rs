@@ -286,6 +286,151 @@ impl Fixtures {
     }
 }
 
+// --- Builders for the task 16 triage calibration set (author ruling, 2026-10-11) ----------------
+
+/// The name of the copied calibration source inside the calibration directory.
+pub const CALIBRATION_SOURCE: &str = "cal_source.wav";
+
+/// The committed full-band calibration audio, relative to the repository root.
+const REPO_CALIBRATION_WAV: &str = "fixtures/ori_wav.wav";
+
+/// The sidecar file that holds the calibration audio's expected SHA-256.
+const REPO_CALIBRATION_SHA256: &str = "fixtures/ori_wav.sha256";
+
+/// The calibration fixtures: a file name, a source, and the ffmpeg encoder arguments.
+///
+/// The source is [`CALIBRATION_SOURCE`] for the codec encodes, or the name of an earlier fixture
+/// for the FLAC transcoded from the 128 kb/s MP3. `cal_flac_lossless.flac` is the lossless control:
+/// it copies the source through FLAC, so it must not get `suspect-lossless`.
+pub const CALIBRATION_FIXTURES: &[(&str, &str, &[&str])] = &[
+    (
+        "cal_mp3_64.mp3",
+        CALIBRATION_SOURCE,
+        &["-c:a", "libmp3lame", "-b:a", "64k"],
+    ),
+    (
+        "cal_mp3_128.mp3",
+        CALIBRATION_SOURCE,
+        &["-c:a", "libmp3lame", "-b:a", "128k"],
+    ),
+    (
+        "cal_mp3_192.mp3",
+        CALIBRATION_SOURCE,
+        &["-c:a", "libmp3lame", "-b:a", "192k"],
+    ),
+    (
+        "cal_mp3_320.mp3",
+        CALIBRATION_SOURCE,
+        &["-c:a", "libmp3lame", "-b:a", "320k"],
+    ),
+    (
+        "cal_aac_128.m4a",
+        CALIBRATION_SOURCE,
+        &["-c:a", "aac", "-b:a", "128k"],
+    ),
+    (
+        "cal_aac_256.m4a",
+        CALIBRATION_SOURCE,
+        &["-c:a", "aac", "-b:a", "256k"],
+    ),
+    (
+        "cal_flac_from_mp3_128.flac",
+        "cal_mp3_128.mp3",
+        &["-c:a", "flac"],
+    ),
+    (
+        "cal_flac_lossless.flac",
+        CALIBRATION_SOURCE,
+        &["-c:a", "flac"],
+    ),
+];
+
+/// The task 16 calibration set, in a temporary directory that is removed when the guard drops.
+pub struct Calibration {
+    dir: TempDir,
+}
+
+impl Calibration {
+    /// Copy the committed source and build every calibration fixture with the pinned ffmpeg.
+    pub fn build() -> Calibration {
+        let calibration = Calibration {
+            dir: TempDir::new("melomae-calibration"),
+        };
+        fs::copy(
+            calibration_source_path(),
+            calibration.path(CALIBRATION_SOURCE),
+        )
+        .expect("copy the calibration source");
+        for (name, source, args) in CALIBRATION_FIXTURES {
+            encode(
+                &calibration.path(source),
+                &calibration.path(name),
+                args.to_vec(),
+            );
+        }
+        calibration
+    }
+
+    /// The fixture directory.
+    pub fn dir(&self) -> &Path {
+        self.dir.path()
+    }
+
+    /// The absolute path to a fixture.
+    pub fn path(&self, name: &str) -> PathBuf {
+        self.dir.join(name)
+    }
+}
+
+/// The absolute path to the committed full-band calibration source.
+///
+/// Panics with `git lfs pull` guidance when the file is absent or is a Git LFS pointer. Panics when
+/// its SHA-256 differs from the sidecar file.
+pub fn calibration_source_path() -> PathBuf {
+    let path = repo_root().join(REPO_CALIBRATION_WAV);
+    let bytes = fs::read(&path).unwrap_or_else(|error| {
+        panic!(
+            "the calibration source is missing: {}\nRun: git lfs pull\n  {error}",
+            path.display()
+        )
+    });
+    if bytes.starts_with(b"version https://git-lfs.github.com/spec/v1") {
+        panic!(
+            "the calibration source is a Git LFS pointer, not the audio: {}\nRun: git lfs pull",
+            path.display()
+        );
+    }
+
+    let sidecar = repo_root().join(REPO_CALIBRATION_SHA256);
+    let expected = fs::read_to_string(&sidecar)
+        .unwrap_or_else(|error| panic!("read {}: {error}", sidecar.display()));
+    let expected = expected
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    assert_eq!(
+        sha256_hex(&bytes),
+        expected,
+        "the calibration source SHA-256 differs from {}",
+        sidecar.display()
+    );
+    path
+}
+
+/// The lowercase hex SHA-256 of `bytes`.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write;
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
 /// The encoder arguments for an input, keyed by its file name.
 fn encoder_args(name: &str) -> Vec<&'static str> {
     match name {
