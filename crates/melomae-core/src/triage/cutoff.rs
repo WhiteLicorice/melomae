@@ -5,11 +5,11 @@
 //! compressed source from a lightly compressed one.
 //!
 //! The method is Welch's method. The spectrum is averaged over Hann-windowed frames. The frames are
-//! taken at start positions spread evenly over the whole file, and every channel is analyzed at
-//! every selected position. The average is smoothed, and the peak bin is the reference. The cutoff
-//! is the highest frequency that is the top of a run of bins within [`DROP_DB`] of the reference.
-//! The run length is at least [`MIN_BAND_HZ`] wide, so a single spectral spike does not count as
-//! signal.
+//! taken at start positions that always include the first, a central, and the last valid start, plus
+//! an evenly spread grid, and every channel is analyzed at every selected position. The average is
+//! smoothed, and the peak bin is the reference. The cutoff is the highest frequency that is the top
+//! of a run of bins within [`DROP_DB`] of the reference. The run length is at least [`MIN_BAND_HZ`]
+//! wide, so a single spectral spike does not count as signal.
 
 use realfft::num_complex::Complex;
 use realfft::RealFftPlanner;
@@ -97,11 +97,11 @@ impl Spectrum {
 
 /// Average the magnitude-squared spectrum of `audio` over Hann-windowed frames, and smooth it.
 ///
-/// The frames are taken at up to [`MAX_POSITIONS`] start positions spread evenly over the whole
-/// file, from the first valid start to the last, so the start, the middle, and the end are always
-/// included. Every channel is analyzed at every selected position. A silent or narrow-band opening
-/// therefore cannot hide the rest of the file, and a silent channel cannot hide the others. The
-/// position count is capped, so the cost is positions times channels.
+/// The frames are taken at the start positions of [`analysis_starts`]. That selection always
+/// includes the first valid start, the last valid start, and a central start at half the span, so a
+/// silent or narrow-band opening cannot hide the rest of the file and the final audio is always
+/// measured. Every channel is analyzed at every selected position, so a silent channel cannot hide
+/// the others. The position count is capped, so the cost is positions times channels.
 ///
 /// Returns `None` when the audio is too short to window.
 fn averaged_spectrum(audio: &AudioBuffer) -> Option<Spectrum> {
@@ -128,19 +128,8 @@ fn averaged_spectrum(audio: &AudioBuffer) -> Option<Spectrum> {
     let mut spectrum = vec![Complex::default(); bins];
     let mut power = vec![0f64; bins];
 
-    // The valid start positions run from 0 to `span`. Never take more positions than half-overlapping
-    // windows would use, so a short file is not sampled at near-identical positions.
-    let hop = (window / 2).max(1);
-    let span = frames - window;
-    let positions = MAX_POSITIONS.min(span / hop + 1).max(1);
-
     let mut turns = 0usize;
-    for position in 0..positions {
-        let start = if positions == 1 {
-            0
-        } else {
-            span * position / (positions - 1)
-        };
+    for start in analysis_starts(frames, window) {
         for channel in audio.channels() {
             for index in 0..window {
                 input[index] = channel[start + index] * hann[index];
@@ -166,6 +155,37 @@ fn averaged_spectrum(audio: &AudioBuffer) -> Option<Spectrum> {
         bin_width: rate / window as f64,
         nyquist: rate / 2.0,
     })
+}
+
+/// The start positions, in samples, of the analysis windows in a file of `frames` frames.
+///
+/// `window` is the frame length, so `span = frames - window` is the highest valid start. When `span`
+/// is zero there is one start, at 0. Otherwise the selection always includes the first start (0),
+/// the last start (`span`), and the central start `span / 2`. It also includes an evenly spread grid
+/// of up to [`MAX_POSITIONS`] starts. Duplicate starts are removed and the result is sorted.
+fn analysis_starts(frames: usize, window: usize) -> Vec<usize> {
+    let span = frames.saturating_sub(window);
+    if span == 0 {
+        return vec![0];
+    }
+
+    let hop = (window / 2).max(1);
+    let grid = MAX_POSITIONS.min(span / hop + 1);
+    let mut starts: Vec<usize> = (0..grid)
+        .map(|index| {
+            if grid == 1 {
+                0
+            } else {
+                span * index / (grid - 1)
+            }
+        })
+        .collect();
+    starts.push(0);
+    starts.push(span / 2);
+    starts.push(span);
+    starts.sort_unstable();
+    starts.dedup();
+    starts
 }
 
 /// The largest power of two that is no greater than `value`.
