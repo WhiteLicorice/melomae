@@ -100,7 +100,7 @@ The validator rejects any other status value.
 | 03 | [Decode every input format to 44.1 kHz float audio](mvp/03-decode-every-input-format-to-float-audio.md) | DONE | 00 |
 | 04 | [Port chunked inference to ONNX Runtime](mvp/04-port-chunked-inference-to-onnx-runtime.md) | TODO | 01, 03 |
 | 05 | [Size chunks from free memory](mvp/05-size-chunks-from-free-memory.md) | TODO | 04 |
-| 06 | [Encode FLAC, WAV, and Opus output](mvp/06-encode-flac-wav-and-opus-output.md) | TODO | 03 |
+| 06 | [Encode FLAC, WAV, and Opus output](mvp/06-encode-flac-wav-and-opus-output.md) | DONE | 03 |
 | 07 | [Add the restore command-line entry](mvp/07-add-the-restore-command-line-entry.md) | TODO | 04, 05, 06 |
 | 08 | [Add GPU execution with CPU fallback](mvp/08-add-gpu-execution-with-cpu-fallback.md) | TODO | 07 |
 
