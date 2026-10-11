@@ -8,7 +8,7 @@
 //! in the movie timescale.
 
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use super::{DecodeError, DecodeErrorKind};
@@ -58,36 +58,40 @@ fn edit_list_trim_reader<R: Read + Seek>(
     track_id: u32,
     sample_rate: u32,
 ) -> Result<Option<EditListTrim>, DecodeError> {
-    let Some(moov) = read_moov(reader) else {
+    let Some(moov) = read_moov(path, reader)? else {
         return Ok(None);
     };
-    let movie_timescale = find_box(&moov, b"mvhd")
+    let movie_timescale = find_box(path, &moov, b"mvhd")?
         .and_then(read_mvhd_timescale)
         .ok_or_else(|| malformed(path, "the movie header has no usable timescale"))?;
 
-    for trak in find_boxes(&moov, b"trak") {
+    for trak in find_boxes(path, &moov, b"trak")? {
         // Select the reader's track by its `tkhd` identity, not by the first audio handler, so a
         // file whose selected track is not the first audio track uses the right edit list.
-        let Some(tkhd) = find_box(trak, b"tkhd") else {
+        let Some(tkhd) = find_box(path, trak, b"tkhd")? else {
             continue;
         };
         if read_tkhd_track_id(tkhd) != Some(track_id) {
             continue;
         }
-        let Some(mdia) = find_box(trak, b"mdia") else {
+        let Some(mdia) = find_box(path, trak, b"mdia")? else {
             continue;
         };
-        let Some(hdlr) = find_box(mdia, b"hdlr") else {
+        let Some(hdlr) = find_box(path, mdia, b"hdlr")? else {
             continue;
         };
         // The handler type sits after version/flags and the pre-defined field.
         if hdlr.get(8..12) != Some(b"soun") {
             continue;
         }
-        let media_timescale = find_box(mdia, b"mdhd")
+        let media_timescale = find_box(path, mdia, b"mdhd")?
             .and_then(read_mdhd_timescale)
             .ok_or_else(|| malformed(path, "the media header has no usable timescale"))?;
-        let Some(elst) = find_box(trak, b"edts").and_then(|edts| find_box(edts, b"elst")) else {
+        let elst = match find_box(path, trak, b"edts")? {
+            Some(edts) => find_box(path, edts, b"elst")?,
+            None => None,
+        };
+        let Some(elst) = elst else {
             return Ok(None);
         };
         let edits =
@@ -204,97 +208,181 @@ fn read_tkhd_track_id(tkhd: &[u8]) -> Option<u32> {
     }
 }
 
-/// The bytes of the `moov` box, or `None` when the file is not an ISO base media file or has none.
+/// The bytes of the `moov` box, or `Ok(None)` when the file is not an ISO base media file or has
+/// none.
 ///
 /// Only the box headers are read to walk the top level, the media data is skipped by seeking, and
 /// the `moov` payload is read into a buffer bounded by [`MAX_MOOV_BYTES`]. The reader therefore
 /// never loads the whole file.
-fn read_moov<R: Read + Seek>(reader: &mut R) -> Option<Vec<u8>> {
-    let file_len = reader.seek(SeekFrom::End(0)).ok()?;
+///
+/// A recognized box whose header or body crosses its parent or the physical end of the file is
+/// `Malformed`, not absent: a file that carries `ftyp` cannot silently lose a box. A read failure
+/// is `Io`. `Ok(None)` is reserved for a file with no `ftyp` and for a well-formed file with no
+/// `moov`.
+fn read_moov<R: Read + Seek>(path: &Path, reader: &mut R) -> Result<Option<Vec<u8>>, DecodeError> {
+    let io = |error: io::Error| DecodeError::new(DecodeErrorKind::Io, path, error.to_string());
+    let file_len = reader.seek(SeekFrom::End(0)).map_err(io)?;
     let mut offset = 0u64;
     let mut is_iso = false;
-    while offset.checked_add(8)? <= file_len {
-        reader.seek(SeekFrom::Start(offset)).ok()?;
+    loop {
+        if offset >= file_len {
+            return Ok(None);
+        }
+        if offset + 8 > file_len {
+            // A partial box header at the end. Only an ISO file can be malformed here.
+            return if is_iso {
+                Err(malformed(path, "a box header crosses the end of the file"))
+            } else {
+                Ok(None)
+            };
+        }
+        reader.seek(SeekFrom::Start(offset)).map_err(io)?;
         let mut header = [0u8; 8];
-        reader.read_exact(&mut header).ok()?;
+        reader.read_exact(&mut header).map_err(io)?;
         let mut size = u64::from(u32::from_be_bytes(header[..4].try_into().unwrap()));
         let kind: &[u8; 4] = header[4..8].try_into().unwrap();
         let mut header_len = 8u64;
         if size == 1 {
+            if offset + 16 > file_len {
+                return if is_iso {
+                    Err(malformed(
+                        path,
+                        "an extended box header crosses the end of the file",
+                    ))
+                } else {
+                    Ok(None)
+                };
+            }
             let mut large = [0u8; 8];
-            reader.read_exact(&mut large).ok()?;
+            reader.read_exact(&mut large).map_err(io)?;
             size = u64::from_be_bytes(large);
             header_len = 16;
         } else if size == 0 {
-            size = file_len.checked_sub(offset)?;
+            size = file_len
+                .checked_sub(offset)
+                .ok_or_else(|| malformed(path, "a box size is out of range"))?;
         }
         if size < header_len {
-            return None;
+            return if is_iso {
+                Err(malformed(path, "a box size is smaller than its header"))
+            } else {
+                Ok(None)
+            };
         }
-        let body_start = offset.checked_add(header_len)?;
-        let body_end = offset.checked_add(size)?;
-        if body_end > file_len {
-            return None;
-        }
+        let body_start = offset
+            .checked_add(header_len)
+            .ok_or_else(|| malformed(path, "a box size overflows the file"))?;
+        let body_end = offset.checked_add(size);
+        let Some(body_end) = body_end.filter(|end| *end <= file_len) else {
+            return if is_iso {
+                Err(malformed(path, "a box body crosses the end of the file"))
+            } else {
+                Ok(None)
+            };
+        };
         if kind == b"ftyp" {
             is_iso = true;
         }
         if kind == b"moov" {
             if !is_iso {
-                return None;
+                return Ok(None);
             }
-            let body_len = body_end.checked_sub(body_start)?;
+            let body_len = body_end - body_start;
             if body_len > MAX_MOOV_BYTES {
-                return None;
+                return Err(malformed(
+                    path,
+                    "the moov box is larger than the reader allows",
+                ));
             }
-            reader.seek(SeekFrom::Start(body_start)).ok()?;
-            let mut body = vec![0u8; usize::try_from(body_len).ok()?];
-            reader.read_exact(&mut body).ok()?;
-            return Some(body);
+            reader.seek(SeekFrom::Start(body_start)).map_err(io)?;
+            let mut body = vec![
+                0u8;
+                usize::try_from(body_len).map_err(|_| malformed(
+                    path,
+                    "the moov box is larger than the reader allows"
+                ))?
+            ];
+            reader.read_exact(&mut body).map_err(io)?;
+            return Ok(Some(body));
         }
         offset = body_end;
     }
-    None
 }
 
 /// The first child box of `kind` within `data`.
-fn find_box<'a>(data: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
-    boxes(data)
-        .find(|(name, _)| name.as_slice() == kind.as_slice())
-        .map(|(_, body)| body)
+fn find_box<'a>(
+    path: &Path,
+    data: &'a [u8],
+    kind: &[u8; 4],
+) -> Result<Option<&'a [u8]>, DecodeError> {
+    for entry in boxes(data) {
+        let (name, body) = entry.map_err(|reason| malformed(path, reason))?;
+        if name == kind {
+            return Ok(Some(body));
+        }
+    }
+    Ok(None)
 }
 
 /// Every child box of `kind` within `data`.
-fn find_boxes<'a>(data: &'a [u8], kind: &'a [u8; 4]) -> impl Iterator<Item = &'a [u8]> {
-    boxes(data)
-        .filter(move |(name, _)| name.as_slice() == kind.as_slice())
-        .map(|(_, body)| body)
+fn find_boxes<'a>(
+    path: &Path,
+    data: &'a [u8],
+    kind: &[u8; 4],
+) -> Result<Vec<&'a [u8]>, DecodeError> {
+    let mut found = Vec::new();
+    for entry in boxes(data) {
+        let (name, body) = entry.map_err(|reason| malformed(path, reason))?;
+        if name == kind {
+            found.push(body);
+        }
+    }
+    Ok(found)
 }
 
 /// Iterate the boxes in `data`, yielding the type and the payload.
-fn boxes(data: &[u8]) -> impl Iterator<Item = (&[u8; 4], &[u8])> {
+///
+/// A box whose header or body crosses `data` is an error, not the end of the list: a child list
+/// that does not tile its parent exactly is malformed. The iterator stops cleanly only when it
+/// reaches the exact end of `data`.
+fn boxes(data: &[u8]) -> impl Iterator<Item = Result<(&[u8; 4], &[u8]), &'static str>> {
     let mut offset = 0usize;
     std::iter::from_fn(move || {
-        let header = data.get(offset..offset + 8)?;
-        let mut size = u32::from_be_bytes(header[..4].try_into().unwrap()) as u64;
-        let kind: &[u8; 4] = header[4..8].try_into().unwrap();
-        let mut header_len = 8usize;
-        if size == 1 {
-            let large = data.get(offset + 8..offset + 16)?;
-            size = u64::from_be_bytes(large.try_into().unwrap());
-            header_len = 16;
-        }
-        if size == 0 {
-            size = (data.len() - offset) as u64;
-        }
-        if size < header_len as u64 {
+        if offset >= data.len() {
             return None;
         }
-        let body_start = offset.checked_add(header_len)?;
-        let body_end = offset.checked_add(usize::try_from(size).ok()?)?;
-        let body = data.get(body_start..body_end)?;
-        offset = body_end;
-        Some((kind, body))
+        let step = (|| {
+            let header = data
+                .get(offset..offset + 8)
+                .ok_or("a box header crosses its parent")?;
+            let mut size = u32::from_be_bytes(header[..4].try_into().unwrap()) as u64;
+            let kind: &[u8; 4] = header[4..8].try_into().unwrap();
+            let mut header_len = 8usize;
+            if size == 1 {
+                let large = data
+                    .get(offset + 8..offset + 16)
+                    .ok_or("an extended box header crosses its parent")?;
+                size = u64::from_be_bytes(large.try_into().unwrap());
+                header_len = 16;
+            }
+            if size == 0 {
+                size = (data.len() - offset) as u64;
+            }
+            if size < header_len as u64 {
+                return Err("a box size is smaller than its header");
+            }
+            let body_start = offset
+                .checked_add(header_len)
+                .ok_or("a box size overflows")?;
+            let size = usize::try_from(size).map_err(|_| "a box size is too large")?;
+            let body_end = offset.checked_add(size).ok_or("a box size overflows")?;
+            let body = data
+                .get(body_start..body_end)
+                .ok_or("a box body crosses its parent")?;
+            offset = body_end;
+            Ok((kind, body))
+        })();
+        Some(step)
     })
 }
 
@@ -729,16 +817,38 @@ mod tests {
         assert_eq!(error.kind(), DecodeErrorKind::Malformed);
     }
 
+    /// D3: an edit list whose box header is present but whose body crosses its parent is a
+    /// malformed file, not an absent edit list. The old reader ended its box iteration at the bad
+    /// size, `find_box` reported absence, and the decoder silently fell back to an untrimmed decode.
+    #[test]
+    fn malformed_edit_list_is_an_error_not_absent() {
+        let mut data = file(1_000, 44_100, &[(6_000, 1_024)]);
+        let at = data.windows(4).position(|v| v == b"elst").unwrap();
+        let old = u32::from_be_bytes(data[at - 4..at].try_into().unwrap());
+        data[at - 4..at].copy_from_slice(&(old + 1).to_be_bytes());
+        let result = edit_list_trim_reader(
+            Path::new("bad-elst.m4a"),
+            &mut std::io::Cursor::new(data),
+            1,
+            44_100,
+        );
+        let error = result.expect_err("a present malformed edit list must not be absent");
+        assert_eq!(error.kind(), DecodeErrorKind::Malformed);
+    }
+
     #[test]
     fn rejects_an_oversized_extended_box() {
         // `ftyp`, then a box whose extended 64-bit size is `u64::MAX`. The reader must not
-        // allocate it, and must not overflow on `offset + size`.
+        // allocate it, must not overflow on `offset + size`, and must report the malformed box
+        // rather than treat the file as carrying no `moov`.
         let mut out = boxed(b"ftyp", b"M4A ");
         out.extend_from_slice(&1u32.to_be_bytes());
         out.extend_from_slice(b"free");
         out.extend_from_slice(&u64::MAX.to_be_bytes());
         let path = write_temp("mp4_oversized_box.m4a", &out);
-        assert_eq!(edit_list_trim(&path, 1, 44_100).unwrap(), None);
+        let error = edit_list_trim(&path, 1, 44_100)
+            .expect_err("an oversized box crosses the physical end of the file");
+        assert_eq!(error.kind(), DecodeErrorKind::Malformed);
     }
 
     /// A `Read + Seek` wrapper that counts the bytes actually read.
