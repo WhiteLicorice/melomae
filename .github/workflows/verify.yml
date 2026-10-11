@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The model and the parity inputs are in Git LFS. Checkout does not fetch
+      # The model, the parity inputs, and the triage fixture are in Git LFS. Checkout does not fetch
       # them, so list them, restore `.git/lfs` from the cache, then pull. The
       # cache key changes only when the committed LFS objects change, so CI
       # spends LFS bandwidth on a cache miss only.
