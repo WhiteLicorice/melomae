@@ -178,13 +178,17 @@ impl<R: Read + Seek> Scanner<R> {
     }
 
     /// The absolute end of an element body, bounded by `limit`. An element that runs past its
-    /// limit is a truncation. `None` is the unknown-size marker.
+    /// limit is a truncation. `None` is the unknown-size marker. A body that already starts past
+    /// the limit is a truncation, whatever its size.
     fn bounded_end(
         &self,
         body_start: u64,
         size: Option<u64>,
         limit: u64,
     ) -> Result<Option<u64>, Fail> {
+        if body_start > limit {
+            return Err(Fail::Eof);
+        }
         match size {
             Some(size) => {
                 let end = body_start
@@ -281,8 +285,8 @@ fn scan<R: Read + Seek>(
     // Opus trim; any other element, and a truncation inside one, is still seen, so no byte is left
     // unread and a trailing fragment cannot hide behind an early stop.
     let mut parsed_segment = false;
-    while let Some((id, _)) = read_id(scanner)? {
-        let size = read_size(scanner)?;
+    while let Some((id, _)) = read_id(scanner, scanner.file_len)? {
+        let size = read_size(scanner, scanner.file_len)?;
         let body_start = scanner.pos;
         let body_end = scanner.bounded_end(body_start, size, scanner.file_len)?;
         if id == ID_SEGMENT && !parsed_segment {
@@ -294,9 +298,9 @@ fn scan<R: Read + Seek>(
     }
 
     // The loop ended on a clean read of the physical end of the file, at an element boundary: the
-    // scan reached the end with no unread byte. A caller may then accept the demuxer's matching
-    // clean end.
-    let valid_eof = scanner.pos >= scanner.file_len;
+    // scan reached the end exactly, with no unread byte. A position past the end is not a valid
+    // boundary, so only equality certifies the end.
+    let valid_eof = scanner.pos == scanner.file_len;
     if !state.found_track {
         return Ok(ScanOutcome {
             trim: None,
@@ -322,9 +326,13 @@ fn parse_segment<R: Read + Seek>(
     loop {
         let limit = scanner.limit(ancestor_end, own_end);
         if scanner.pos >= limit {
-            return Ok(());
+            return if scanner.pos == limit {
+                Ok(())
+            } else {
+                Err(Fail::Eof)
+            };
         }
-        let Some((id, _)) = read_id(scanner)? else {
+        let Some((id, _)) = read_id(scanner, limit)? else {
             // A physical end of file under a finite Segment is a truncation; under an unknown-size
             // Segment it is the clean end of the file.
             return if own_end.is_none() {
@@ -333,7 +341,7 @@ fn parse_segment<R: Read + Seek>(
                 Err(Fail::Eof)
             };
         };
-        let size = read_size(scanner)?;
+        let size = read_size(scanner, limit)?;
         let body_start = scanner.pos;
         let child_end = scanner.bounded_end(body_start, size, limit)?;
         // The nearest finite ancestor for a child: its own end when it has one, otherwise the
@@ -357,8 +365,8 @@ fn parse_tracks<R: Read + Seek>(
     let end = own_end.ok_or(Fail::Bad("the Tracks element has no size"))?;
     let limit = scanner.limit(ancestor_end, Some(end));
     while scanner.pos < limit {
-        let (id, _) = read_id(scanner)?.ok_or(Fail::Eof)?;
-        let size = read_size(scanner)?;
+        let (id, _) = read_id(scanner, limit)?.ok_or(Fail::Eof)?;
+        let size = read_size(scanner, limit)?;
         let body_start = scanner.pos;
         let child_end = scanner.bounded_end(body_start, size, limit)?;
         if id == ID_TRACK_ENTRY {
@@ -384,8 +392,8 @@ fn parse_track_entry<R: Read + Seek>(
     let mut delay_ns = 0u64;
     let limit = scanner.limit(None, Some(end));
     while scanner.pos < limit {
-        let (id, _) = read_id(scanner)?.ok_or(Fail::Eof)?;
-        let size = read_size(scanner)?;
+        let (id, _) = read_id(scanner, limit)?.ok_or(Fail::Eof)?;
+        let size = read_size(scanner, limit)?;
         let body_start = scanner.pos;
         let child_end = scanner
             .bounded_end(body_start, size, limit)?
@@ -414,10 +422,14 @@ fn parse_cluster<R: Read + Seek>(
     loop {
         let limit = scanner.limit(ancestor_end, own_end);
         if scanner.pos >= limit {
-            return Ok(());
+            return if scanner.pos == limit {
+                Ok(())
+            } else {
+                Err(Fail::Eof)
+            };
         }
         let id_start = scanner.pos;
-        let Some((id, _)) = read_id(scanner)? else {
+        let Some((id, _)) = read_id(scanner, limit)? else {
             // A clean EOF ends an unknown-size cluster. A finite cluster that ends before its
             // declared size is truncated.
             return if own_end.is_none() {
@@ -432,7 +444,7 @@ fn parse_cluster<R: Read + Seek>(
             scanner.seek(id_start)?;
             return Ok(());
         }
-        let size = read_size(scanner)?;
+        let size = read_size(scanner, limit)?;
         let body_start = scanner.pos;
         let child_end = scanner.bounded_end(body_start, size, limit)?;
         match id {
@@ -480,8 +492,8 @@ fn parse_block_group<R: Read + Seek>(
     let mut frames = 1usize;
     let mut padding_ns = 0i64;
     while scanner.pos < limit {
-        let (id, _) = read_id(scanner)?.ok_or(Fail::Eof)?;
-        let size = read_size(scanner)?;
+        let (id, _) = read_id(scanner, limit)?.ok_or(Fail::Eof)?;
+        let size = read_size(scanner, limit)?;
         let body_start = scanner.pos;
         let child_end = scanner
             .bounded_end(body_start, size, limit)?
@@ -526,16 +538,21 @@ fn skip<R: Read + Seek>(
     }
 }
 
-/// Read an element ID, returning its value (with the length marker) and byte length.
-fn read_id<R: Read + Seek>(scanner: &mut Scanner<R>) -> Result<Option<(u32, usize)>, Fail> {
-    let first = match scanner.read(&mut [0u8; 1])? {
-        0 => return Ok(None),
-        _ => {
-            // `read` already advanced the position; re-read the byte from the buffer.
-            scanner.seek(scanner.pos - 1)?;
-            scanner.byte()?
-        }
-    };
+/// Read an element ID, returning its value (with the length marker) and byte length. Every byte is
+/// bounded by `limit`, so an ID that crosses the nearest finite ancestor is a truncation, not a
+/// clean end. `None` means the read reached exactly `limit`.
+fn read_id<R: Read + Seek>(
+    scanner: &mut Scanner<R>,
+    limit: u64,
+) -> Result<Option<(u32, usize)>, Fail> {
+    if scanner.pos >= limit {
+        return if scanner.pos == limit {
+            Ok(None)
+        } else {
+            Err(Fail::Eof)
+        };
+    }
+    let first = scanner.byte_within(limit)?;
     if first == 0 {
         return Err(Fail::Bad("an element id is zero"));
     }
@@ -546,7 +563,7 @@ fn read_id<R: Read + Seek>(scanner: &mut Scanner<R>) -> Result<Option<(u32, usiz
     let mut value = u32::from(first);
     let mut rest = [0u8; 3];
     if len > 1 {
-        scanner.read_exact(&mut rest[..len - 1])?;
+        scanner.read_exact_within(&mut rest[..len - 1], limit)?;
         for byte in &rest[..len - 1] {
             value = (value << 8) | u32::from(*byte);
         }
@@ -554,9 +571,10 @@ fn read_id<R: Read + Seek>(scanner: &mut Scanner<R>) -> Result<Option<(u32, usiz
     Ok(Some((value, len)))
 }
 
-/// Read an element size. `None` is the unknown-size marker.
-fn read_size<R: Read + Seek>(scanner: &mut Scanner<R>) -> Result<Option<u64>, Fail> {
-    let first = scanner.byte()?;
+/// Read an element size. `None` is the unknown-size marker. Every byte is bounded by `limit`, so a
+/// size that crosses the nearest finite ancestor is a truncation.
+fn read_size<R: Read + Seek>(scanner: &mut Scanner<R>, limit: u64) -> Result<Option<u64>, Fail> {
+    let first = scanner.byte_within(limit)?;
     if first == 0 {
         return Err(Fail::Bad("an element size is zero length"));
     }
@@ -568,7 +586,7 @@ fn read_size<R: Read + Seek>(scanner: &mut Scanner<R>) -> Result<Option<u64>, Fa
     let mut value = u64::from(first) & u64::from(marker as u8);
     let mut all_ones = value == u64::from(marker as u8);
     for _ in 1..len {
-        let byte = scanner.byte()?;
+        let byte = scanner.byte_within(limit)?;
         value = (value << 8) | u64::from(byte);
         if byte != 0xFF {
             all_ones = false;
@@ -1152,6 +1170,58 @@ mod tests {
         assert!(
             result.is_err() || !result.unwrap().valid_eof,
             "the scan did not reach the physical end"
+        );
+    }
+
+    /// E2: a Cluster ID inside a finite Segment whose size byte lies outside it is a truncation. The
+    /// old reader read the size byte across the boundary and accepted an unknown size.
+    #[test]
+    fn unknown_cluster_header_crosses_finite_segment() {
+        let mut segment = element(ID_TRACKS, &element(ID_TRACK_ENTRY, &track_entry(1, 0)));
+        segment.extend_from_slice(&id(ID_CLUSTER));
+        let mut data = vec![0x1A, 0x45, 0xDF, 0xA3, 0x80];
+        data.extend_from_slice(&element(ID_SEGMENT, &segment));
+        data.push(0xFF); // The Cluster size byte lies outside the finite Segment.
+        data.extend_from_slice(&element(ID_VOID, &[]));
+        let result = scan_bytes(&data, 1);
+        if let Ok(outcome) = &result {
+            eprintln!("CROSSED HEADER valid_eof={}", outcome.valid_eof);
+        }
+        assert!(
+            result.is_err(),
+            "the Cluster header crosses the finite Segment"
+        );
+    }
+
+    /// E2: an element ID that starts inside a finite Segment and ends outside it is a truncation.
+    #[test]
+    fn unknown_cluster_id_crosses_finite_segment() {
+        let cluster_id = id(ID_CLUSTER);
+        let mut segment = element(ID_TRACKS, &element(ID_TRACK_ENTRY, &track_entry(1, 0)));
+        segment.extend_from_slice(&cluster_id[..2]);
+        let mut data = vec![0x1A, 0x45, 0xDF, 0xA3, 0x80];
+        data.extend_from_slice(&element(ID_SEGMENT, &segment));
+        data.extend_from_slice(&cluster_id[2..]);
+        data.extend_from_slice(&element(ID_VOID, &[]));
+        let result = scan_bytes(&data, 1);
+        assert!(result.is_err(), "the element ID crosses the finite Segment");
+    }
+
+    /// E2: a multi-byte size vint that starts inside a finite Segment and ends outside it is a
+    /// truncation.
+    #[test]
+    fn unknown_cluster_size_vint_crosses_finite_segment() {
+        let mut segment = element(ID_TRACKS, &element(ID_TRACK_ENTRY, &track_entry(1, 0)));
+        segment.extend_from_slice(&id(ID_CLUSTER));
+        segment.push(0x40); // The first byte of a two-byte size vint.
+        let mut data = vec![0x1A, 0x45, 0xDF, 0xA3, 0x80];
+        data.extend_from_slice(&element(ID_SEGMENT, &segment));
+        data.push(0x00); // The second size byte lies outside the finite Segment.
+        data.extend_from_slice(&element(ID_VOID, &[]));
+        let result = scan_bytes(&data, 1);
+        assert!(
+            result.is_err(),
+            "the element size vint crosses the finite Segment"
         );
     }
 }
