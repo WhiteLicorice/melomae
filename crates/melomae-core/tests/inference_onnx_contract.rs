@@ -171,7 +171,7 @@ fn two_channel_model() -> Vec<u8> {
 fn backend_from(dir: &TempDir, name: &str, bytes: &[u8]) -> melomae_core::inference::OnnxBackend {
     let path = dir.join(name);
     std::fs::write(&path, bytes).expect("write the constructed ONNX model");
-    load_onnx_backend(&path).expect("load the constructed ONNX model")
+    load_onnx_backend(setup::ort_library(), &path).expect("load the constructed ONNX model")
 }
 
 /// Restore one channel through a backend, with the full-file path.

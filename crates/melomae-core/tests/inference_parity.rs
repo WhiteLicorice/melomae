@@ -213,7 +213,8 @@ fn inference_parity_with_stock_apollo_on_the_18s_input() {
     );
     let input = audio.channels().to_vec();
 
-    let backend = load_onnx_backend(&model_path).expect("load the Apollo ONNX model");
+    let backend =
+        load_onnx_backend(setup::ort_library(), &model_path).expect("load the Apollo ONNX model");
     let settings = RestoreSettings {
         chunk_seconds: Some(CHUNK_SECONDS),
         overlap_seconds: OVERLAP_SECONDS,

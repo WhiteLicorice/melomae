@@ -507,6 +507,59 @@ fn find_binary(tag_dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// The pinned Microsoft ONNX Runtime release. Keep this in step with `tools/fetch_onnxruntime.py`.
+pub const ORT_TAG: &str = "v1.28.3";
+
+/// The ONNX Runtime shared library the tests load: the pinned release fetched into
+/// `.cache/onnxruntime/<tag>/`.
+///
+/// The engine loads ONNX Runtime at run time from a caller-given library path, so every test
+/// that loads a real model must pass this path. When the pinned build is missing the test
+/// fails with the command that fetches it.
+pub fn ort_library() -> &'static Path {
+    static ORT: OnceLock<PathBuf> = OnceLock::new();
+    ORT.get_or_init(|| {
+        let tag_dir = repo_root().join(".cache").join("onnxruntime").join(ORT_TAG);
+        find_ort_library(&tag_dir).unwrap_or_else(|| {
+            panic!(
+                "the pinned ONNX Runtime is not installed at {}.\n\
+                 Run: python tools/fetch_onnxruntime.py",
+                tag_dir.display()
+            )
+        })
+    })
+}
+
+/// The ONNX Runtime shared library inside an extracted tag directory, if the fetch has run.
+fn find_ort_library(tag_dir: &Path) -> Option<PathBuf> {
+    for entry in fs::read_dir(tag_dir).ok()?.flatten() {
+        let lib = entry.path().join("lib");
+        for name in ["onnxruntime.dll", "libonnxruntime.so"] {
+            let candidate = lib.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        // On Linux the archive may carry only the versioned name plus symlinks.
+        if let Ok(entries) = fs::read_dir(&lib) {
+            let mut versioned: Vec<PathBuf> = entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with("libonnxruntime.so."))
+                })
+                .collect();
+            versioned.sort();
+            if let Some(path) = versioned.into_iter().next() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
 /// Run ffmpeg, failing the test when it exits non-zero.
 fn run(args: &[&str]) {
     let output = Command::new(ffmpeg())
