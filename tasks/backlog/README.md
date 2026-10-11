@@ -32,3 +32,4 @@ Do not place a defect that blocks an MVP user journey here. Put that task in `ta
 | B-020 | [Measure the upper band at high input rates](B-020-measure-the-upper-band-at-high-input-rates.md) |
 | B-021 | [Let the user choose the default triage selection](B-021-let-the-user-choose-the-default-triage-selection.md) |
 | B-022 | [Test the encoder error-cleanup paths](B-022-test-the-encoder-error-cleanup-paths.md) |
+| B-023 | [Reject unrepresentable chunk settings](B-023-reject-unrepresentable-chunk-settings.md) |

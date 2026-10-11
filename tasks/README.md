@@ -192,5 +192,6 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 | B-020 | [Measure the upper band at high input rates](backlog/B-020-measure-the-upper-band-at-high-input-rates.md) | TODO | 03 |
 | B-021 | [Let the user choose the default triage selection](backlog/B-021-let-the-user-choose-the-default-triage-selection.md) | TODO | 24 |
 | B-022 | [Test the encoder error-cleanup paths](backlog/B-022-test-the-encoder-error-cleanup-paths.md) | TODO | 06 |
+| B-023 | [Reject unrepresentable chunk settings](backlog/B-023-reject-unrepresentable-chunk-settings.md) | TODO | 04 |
 
 Each backlog record states why it does not block the MVP. Each record also states its promotion condition.
