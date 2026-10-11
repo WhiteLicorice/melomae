@@ -2,7 +2,7 @@
 
 **Status:** TODO
 **Phase:** 5 — Packaging and release
-**Depends on:** 25, 26
+**Depends on:** 25, 26, 35
 **SRS:** §2, §3
 **Stack:** §A, §J
 **Assigned to:** Agent

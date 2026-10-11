@@ -140,8 +140,9 @@ Task numbers record creation order. The executor still selects the lowest eligib
 | # | Task | Status | Depends on |
 | --- | --- | --- | --- |
 | 26 | [Publish third-party notices and the model attribution](mvp/26-publish-third-party-notices-and-the-model-attribution.md) | TODO | 03, 04, 06 |
-| 27 | [Build and verify the Windows installer](mvp/27-build-and-verify-the-windows-installer.md) | TODO | 25, 26 |
-| 28 | [Build and verify the Linux packages](mvp/28-build-and-verify-the-linux-packages.md) | TODO | 25, 26 |
+| 27 | [Build and verify the Windows installer](mvp/27-build-and-verify-the-windows-installer.md) | TODO | 25, 26, 35 |
+| 28 | [Build and verify the Linux packages](mvp/28-build-and-verify-the-linux-packages.md) | TODO | 25, 26, 35 |
+| 35 | [Settle the license terms of the shipped app](mvp/35-settle-the-license-terms-of-the-shipped-app.md) | TODO | 26 |
 | 29 | [Run the release-candidate journey](mvp/29-run-the-release-candidate-journey.md) | TODO | 21, 23, 24, 27, 28, 32 |
 
 ## Cancelled by the 2026-10-10 pivot
