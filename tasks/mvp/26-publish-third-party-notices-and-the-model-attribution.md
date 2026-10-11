@@ -1,13 +1,13 @@
 # 26 — Publish third-party notices and the model attribution
 
-**Status:** IN PROGRESS
+**Status:** DONE
 **Phase:** 5 — Packaging and release
 **Depends on:** 03, 04, 06
 **SRS:** §11
 **Stack:** §C, §D, §I
 **Assigned to:** Agent
-**Started:** 3690b93 (2026-10-11)
-**Outcome:** —
+**Started:** 3690b93, clean tree. Baseline gate at 3690b93: board 61 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 179 passed, pytest 19 passed.
+**Outcome:** DONE. Added the cargo-deny license gate and the third-party notices. `tools/cargo_deny.py` installs one pinned prebuilt cargo-deny release (0.20.2) into `.cache/cargo-deny` with a checked SHA-256, then runs it. `pnpm verify` runs `cargo deny check licenses`. `deny.toml` allows the licenses the tree uses that are compatible with GPL-3.0-or-later, and cites the FSF license list for each. `Apache-2.0 WITH LLVM-exception` (target-lexicon 0.12.16) has no direct FSF entry; it is allowed because the exception only adds permissions, so the Apache-2.0 GPLv3 compatibility holds. `LGPL-2.1-or-later` is not allowed: it appears only in `r-efi`'s choice, and Melomae picks MIT or Apache-2.0. `src-tauri` did not declare a license, so cargo-deny failed the app crate; it now sets `license.workspace = true`. `tools/generate_notices.py` builds `THIRD_PARTY_NOTICES.md` from the non-dev Cargo graph for all targets and the production pnpm tree, plus the two bundled components that no manifest lists (ONNX Runtime 1.28.3, MIT, and `apollo.onnx`, CC-BY-SA-4.0). It writes one license text per SPDX id, because a text per crate repeated the same license hundreds of times. `pnpm verify` runs `python tools/generate_notices.py --check`, which fails when the file is stale, so tasks 05 and 15 must regenerate it. `models/NOTICE.md` records the Apollo creators (Kai Li, Yi Luo), the paper, CC BY-SA 4.0 and its link, the source, the ONNX and real-arithmetic modifications, and the no-endorsement statement. Red first: `cargo deny check licenses` failed (exit 4) on `mp3lame-encoder` 0.2.5 (LGPL-3.0), and the notices check failed (exit 1) on a stale file. The gate `pnpm verify` exits 0: board 61 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 179 passed, pytest 35 passed (19 baseline plus 16 new), cargo deny licenses ok, and the notices file current. Open license questions for the author: (1) the FSF states CC BY-SA 4.0 is one-way compatible with GPLv3, and does not allow the adapter to use "GPLv3 or any later version" directly; the author should confirm whether Melomae relies on the GPLv3 section 14 proxy or ships the combined work under GPLv3 only; (2) the `Apache-2.0 WITH LLVM-exception` entry has no direct FSF citation; (3) the separate rights in the audio that trained the shipped weights are not confirmed in this repository. `src-tauri/tauri.conf.json` has no bundle resources list, so tasks 27 and 28 must add `THIRD_PARTY_NOTICES.md` and `models/NOTICE.md` to it; both task files now name that step.
 
 ## Goal
 
@@ -37,10 +37,10 @@ Add a test dependency with a license outside the allowlist in a temporary branch
 
 ## Acceptance criteria
 
-- [ ] `cargo deny check licenses` is part of `pnpm verify` and passes.
-- [ ] The notices file lists every bundled component.
-- [ ] The new check failed first for the expected reason.
-- [ ] `pnpm verify` passes.
+- [x] `cargo deny check licenses` is part of `pnpm verify` and passes.
+- [x] The notices file lists every bundled component.
+- [x] The new check failed first for the expected reason.
+- [x] `pnpm verify` passes.
 
 ## Verify
 
