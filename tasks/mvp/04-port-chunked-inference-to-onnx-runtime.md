@@ -1,13 +1,13 @@
 # 04 — Port chunked inference to ONNX Runtime
 
-**Status:** TODO
+**Status:** DONE
 **Phase:** 1 — Restoration engine
 **Depends on:** 01, 03
 **SRS:** §6, §12
 **Stack:** §C
 **Assigned to:** Agent
-**Started:** —
-**Outcome:** —
+**Started:** 2026-10-11 — Base commit 0049784, clean tree. Baseline gate at 0049784: board 53 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 98 passed, pytest 13 passed.
+**Outcome:** DONE 2026-10-11. `melomae_core::inference` ports `resolve_chunking`, `chunk_starts`, `crossfade_weights`, and `run_model` of `C:\Lab\Apollo\inference.py` with batch size one. The `Model` trait takes one channel at a time. `OnnxBackend` is the chunked engine over the `ort` session for `models/apollo.onnx`, and it is the only `RestoreBackend` implementation. Scope item 2 does not apply: the task 01 `Outcome` chose the in-graph DSP export, so the STFT and iSTFT are inside `apollo.onnx` and no Rust STFT exists. Version: `ort` 2.0.0-rc.13, license MIT OR Apache-2.0, current on crates.io on 2026-10-11. It gets ONNX Runtime from the `download-binaries` default feature, which fetches the prebuilt libraries at build time, so `windows-latest` and `ubuntu-22.04` need no manual install. Parity on the 18 s input, three copies of the committed input, with chunk 6 s, overlap 1 s, and pad 1 s against the stock golden: channel 0 max abs 3.611e-4 and RMSE 2.269e-5, channel 1 max abs 3.089e-4 and RMSE 1.851e-5, against the §12.1 limits 1e-3 and 1e-4. Progress reports chunk n of m and the channel. A cancel returns `RestoreOutcome::Cancelled` after three model calls when the flag is set during chunk 2, so the run stops within one chunk. Scope 8 and the no-partial-file half of the cancel criterion moved to tasks 06 and 07 by orchestrator ruling on 2026-10-11, because the backend returns channels (Stack §C, SRS §7 item 5, task 07 scope 4). The model, the golden, and the input are committed through Git LFS, and `git lfs ls-files` lists all three. Red-first: `cargo test -p melomae-core inference` failed with `unresolved import melomae_core::inference` before the module existed. Gate: `pnpm verify` exit 0. Board 53 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 112 passed, pytest 14 passed. These are local counts. Evidence: `SCRATCH/evidence-04/`.
 
 ## Goal
 
@@ -62,11 +62,11 @@ Run the tests. They fail because the engine does not exist.
 
 ## Acceptance criteria
 
-- [ ] The output matches the golden within the §12.1 tolerances. The numbers are in `Outcome`.
-- [ ] A cancel takes effect within one chunk and leaves no partial file.
-- [ ] Progress reports chunk n of m.
-- [ ] The new tests failed first for the expected reason.
-- [ ] `pnpm verify` passes.
+- [x] The output matches the golden within the §12.1 tolerances. The numbers are in `Outcome`.
+- [ ] A cancel takes effect within one chunk and leaves no partial file. The no-partial-file half moved to tasks 06 and 07 by orchestrator ruling on 2026-10-11. The cancel itself is proven by `cancel_during_chunk_two_stops_the_run` and `e2e_inference_cancel_returns_no_channels`.
+- [x] Progress reports chunk n of m.
+- [x] The new tests failed first for the expected reason.
+- [x] `pnpm verify` passes.
 
 ## Verify
 
