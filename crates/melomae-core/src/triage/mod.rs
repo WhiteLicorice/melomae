@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use symphonia::core::codecs::audio::well_known::*;
-use symphonia::core::codecs::audio::AudioCodecId;
+use symphonia::core::codecs::audio::{AudioCodecId, AudioCodecParameters};
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
@@ -107,7 +107,7 @@ pub fn triage_file(path: &Path) -> Result<TriageItem, TriageError> {
         source,
     })?;
     let size_bytes = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
-    let modified_at = modified_at_seconds(&metadata);
+    let modified_at = modified_at_nanos(&metadata);
     let scanned_at = now_unix();
     let path_string = path.to_string_lossy().into_owned();
 
@@ -177,7 +177,7 @@ pub fn scan_roots(store: &Store, roots: &[PathBuf]) -> Result<ScanReport, Triage
             source,
         })?;
         let size_bytes = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
-        let modified_at = modified_at_seconds(&metadata);
+        let modified_at = modified_at_nanos(&metadata);
         let key = path.to_string_lossy();
 
         if let Some(existing) = stored_by_path.get(key.as_ref()) {
@@ -252,7 +252,7 @@ fn probe_source(path: &Path) -> Option<SourceMetadata> {
         container: Some(container),
         codec: codec_name(params.codec).map(str::to_string),
         sample_rate_hz: params.sample_rate.map(i64::from),
-        bit_depth: params.bits_per_sample.map(i64::from),
+        bit_depth: bit_depth(params),
         lossless: is_lossless(params.codec, path),
     })
 }
@@ -303,11 +303,8 @@ fn is_pcm(id: AudioCodecId) -> bool {
     id >= CODEC_ID_PCM_S32LE && id <= CODEC_ID_PCM_MULAW
 }
 
-/// Whether a codec is lossless (`Some(true)`), lossy (`Some(false)`), or unknown (`None`).
-///
-/// A codec outside the known sets falls back to the file extension. `.m4a` is ambiguous, so an
-/// unknown `.m4a` codec counts as lossy.
-fn is_lossless(id: AudioCodecId, path: &Path) -> Option<bool> {
+/// Whether a codec id is lossless (`Some(true)`), lossy (`Some(false)`), or unknown (`None`).
+fn codec_kind(id: AudioCodecId) -> Option<bool> {
     if is_pcm(id)
         || matches!(
             id,
@@ -328,16 +325,64 @@ fn is_lossless(id: AudioCodecId, path: &Path) -> Option<bool> {
     ) {
         return Some(false);
     }
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("flac" | "wav" | "aiff" | "aif") => Some(true),
-        Some("mp3" | "m4a" | "ogg" | "opus" | "webm") => Some(false),
+    None
+}
+
+/// Whether a codec is lossless (`Some(true)`), lossy (`Some(false)`), or unknown (`None`).
+///
+/// A codec outside the known sets falls back to the file extension. `.m4a` is ambiguous, so an
+/// unknown `.m4a` codec counts as lossy.
+fn is_lossless(id: AudioCodecId, path: &Path) -> Option<bool> {
+    codec_kind(id).or_else(|| {
+        match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("flac" | "wav" | "aiff" | "aif") => Some(true),
+            Some("mp3" | "m4a" | "ogg" | "opus" | "webm") => Some(false),
+            _ => None,
+        }
+    })
+}
+
+/// The bit depth of a lossless source, when the container or the codec states it, or `None`.
+///
+/// Symphonia leaves `bits_per_sample` empty for an ordinary IEEE float WAV although the codec id is
+/// F32 or F64, so the depth comes from the codec there. Symphonia also leaves it empty for ALAC,
+/// whose magic cookie carries the depth. A lossy codec reports no depth: no container field holds a
+/// recording depth for one, and a displayed depth would mislead.
+fn bit_depth(params: &AudioCodecParameters) -> Option<i64> {
+    if codec_kind(params.codec) == Some(false) {
+        return None;
+    }
+    if let Some(bits) = params.bits_per_sample {
+        return Some(i64::from(bits));
+    }
+    match params.codec {
+        CODEC_ID_PCM_F32LE
+        | CODEC_ID_PCM_F32BE
+        | CODEC_ID_PCM_F32LE_PLANAR
+        | CODEC_ID_PCM_F32BE_PLANAR => Some(32),
+        CODEC_ID_PCM_F64LE
+        | CODEC_ID_PCM_F64BE
+        | CODEC_ID_PCM_F64LE_PLANAR
+        | CODEC_ID_PCM_F64BE_PLANAR => Some(64),
+        CODEC_ID_ALAC => alac_bit_depth(params.extra_data.as_deref()),
         _ => None,
     }
+}
+
+/// The ALAC bit depth from its magic cookie.
+///
+/// The cookie layout is `frame_length` (u32), `compatible_version` (u8), `bit_depth` (u8), `pb`
+/// (u8), `mb` (u8), `kb` (u8), `num_channels` (u8), then the remaining fields. The depth is at byte
+/// 5, in the range 1 to 32. Symphonia parses the cookie for the channels and the rate but does not
+/// copy the depth into `bits_per_sample`.
+fn alac_bit_depth(extra_data: Option<&[u8]>) -> Option<i64> {
+    let bits = *extra_data?.get(5)?;
+    (1..=32).contains(&bits).then(|| i64::from(bits))
 }
 
 /// Whether a path has one of the extensions a folder walk searches for.
@@ -404,8 +449,9 @@ fn duration_seconds(audio: &crate::decode::AudioBuffer) -> Option<f64> {
 
 /// The average bitrate in kb/s, from the file size and the decoded duration.
 ///
-/// This is the file's average bitrate. It includes any tags, which are negligible over a whole
-/// file, and it is the only rate available for every codec.
+/// This is the average rate of the whole file. Tags and cover art are part of the file, so they
+/// raise it, and a large cover can raise it a lot. It is not the encoded audio rate. It is the only
+/// rate available for every codec.
 fn bitrate_kbps(size_bytes: i64, duration_seconds: Option<f64>) -> Option<i64> {
     let duration = duration_seconds?;
     if duration <= 0.0 {
@@ -414,13 +460,16 @@ fn bitrate_kbps(size_bytes: i64, duration_seconds: Option<f64>) -> Option<i64> {
     Some(((size_bytes as f64 * 8.0) / duration / 1000.0).round() as i64)
 }
 
-/// The whole seconds since the Unix epoch.
-fn modified_at_seconds(metadata: &fs::Metadata) -> i64 {
+/// The nanoseconds since the Unix epoch.
+///
+/// Nanoseconds keep a fast same-size edit visible. Whole seconds would round two nearby edits to
+/// the same value and hide the change. Store schema version 2 holds this value.
+fn modified_at_nanos(metadata: &fs::Metadata) -> i64 {
     metadata
         .modified()
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|elapsed| elapsed.as_secs() as i64)
+        .and_then(|elapsed| i64::try_from(elapsed.as_nanos()).ok())
         .unwrap_or_default()
 }
 
