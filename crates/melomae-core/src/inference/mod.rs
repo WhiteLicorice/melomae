@@ -1,9 +1,18 @@
 //! Chunked Apollo inference.
 //!
 //! This module ports the chunked restore algorithm of the stock Apollo
-//! `inference.py` (`C:\Lab\Apollo\inference.py:86-221`). Task 01 exported the
-//! model with the STFT and iSTFT inside the graph, so this module holds only
-//! the chunking, the overlap-add, and the model call. It holds no DSP.
+//! `inference.py` (https://github.com/JusperLee/Apollo/blob/e84bcac/inference.py).
+//! Task 01 exported the model with the STFT and iSTFT inside the graph, so this
+//! module holds only the chunking, the overlap-add, and the model call. It holds
+//! no DSP.
+//!
+//! Portions of this file translate `resolve_chunking`, `chunk_starts`,
+//! `crossfade_weights`, and `run_model` from `inference.py` in Apollo
+//! (https://github.com/JusperLee/Apollo/blob/e84bcac/inference.py),
+//! by Kai Li, Yi Luo, and the Apollo contributors, licensed CC BY-SA 4.0
+//! (https://creativecommons.org/licenses/by-sa/4.0/). Changes: translated
+//! from Python to Rust, with batch size one. This file is licensed
+//! GPL-3.0-only under CC BY-SA 4.0 Section 3(b)(1).
 //!
 //! [`RestoreBackend`] is the file-level entry the pipeline calls. It takes one
 //! file's 44.1 kHz float channels, the settings, a progress callback, and a

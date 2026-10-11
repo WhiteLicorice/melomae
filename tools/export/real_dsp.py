@@ -11,6 +11,14 @@ both transforms with real arithmetic only:
 
 The model mathematics does not change. Only the STFT and iSTFT change their
 form.
+
+The forward pass follows the computation of Apollo.spec_band_split,
+Apollo.feature_extractor, and Apollo.forward in
+look2hear/models/apollo.py (https://github.com/JusperLee/Apollo), by
+Kai Li and Yi Luo, licensed CC BY-SA 4.0
+(https://creativecommons.org/licenses/by-sa/4.0/). Changes: the STFT and
+iSTFT use real arithmetic, and the three methods are merged into one.
+This file is licensed GPL-3.0-only under CC BY-SA 4.0 Section 3(b)(1).
 """
 
 import math
