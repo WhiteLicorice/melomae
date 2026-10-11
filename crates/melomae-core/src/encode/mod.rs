@@ -127,7 +127,14 @@ impl From<String> for EncodeFailure {
 /// One encoder's result, before the caller adds the target path.
 type WriteResult = Result<EncodeOutcome, EncodeFailure>;
 
+/// The one sample rate the output formats are defined at. Every input is checked against it.
+pub const INPUT_SAMPLE_RATE: u32 = 44_100;
+
 /// Encode `source` to `target` in the given format.
+///
+/// The input must hold at least one frame and one channel, must be at [`INPUT_SAMPLE_RATE`], and
+/// must hold only finite samples. A rejected input returns an [`EncodeError`] before the output
+/// directory is created or the temporary file exists, so it never touches the file system.
 ///
 /// The encoder writes a temporary file in the target directory and renames it to `target` only
 /// when the stream is complete. An incomplete stream never reaches `target`, and the temporary
@@ -137,6 +144,8 @@ pub fn encode(
     target: &Path,
     format: OutputFormat,
 ) -> Result<EncodeOutcome, EncodeError> {
+    validate(source).map_err(|reason| EncodeError::new(target, reason))?;
+
     if let Some(parent) = target.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent).map_err(|e| {
@@ -162,6 +171,35 @@ pub fn encode(
         ));
     }
     Ok(outcome)
+}
+
+/// Check the input against the output contract, and return the reason for the first problem.
+///
+/// A non-finite sample means a failed numerical result upstream. It must not be written as
+/// silence, so it is rejected instead of replaced.
+fn validate(source: &AudioBuffer) -> Result<(), String> {
+    if source.frames() == 0 {
+        return Err("the input holds no frames".to_string());
+    }
+    if source.channel_count() == 0 {
+        return Err("the input holds no channels".to_string());
+    }
+    if source.sample_rate() != INPUT_SAMPLE_RATE {
+        return Err(format!(
+            "the input sample rate is {} Hz, not {INPUT_SAMPLE_RATE} Hz",
+            source.sample_rate()
+        ));
+    }
+    for (channel, plane) in source.channels().iter().enumerate() {
+        for (frame, sample) in plane.iter().enumerate() {
+            if !sample.is_finite() {
+                return Err(format!(
+                    "the input holds a non-finite sample at channel {channel} frame {frame}: {sample}"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Write one encoded stream to `path`, which must be a temporary file.
@@ -214,5 +252,17 @@ mod tests {
         let name = temporary.file_name().unwrap().to_str().unwrap();
         assert!(name.starts_with(".restored.flac"), "{name}");
         assert!(name.ends_with(".tmp"), "{name}");
+    }
+
+    #[test]
+    fn the_input_check_rejects_empty_wrong_rate_and_non_finite_inputs() {
+        let nan = AudioBuffer::new(44_100, vec![vec![0.0, f32::NAN, 0.0]]);
+        let reason = validate(&nan).expect_err("a NaN sample must be rejected");
+        assert!(reason.contains("channel 0 frame 1"), "{reason}");
+
+        assert!(validate(&AudioBuffer::new(44_100, vec![Vec::new()])).is_err());
+        assert!(validate(&AudioBuffer::new(0, vec![vec![0.0]])).is_err());
+        assert!(validate(&AudioBuffer::new(48_000, vec![vec![0.0]])).is_err());
+        assert!(validate(&AudioBuffer::new(44_100, vec![vec![0.0; 4]])).is_ok());
     }
 }
