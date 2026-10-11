@@ -16,6 +16,7 @@
 //! glibc 2.35 baseline of SRS §2. [`load_onnx_backend`] loads the model after
 //! the runtime is up.
 
+pub mod chunk_budget;
 mod onnx;
 
 use std::path::{Path, PathBuf};
