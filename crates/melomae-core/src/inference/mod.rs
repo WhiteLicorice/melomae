@@ -126,6 +126,13 @@ pub enum InferenceError {
     },
     /// The overlap-add left at least one output sample with no weight.
     UncoveredOutput,
+    /// Even the smallest chunk does not fit the memory budget.
+    InsufficientMemory {
+        /// The peak the smallest chunk needs, in bytes.
+        needed: u64,
+        /// The memory available at job start, in bytes.
+        available: u64,
+    },
     /// The model failed.
     Model(String),
     /// A file operation failed.
@@ -150,6 +157,11 @@ impl std::fmt::Display for InferenceError {
             Self::UncoveredOutput => {
                 write!(f, "the chunk overlap-add left uncovered output samples")
             }
+            Self::InsufficientMemory { needed, available } => write!(
+                f,
+                "the smallest chunk needs at least {needed} bytes of memory, but only \
+                 {available} bytes are available"
+            ),
             Self::Model(reason) => write!(f, "the model failed: {reason}"),
             Self::Io(reason) => write!(f, "{reason}"),
             Self::Runtime(reason) => {
