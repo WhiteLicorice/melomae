@@ -1,8 +1,8 @@
 //! The task 16 calibration: measured cutoffs set the triage thresholds.
 //!
-//! Every fixture is built in test setup with the pinned ffmpeg, from a synthesized full-band source,
-//! and removed in teardown. The test prints the measured table and then checks each fixture against
-//! its expected verdict from SRS §4.3.
+//! Every fixture is built in test setup with the pinned ffmpeg, from the committed full-band source
+//! `fixtures/ori_wav.wav`, and removed in teardown. The test prints the measured table and then
+//! checks each fixture against its expected verdict from SRS §4.3.
 
 mod common;
 mod setup;

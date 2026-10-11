@@ -167,10 +167,11 @@ and the licence. The calibration test fails with `Run: git lfs pull` when the fi
 pointer, and it checks the SHA-256. CI pulls the LFS objects behind an `actions/cache@v4` keyed on
 the OS and the `git lfs ls-files --long` output.
 
-The new tests: 11 unit tests in `src/triage`, the calibration test and the truncated-file test in
-`tests/triage_calibration.rs`, and the scan test, the rescan test, the removal test, the
-never-writes test, the `e2e_triage_scan_a_folder_into_the_store` test, and the 1,000-file scan test
-in `tests/triage_scan.rs`.
+The tests: eleven unit tests in `src/triage` (five cutoff, six triage), the calibration test and the
+truncated-file test in `tests/triage_calibration.rs`, the scan, rescan, removal, never-writes,
+`e2e_triage_scan_a_folder_into_the_store`, and 1,000-file tests in `tests/triage_scan.rs`, the six
+round-1 fix tests in `tests/triage_round1_fixes.rs`, and the two round-2 fix tests in
+`tests/triage_round2_fixes.rs`.
 
 ### The files
 
@@ -215,8 +216,9 @@ The re-run calibration at the fix head. Cutoff in Hz, at 80 dB:
 Every verdict holds. The two moved cutoffs moved by one bin (5.38 Hz). The source WAV now also
 reports bit depth 32.
 
-Red first: `SCRATCH/evidence-16/red-round1-triage.txt` and `red-round1-store.txt` show all eight new
-tests failing on the pre-fix code for the expected reasons. Green: `green-round1.txt`.
+Red first: `SCRATCH/evidence-16/red-round1-triage.txt` and `red-round1-store.txt` show six new
+integration tests, one new migration test, and one changed schema assertion failing on the pre-fix
+code for the expected reasons. Green: `green-round1.txt`.
 
 The round-1 gate at `42efe75` exits 0: board 53 records, tasks unittest 9 passed, Vitest 1 passed,
 cargo test 122 passed, pytest 13 passed.
