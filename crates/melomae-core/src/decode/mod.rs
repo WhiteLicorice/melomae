@@ -257,7 +257,7 @@ fn decode_format(
     path: &Path,
     mut format: Box<dyn FormatReader>,
 ) -> Result<AudioBuffer, DecodeError> {
-    let (track_id, codec_params, track_time_base, track_duration) = {
+    let (track_id, codec_params, track_time_base, track_duration, track_frames) = {
         let track = format.default_track(TrackType::Audio).ok_or_else(|| {
             DecodeError::new(DecodeErrorKind::NoAudioTrack, path, "no audio track")
         })?;
@@ -268,7 +268,13 @@ fn decode_format(
                 "the audio track has no codec parameters",
             )
         })?;
-        (track.id, codec_params, track.time_base, track.duration)
+        (
+            track.id,
+            codec_params,
+            track.time_base,
+            track.duration,
+            track.num_frames,
+        )
     };
 
     let audio = codec_params.audio().ok_or_else(|| {
@@ -310,11 +316,18 @@ fn decode_format(
     // The track's duration is the number of valid media frames, in timebase units. When the
     // timebase is the reciprocal of the sample rate, that is a frame count, and the difference
     // from the decoded total is the container's trailing encoder padding.
-    let valid_frames = if track_time_base == TimeBase::try_from_recip(sample_rate) {
+    let sample_time_base = track_time_base == TimeBase::try_from_recip(sample_rate);
+    let valid_frames = if sample_time_base {
         track_duration.and_then(|duration| usize::try_from(duration.get()).ok())
     } else {
         None
     };
+    // The container's declared playable frame count, in samples. Symphonia sets `num_frames` only
+    // when the container states it (an MP3 Xing/Info/VBRI header, a WAV or AIFF data size, a FLAC
+    // STREAMINFO total, an Ogg granule, an MP4 track timespan). It is in timebase units, so it is a
+    // sample count only when the timebase is one tick per sample. `None` means no count is
+    // declared, and the decoder keeps today's behavior.
+    let declared_frames = if sample_time_base { track_frames } else { None };
     decode_with_symphonia(
         path,
         &mut *format,
@@ -322,6 +335,7 @@ fn decode_format(
         sample_rate,
         audio,
         valid_frames,
+        declared_frames,
     )
 }
 
@@ -338,6 +352,7 @@ fn decode_with_symphonia(
     sample_rate: u32,
     params: &AudioCodecParameters,
     valid_frames: Option<usize>,
+    declared_frames: Option<u64>,
 ) -> Result<AudioBuffer, DecodeError> {
     let mut decoder = symphonia::default::get_codecs()
         .make_audio_decoder(params, &AudioDecoderOptions::default())
@@ -415,6 +430,21 @@ fn decode_with_symphonia(
     // length, so the end is exactly `start + duration`. Formats without an edit list fall back to
     // the track's declared duration, and otherwise keep every decoded frame.
     let decoded_frames = channels[0].len();
+    // A container that declares a frame count must deliver at least that many frames before any
+    // gapless trim. Fewer means the file lost media: a truncated MPEG stream that still ends on a
+    // frame boundary, for example. Do not pad or clamp; report it.
+    if let Some(declared) = declared_frames.and_then(|declared| usize::try_from(declared).ok()) {
+        if decoded_frames < declared {
+            return Err(DecodeError::new(
+                DecodeErrorKind::Malformed,
+                path,
+                format!(
+                    "the container declares {declared} frames but the decoder produced \
+                     {decoded_frames} before any gapless trim"
+                ),
+            ));
+        }
+    }
     // Only an MP4 container has an edit list. Skip the reader for every other format, so a WAV or
     // FLAC decode never opens it.
     let edit = if needs_edit_list(format.format_info().short_name) {

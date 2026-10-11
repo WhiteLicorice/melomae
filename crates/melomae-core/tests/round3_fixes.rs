@@ -59,3 +59,49 @@ fn family_255_opus_names_itself_unsupported() {
     assert!(reason.contains("mapping family 255"), "{reason}");
     assert!(reason.contains("6 channels"), "{reason}");
 }
+
+/// D2: a payload cut in any format is an error, never a shortened success. The committed MP3
+/// fixture declares its frame count in an Info/Xing header, so the decoder can tell that a cut lost
+/// frames. The other formats already error; this pins them all together.
+#[test]
+fn every_format_payload_cut_is_an_error() {
+    let fixtures = Fixtures::build();
+    let mut accepted = Vec::new();
+    for name in [
+        "wav_44100.wav",
+        "aiff_44100.aiff",
+        "flac_44100.flac",
+        "mp3_44100.mp3",
+        "aac_44100.m4a",
+        "alac_44100.m4a",
+        "vorbis_44100.ogg",
+        "opus_48000.opus",
+        "opus_48000.webm",
+    ] {
+        let source = fixtures.path(name);
+        let intact = decode_file_native(&source).expect("decode the intact fixture");
+        let bytes = std::fs::read(&source).expect("read the fixture");
+        for cut in [17usize, 500] {
+            let truncated = fixtures.dir().join(format!("cut-{cut}-{name}"));
+            std::fs::write(&truncated, &bytes[..bytes.len() - cut]).expect("write the cut file");
+            match decode_file_native(&truncated) {
+                Ok(buffer) => {
+                    eprintln!(
+                        "cut {name} by {cut}: accepted {} of {} frames",
+                        buffer.frames(),
+                        intact.frames()
+                    );
+                    accepted.push(format!("{name}:{cut}"));
+                }
+                Err(error) => {
+                    eprintln!(
+                        "cut {name} by {cut}: {:?}: {}",
+                        error.kind(),
+                        error.reason()
+                    )
+                }
+            }
+        }
+    }
+    assert!(accepted.is_empty(), "cuts accepted: {accepted:?}");
+}
