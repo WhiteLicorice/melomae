@@ -28,7 +28,13 @@ const MAX_FRAMES: usize = 256;
 const SMOOTH_BINS: usize = 4;
 
 /// A band within this many decibels of the spectrum peak counts as signal.
-const DROP_DB: f64 = 60.0;
+///
+/// The value comes from the task 16 calibration on `fixtures/ori_wav.wav` (recorded in the task
+/// `Outcome`). A threshold above 80 dB tracks the source's own high-frequency rolloff: the real
+/// source sits at -60 dB by 16 kHz, so a 60 dB threshold measures the source, not the codec. At
+/// 80 dB the lossless source reaches 22 kHz and each lossy low-pass still reads its own corner. The
+/// number is fixed for every file; it is not tuned to one.
+const DROP_DB: f64 = 80.0;
 
 /// The shortest run of above-threshold bins that counts as a signal band.
 const MIN_BAND_HZ: f64 = 200.0;

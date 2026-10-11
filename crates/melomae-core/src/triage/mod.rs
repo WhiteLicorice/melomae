@@ -32,13 +32,16 @@ pub use cutoff::{measure_cutoff_hz, measure_cutoff_hz_at};
 /// A lossy source whose cutoff is below this value gets `restore`. A lossy source at or above it
 /// gets `low-benefit` (SRS §4.3).
 ///
-/// The value comes from the task 16 calibration table. Inferred, pending that run.
+/// Measured, from the task 16 calibration on `fixtures/ori_wav.wav`, at the 80 dB threshold. The
+/// value sits between the 192 kb/s MP3 (18605 Hz) and the high-cutoff lossy files (the 320 kb/s MP3
+/// at 20015 Hz). The task `Outcome` records the table.
 pub const HIGH_BITRATE_CUTOFF_HZ: f64 = 19_500.0;
 
 /// A lossless container whose cutoff is below this value gets `suspect-lossless`. At or above it,
 /// the container is `lossless` (SRS §4.3).
 ///
-/// The value comes from the task 16 calibration table. Inferred, pending that run.
+/// Measured, from the task 16 calibration. The value sits between the FLAC transcoded from the
+/// 128 kb/s MP3 (16349 Hz) and the full-band source (22050 Hz). The task `Outcome` records the table.
 pub const SUSPECT_LOSSLESS_CUTOFF_HZ: f64 = 19_500.0;
 
 /// The file extensions a folder walk searches for (SRS §4.1).

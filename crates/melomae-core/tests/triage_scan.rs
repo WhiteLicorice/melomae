@@ -231,8 +231,9 @@ fn e2e_triage_scan_a_folder_into_the_store() {
         .expect("the source WAV row");
     assert_eq!(source.verdict, Verdict::Lossless);
 
-    // The stored row matches a direct triage of the same file.
-    let direct = triage_file(&calibration.path("cal_mp3_320.mp3")).unwrap();
+    // The stored row matches a direct triage of the same file. The scan time differs by design.
+    let mut direct = triage_file(&calibration.path("cal_mp3_320.mp3")).unwrap();
+    direct.scanned_at = mp3_320.scanned_at;
     assert_eq!(&direct, mp3_320);
 }
 

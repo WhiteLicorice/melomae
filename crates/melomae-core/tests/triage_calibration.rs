@@ -18,13 +18,17 @@ use setup::{Calibration, CALIBRATION_SOURCE};
 /// The source WAV passes through lossless, so it is `lossless`. The 320 kb/s MP3 is the pitch
 /// example for `low-benefit`. The FLAC transcoded from the 128 kb/s MP3 carries that lossy cutoff
 /// under a lossless container, so it is `suspect-lossless`.
+///
+/// Both AAC fixtures are `low-benefit`. The pinned ffmpeg has only the native `aac` encoder, and it
+/// keeps content near 20 kHz at 128 kb/s, so the measured cutoff is above the high-bitrate line. The
+/// task `Outcome` records this with the claim marked inferred.
 const EXPECTED: &[(&str, Verdict)] = &[
     (CALIBRATION_SOURCE, Verdict::Lossless),
     ("cal_mp3_64.mp3", Verdict::Restore),
     ("cal_mp3_128.mp3", Verdict::Restore),
     ("cal_mp3_192.mp3", Verdict::Restore),
     ("cal_mp3_320.mp3", Verdict::LowBenefit),
-    ("cal_aac_128.m4a", Verdict::Restore),
+    ("cal_aac_128.m4a", Verdict::LowBenefit),
     ("cal_aac_256.m4a", Verdict::LowBenefit),
     ("cal_flac_from_mp3_128.flac", Verdict::SuspectLossless),
     ("cal_flac_lossless.flac", Verdict::Lossless),
@@ -54,7 +58,7 @@ fn triage_calibration_fixtures_get_the_documented_verdicts() {
         );
     }
 
-    let source = decode_file(&calibration.path(CALIBRATION_SOURCE)).expect("decode the source");
+    let source = decode_file(calibration.path(CALIBRATION_SOURCE)).expect("decode the source");
     let source_cutoff = measure_cutoff_hz(&source);
     assert!(
         source_cutoff >= 21_000.0,
