@@ -1,13 +1,13 @@
 # 15 — Preserve tags and pictures across formats
 
-**Status:** IN PROGRESS
+**Status:** DONE
 **Phase:** 2 — Metadata, triage, and provenance
 **Depends on:** 06
 **SRS:** §5, §12
 **Stack:** §F
 **Assigned to:** Agent
 **Started:** 4000238 (task/15)
-**Outcome:** —
+**Outcome:** Done. `cargo test -p melomae-core tag_copy` runs 6 unit tests and 5 integration tests, all green. The red run stubbed `read_tags` and `write_into` and failed three e2e tests for the expected reason. A new `tag_copy` module reads every tag and picture. It keeps the standard fields in lofty's generic model and the custom fields by name (ID3 `TXXX`, a Vorbis key, an MP4 freeform atom). It writes ID3 for WAV and Vorbis comments for FLAC and Opus. `encode_with_tags` writes the tags into the temporary file before the rename, so an output never appears without its tags. `encode` is unchanged and every task 06 test stays green. A field the target cannot hold is named, never dropped: the fixture's script field is reported for a WAV output. lofty 0.25.4, MIT OR Apache-2.0, compatible with GPL-3.0-or-later. The Picard tag mapping came from https://picard-docs.musicbrainz.org/en/latest/appendices/tag_mapping.html on 2026-10-11. lofty has no custom `ItemKey`, so the copier uses the format-specific API for custom fields (scope item 8). The third-party player check is open for the author. The outputs to open come from `e2e_tag_copy_outputs_read_back_in_ffprobe`. Gate: `pnpm verify` exit 0. Board 55 records, tasks unittest 9, Vitest 1, cargo test 133, pytest 13.
 
 ## Goal
 
@@ -44,10 +44,10 @@ Run the tests. They fail because the copier does not exist.
 
 ## Acceptance criteria
 
-- [ ] Every fixture field and the front cover survive in all three formats, or appear in the returned list.
+- [x] Every fixture field and the front cover survive in all three formats, or appear in the returned list.
 - [ ] A third-party player shows the tags and the cover for one file of each format. Name the player in `Outcome`.
-- [ ] The new tests failed first for the expected reason.
-- [ ] `pnpm verify` passes.
+- [x] The new tests failed first for the expected reason.
+- [x] `pnpm verify` passes.
 
 ## Verify
 

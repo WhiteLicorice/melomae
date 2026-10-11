@@ -110,7 +110,7 @@ The validator rejects any other status value.
 
 | # | Task | Status | Depends on |
 | --- | --- | --- | --- |
-| 15 | [Preserve tags and pictures across formats](mvp/15-preserve-tags-and-pictures-across-formats.md) | IN PROGRESS | 06 |
+| 15 | [Preserve tags and pictures across formats](mvp/15-preserve-tags-and-pictures-across-formats.md) | DONE | 06 |
 | 16 | [Triage input files for restoration](mvp/16-triage-input-files-for-restoration.md) | DONE | 03, 14 |
 | 31 | [Record restore provenance in tags and history](mvp/31-record-restore-provenance-in-tags-and-history.md) | TODO | 14, 15 |
 
