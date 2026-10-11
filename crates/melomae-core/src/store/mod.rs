@@ -490,6 +490,29 @@ impl Store {
         }
     }
 
+    /// Reads every triage result, ordered by path.
+    pub fn triage_items(&self) -> Result<Vec<TriageItem>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT path, size_bytes, modified_at, container, codec, bitrate_kbps,
+                    sample_rate_hz, bit_depth, duration_seconds, spectral_cutoff_hz,
+                    verdict, reason, scanned_at
+             FROM triage_items ORDER BY path",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut items = Vec::new();
+        while let Some(row) = rows.next()? {
+            items.push(triage_item_from_row(row)?);
+        }
+        Ok(items)
+    }
+
+    /// Removes the triage result for one path. A path with no row is not an error.
+    pub fn delete_triage_item(&self, path: &str) -> Result<(), StoreError> {
+        self.connection
+            .execute("DELETE FROM triage_items WHERE path = ?1", [path])?;
+        Ok(())
+    }
+
     /// Appends one history row and returns its id.
     pub fn insert_history(&self, row: &HistoryRow) -> Result<i64, StoreError> {
         self.connection.execute(
