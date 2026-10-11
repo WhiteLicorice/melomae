@@ -4,11 +4,12 @@
 //! that still carries signal, so it tells a lossy source from a lossless one, and a heavily
 //! compressed source from a lightly compressed one.
 //!
-//! The method is Welch's method. The signal of every channel is cut into Hann-windowed frames that
-//! overlap by half, the magnitude-squared spectrum of each frame is accumulated, and the average is
-//! taken. The average is smoothed, and the peak bin is the reference. The cutoff is the highest
-//! frequency that is the top of a run of bins within [`DROP_DB`] of the reference. The run length
-//! is at least [`MIN_BAND_HZ`] wide, so a single spectral spike does not count as signal.
+//! The method is Welch's method. The spectrum is averaged over Hann-windowed frames. The frames are
+//! taken at start positions spread evenly over the whole file, and every channel is analyzed at
+//! every selected position. The average is smoothed, and the peak bin is the reference. The cutoff
+//! is the highest frequency that is the top of a run of bins within [`DROP_DB`] of the reference.
+//! The run length is at least [`MIN_BAND_HZ`] wide, so a single spectral spike does not count as
+//! signal.
 
 use realfft::num_complex::Complex;
 use realfft::RealFftPlanner;
@@ -21,17 +22,19 @@ const WINDOW: usize = 8192;
 /// The shortest window the measurement trusts. A file with fewer frames returns a cutoff of zero.
 const MIN_FRAMES: usize = 1024;
 
-/// The most frames to average, so a long file does not slow the scan.
-const MAX_FRAMES: usize = 256;
+/// The most analysis positions spread over the file. The cost is the position count times the
+/// channel count, so the budget caps positions and not windows per channel.
+const MAX_POSITIONS: usize = 128;
 
-/// The smoothing width, in bins, applied to the averaged spectrum.
+/// The smoothing radius, in bins. The moving average spans `2 * (SMOOTH_BINS / 2) + 1` bins, so this
+/// value spans five bins.
 const SMOOTH_BINS: usize = 4;
 
 /// A band within this many decibels of the spectrum peak counts as signal.
 ///
 /// The value comes from the task 16 calibration on `fixtures/ori_wav.wav` (recorded in the task
-/// `Outcome`). A threshold above 80 dB tracks the source's own high-frequency rolloff: the real
-/// source sits at -60 dB by 16 kHz, so a 60 dB threshold measures the source, not the codec. At
+/// `Outcome`). A shallower drop, such as 60 dB, follows the source's own high-frequency rolloff: the
+/// real source sits at -60 dB by 16 kHz, so a 60 dB drop measures the source and not the codec. At
 /// 80 dB the lossless source reaches 22 kHz and each lossy low-pass still reads its own corner. The
 /// number is fixed for every file; it is not tuned to one.
 const DROP_DB: f64 = 80.0;
@@ -94,6 +97,12 @@ impl Spectrum {
 
 /// Average the magnitude-squared spectrum of `audio` over Hann-windowed frames, and smooth it.
 ///
+/// The frames are taken at up to [`MAX_POSITIONS`] start positions spread evenly over the whole
+/// file, from the first valid start to the last, so the start, the middle, and the end are always
+/// included. Every channel is analyzed at every selected position. A silent or narrow-band opening
+/// therefore cannot hide the rest of the file, and a silent channel cannot hide the others. The
+/// position count is capped, so the cost is positions times channels.
+///
 /// Returns `None` when the audio is too short to window.
 fn averaged_spectrum(audio: &AudioBuffer) -> Option<Spectrum> {
     let rate = f64::from(audio.sample_rate());
@@ -118,12 +127,21 @@ fn averaged_spectrum(audio: &AudioBuffer) -> Option<Spectrum> {
     let mut input = vec![0f32; window];
     let mut spectrum = vec![Complex::default(); bins];
     let mut power = vec![0f64; bins];
-    let mut averaged = 0usize;
 
+    // The valid start positions run from 0 to `span`. Never take more positions than half-overlapping
+    // windows would use, so a short file is not sampled at near-identical positions.
     let hop = (window / 2).max(1);
-    for channel in audio.channels() {
-        let mut start = 0usize;
-        while start + window <= frames && averaged < MAX_FRAMES {
+    let span = frames - window;
+    let positions = MAX_POSITIONS.min(span / hop + 1).max(1);
+
+    let mut turns = 0usize;
+    for position in 0..positions {
+        let start = if positions == 1 {
+            0
+        } else {
+            span * position / (positions - 1)
+        };
+        for channel in audio.channels() {
             for index in 0..window {
                 input[index] = channel[start + index] * hann[index];
             }
@@ -133,16 +151,15 @@ fn averaged_spectrum(audio: &AudioBuffer) -> Option<Spectrum> {
                 *bin += f64::from(value.re) * f64::from(value.re)
                     + f64::from(value.im) * f64::from(value.im);
             }
-            averaged += 1;
-            start += hop;
+            turns += 1;
         }
     }
 
-    if averaged == 0 {
+    if turns == 0 {
         return None;
     }
     for bin in &mut power {
-        *bin /= averaged as f64;
+        *bin /= turns as f64;
     }
     Some(Spectrum {
         smoothed: moving_average(&power, SMOOTH_BINS),
