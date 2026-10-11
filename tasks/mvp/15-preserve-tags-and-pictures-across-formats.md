@@ -1,12 +1,12 @@
 # 15 — Preserve tags and pictures across formats
 
-**Status:** TODO
+**Status:** IN PROGRESS
 **Phase:** 2 — Metadata, triage, and provenance
 **Depends on:** 06
 **SRS:** §5, §12
 **Stack:** §F
 **Assigned to:** Agent
-**Started:** —
+**Started:** 4000238 (task/15)
 **Outcome:** —
 
 ## Goal
