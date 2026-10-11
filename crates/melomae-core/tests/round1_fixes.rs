@@ -167,10 +167,10 @@ fn f5_a_truncated_webm_is_not_a_clean_eof() {
     );
 }
 
-/// F7: a valid six-channel Opus file must keep all six channels. Each source channel carries a
-/// distinct tone, and every oracle channel must match exactly one decoded channel, so no channel
-/// was dropped, duplicated, or down-mixed. The decoder emits channels in the `OpusHead` mapping
-/// order, which need not equal ffmpeg's output order, so the match is a permutation.
+/// F7: a valid six-channel Opus file must keep all six channels, in the codec's native Vorbis
+/// order. Each source channel carries a distinct tone, and the decoded order must be the fixed
+/// permutation of ffmpeg's output order (RFC 7845 section 5.1.1.2), so no channel was dropped,
+/// duplicated, down-mixed, or swapped.
 #[test]
 fn f7_multichannel_opus_keeps_every_channel() {
     let fixtures = Fixtures::build();
@@ -192,20 +192,14 @@ fn f7_multichannel_opus_keeps_every_channel() {
         "decoded frames vs the libopus oracle"
     );
 
-    let mut matched = [false; 6];
-    for (oracle_channel, expected) in reference.iter().enumerate() {
-        let (index, diff) = decoded
-            .channels()
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| !matched[*index])
-            .map(|(index, plane)| (index, common::max_abs_diff(plane, expected)))
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .expect("a free decoded channel");
+    // The decoder emits the codec's native Vorbis order, a fixed permutation of ffmpeg's output
+    // order. Check that exact permutation, not merely that some permutation exists.
+    let expected = [0usize, 2, 1, 4, 5, 3];
+    for (index, oracle) in expected.iter().enumerate() {
+        let diff = common::max_abs_diff(&decoded.channels()[index], &reference[*oracle]);
         assert!(
             diff <= 1.0e-4,
-            "oracle channel {oracle_channel} has no matching decoded channel (best {index}, diff {diff})"
+            "decoded channel {index} differs from oracle channel {oracle} by {diff}"
         );
-        matched[index] = true;
     }
 }

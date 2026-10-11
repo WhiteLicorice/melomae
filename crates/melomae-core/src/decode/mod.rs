@@ -137,7 +137,11 @@ impl AudioBuffer {
         self.channels[0].len()
     }
 
-    /// Every channel, in order.
+    /// Every channel, in the codec's native order.
+    ///
+    /// For Opus this is the Vorbis channel order defined by RFC 7845 section 5.1.1.2. The order is
+    /// not normalized across codecs, and no speaker layout is retained: the channel count is the
+    /// only layout information.
     pub fn channels(&self) -> &[Vec<f32>] {
         &self.channels
     }
