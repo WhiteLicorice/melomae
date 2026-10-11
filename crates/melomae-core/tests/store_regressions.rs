@@ -164,7 +164,7 @@ fn store_a_newer_schema_is_rejected_without_a_write() {
     };
 
     let raw = Connection::open(db.path()).unwrap();
-    raw.execute_batch("PRAGMA user_version = 2;").unwrap();
+    raw.execute_batch("PRAGMA user_version = 3;").unwrap();
 
     assert!(
         Store::open(db.path()).is_err(),
@@ -174,7 +174,7 @@ fn store_a_newer_schema_is_rejected_without_a_write() {
     let version: i64 = raw
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 2, "open changed the schema version");
+    assert_eq!(version, 3, "open changed the schema version");
     let state: String = raw
         .query_row("SELECT state FROM jobs WHERE id = ?1", [id], |row| {
             row.get(0)

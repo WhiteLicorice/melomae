@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, Row};
 
 /// The schema version this build writes. Each migration increments it.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// The tables and columns of migration 1.
 const MIGRATION_1: &str = r#"
@@ -59,6 +59,16 @@ CREATE TABLE history (
     result       TEXT    NOT NULL,
     recorded_at  INTEGER NOT NULL
 );
+"#;
+
+/// Migration 2: `triage_items.modified_at` becomes nanoseconds since the Unix epoch.
+///
+/// The column keeps its name and type. Its meaning changes from whole seconds to nanoseconds, so a
+/// stale whole-second row could match a file and hide a rescan. Every cached triage row is deleted,
+/// because the cache is derived data and no released build has a database yet. The other tables
+/// keep their rows.
+const MIGRATION_2: &str = r#"
+DELETE FROM triage_items;
 "#;
 
 /// The row identifier of a job.
@@ -238,6 +248,9 @@ pub struct Job {
 }
 
 /// One triaged input file. The fields match the task 16 measurements.
+///
+/// `modified_at` is nanoseconds since the Unix epoch (schema version 2). `scanned_at` is whole
+/// seconds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TriageItem {
     pub path: String,
@@ -560,6 +573,12 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), StoreError> {
         let transaction = connection.transaction()?;
         transaction.execute_batch(MIGRATION_1)?;
         transaction.execute_batch("PRAGMA user_version = 1;")?;
+        transaction.commit()?;
+    }
+    if from < 2 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_2)?;
+        transaction.execute_batch("PRAGMA user_version = 2;")?;
         transaction.commit()?;
     }
     Ok(())

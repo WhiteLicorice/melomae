@@ -103,15 +103,15 @@ fn store_a_newer_schema_returns_a_typed_error_naming_both_versions() {
         store.set_setting("output_dir", "/music").unwrap();
     }
     let raw = Connection::open(db.path()).unwrap();
-    raw.execute_batch("PRAGMA user_version = 2;").unwrap();
+    raw.execute_batch("PRAGMA user_version = 3;").unwrap();
 
     let error = Store::open(db.path())
         .err()
         .expect("a newer schema must be rejected");
     match error {
         StoreError::UnsupportedSchema { found, supported } => {
-            assert_eq!(found, 2);
-            assert_eq!(supported, 1);
+            assert_eq!(found, 3);
+            assert_eq!(supported, 2);
         }
         other => panic!("expected UnsupportedSchema, got {other:?}"),
     }
