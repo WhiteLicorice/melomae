@@ -166,9 +166,9 @@ const PICARD_MAPPINGS: &[PicardMapping] = &[
     },
     PicardMapping {
         portable: "RELEASESTATUS",
-        id3: Some("MusicBrainzAlbumStatus"),
+        id3: Some("MusicBrainz Album Status"),
         id3_user_text: true,
-        mp4: Some("MusicBrainzAlbumStatus"),
+        mp4: Some("MusicBrainz Album Status"),
     },
     PicardMapping {
         portable: "ORIGINALYEAR",
@@ -184,7 +184,7 @@ fn picard_mapping(portable: &str) -> Option<&'static PicardMapping> {
 }
 
 /// The mapping for an ID3 `TXXX` description. The comparison ignores case, spaces, and
-/// underscores, so both the compact Picard name and the spaced lofty name match.
+/// underscores, so the documented name matches whether it carries its spaces or not.
 fn picard_mapping_for_id3_text(description: &str) -> Option<&'static PicardMapping> {
     PICARD_MAPPINGS
         .iter()

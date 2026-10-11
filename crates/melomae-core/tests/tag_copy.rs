@@ -27,7 +27,7 @@ use melomae_core::tag_copy::{read_tags, TagSet};
 use setup::tag_fixtures::{
     expected_manifest, native_keys, native_manifest, source_kind, NativeKind, Source, TagFixtures,
     ALBUM_ARTIST, ALBUM_ARTIST_SORT, COMPOSERS, CUSTOM_NAME, CUSTOM_VALUE, ORIGINAL_DATE,
-    ORIGINAL_YEAR, RELEASE_STATUS, SCRIPT, TITLE,
+    ORIGINAL_YEAR, RELEASE_STATUS, RELEASE_STATUS_NATIVE, SCRIPT, TITLE,
 };
 
 /// The output formats, with the native tag kind and a file-name extension.
@@ -309,17 +309,17 @@ fn picard_release_status_maps_across_the_formats() {
         }
     }
 
-    // A Vorbis release status writes the Picard `TXXX` frame in a WAV output.
+    // A Vorbis release status writes the Picard `TXXX` frame in a WAV output. Picard writes the
+    // description with its spaces, so the frame id is `TXXX:MusicBrainz Album Status`.
     let path = fixtures.path(Source::Flac);
     let tags = read_tags(&path).expect("read the source tags");
     let audio = decode_file(&path).expect("decode the source");
     let target = outputs.join("status.wav");
     encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    let expected = format!("TXXX:{RELEASE_STATUS_NATIVE}");
     assert!(
-        native_keys(&target, NativeKind::Wav)
-            .iter()
-            .any(|key| key == "TXXX:MusicBrainzAlbumStatus"),
-        "a Vorbis RELEASESTATUS must write the ID3 TXXX:MusicBrainzAlbumStatus frame"
+        native_keys(&target, NativeKind::Wav).contains(&expected),
+        "a Vorbis RELEASESTATUS must write the ID3 {expected} frame"
     );
 }
 

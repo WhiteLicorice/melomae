@@ -102,8 +102,9 @@ pub const CUSTOM_NAME: &str = "MYCUSTOM";
 pub const CUSTOM_VALUE: &str = "custom one";
 /// The portable release-status name: the Vorbis key.
 pub const RELEASE_STATUS_NAME: &str = "RELEASESTATUS";
-/// The native release-status name Picard uses in ID3 and MP4.
-pub const RELEASE_STATUS_NATIVE: &str = "MusicBrainzAlbumStatus";
+/// The native release-status name Picard uses in ID3 and MP4. Picard writes it with its spaces,
+/// so the fixture does too.
+pub const RELEASE_STATUS_NATIVE: &str = "MusicBrainz Album Status";
 /// The native script name Picard uses in ID3 and MP4.
 pub const SCRIPT_NATIVE: &str = "SCRIPT";
 /// The native original-year name, which Picard defines for Vorbis comments only.
