@@ -264,4 +264,43 @@ mod tests {
         let audio = AudioBuffer::new(44_100, vec![vec![0.1; 512]]);
         assert_eq!(measure_cutoff_hz(&audio), 0.0);
     }
+
+    #[test]
+    fn analysis_starts_include_the_first_central_and_last_start() {
+        let window = 8192usize;
+        let hop = window / 2;
+        for span in [0usize, hop / 2, hop, hop * 3] {
+            let starts = analysis_starts(window + span, window);
+
+            let mut sorted = starts.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(
+                sorted, starts,
+                "the starts are not sorted and unique for span {span}"
+            );
+            assert!(
+                starts.iter().all(|start| *start <= span),
+                "a start is past the last valid start for span {span}"
+            );
+
+            if span == 0 {
+                assert_eq!(starts, vec![0], "a zero span must use one start");
+                continue;
+            }
+            assert!(
+                starts.contains(&0),
+                "the first start is missing for span {span}"
+            );
+            assert!(
+                starts.contains(&span),
+                "the last start is missing for span {span}"
+            );
+            assert!(
+                starts.contains(&(span / 2)),
+                "the central start is missing for span {span}"
+            );
+            assert!(starts.len() >= 3, "too few starts for span {span}");
+        }
+    }
 }
