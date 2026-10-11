@@ -850,7 +850,7 @@ mod tests {
 
     #[test]
     fn reads_laced_block_frame_count() {
-        // Flags byte 0x06 selects Xiph lacing; the next byte encodes frames - 1.
+        // Flags byte 0x06 selects EBML lacing; the next byte encodes frames - 1.
         let mut group = Vec::new();
         let mut block = vec![0x81u8, 0x00, 0x00, 0x06, 0x02];
         block.extend_from_slice(&[10, 20, 30]);
