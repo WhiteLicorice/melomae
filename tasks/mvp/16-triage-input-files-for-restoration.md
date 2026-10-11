@@ -7,7 +7,7 @@
 **Stack:** §D, §G
 **Assigned to:** Agent
 **Started:** 0049784, clean tree. Baseline gate at 0049784: board 53 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 98 passed, pytest 13 passed.
-**Outcome:** DONE. A new `triage` module walks files and folders, measures the spectral cutoff on the task 03 decode, assigns the SRS §4.3 verdicts, and stores rows in `triage_items`. A rescan reads only the files whose size or modification time changed and removes the rows of deleted files. Triage opens every input read-only and never writes one. The thresholds come from the calibration on `fixtures/ori_wav.wav`, committed through Git LFS: the cutoff is 80 dB below the spectrum peak, and the high-bitrate and suspect-lossless lines are both 19500 Hz. Measured verdicts: the source WAV and the lossless FLAC are `lossless` at 22050 Hz, MP3 64/128/192 are `restore` at 11289/16349/18605 Hz, MP3 320 is `low-benefit` at 20015 Hz, AAC 128/256 are `low-benefit` at 19999/22050 Hz, and the FLAC from the 128 kb/s MP3 is `suspect-lossless` at 16349 Hz. A truncated MP3 is `unreadable` with a reason. The 1,000-file scan took 8.82 s, about 113 files per second. `cargo test -p melomae-core` passes 115 tests, and clippy and fmt are clean. The gate `pnpm verify` exits 0: board 53 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 115 passed, pytest 13 passed. Fix round 1 (review findings B1 to B4) samples positions over the whole file and every channel, stores nanosecond modification times under schema version 2, and reports float PCM and ALAC bit depth. The round-1 gate at `42efe75` exits 0 with 122 cargo tests. See the detail below.
+**Outcome:** DONE. A new `triage` module walks files and folders, measures the spectral cutoff on the task 03 decode, assigns the SRS §4.3 verdicts, and stores rows in `triage_items`. A rescan reads only the files whose size or modification time changed and removes the rows of deleted files. Triage opens every input read-only and never writes one. The thresholds come from the calibration on `fixtures/ori_wav.wav`, committed through Git LFS: the cutoff is 80 dB below the spectrum peak, and the high-bitrate and suspect-lossless lines are both 19500 Hz. Measured verdicts: the source WAV and the lossless FLAC are `lossless` at 22050 Hz, MP3 64/128/192 are `restore` at 11289/16349/18605 Hz, MP3 320 is `low-benefit` at 20015 Hz, AAC 128/256 are `low-benefit` at 19999/22050 Hz, and the FLAC from the 128 kb/s MP3 is `suspect-lossless` at 16349 Hz. A truncated MP3 is `unreadable` with a reason. The 1,000-file scan took 8.82 s, about 113 files per second. `cargo test -p melomae-core` passes 115 tests, and clippy and fmt are clean. The gate `pnpm verify` exits 0: board 53 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 115 passed, pytest 13 passed. Fix round 1 (review findings B1 to B4) samples positions over the whole file and every channel, stores nanosecond modification times under schema version 2, and reports float PCM and ALAC bit depth. The round-1 gate at `42efe75` exits 0 with 122 cargo tests. Fix round 2 selects the first, central, and last valid start for every file, including short ones. The round-2 gate at `556078d` exits 0 with 125 cargo tests. See the detail below.
 
 ## Goal
 
@@ -222,3 +222,27 @@ code for the expected reasons. Green: `green-round1.txt`.
 
 The round-1 gate at `42efe75` exits 0: board 53 records, tasks unittest 9 passed, Vitest 1 passed,
 cargo test 122 passed, pytest 13 passed.
+
+### Fix round 2 (review finding B1b)
+
+The re-review found one blocking finding. The start selection fell to one position, start 0, when the
+span was below the hop, so the final frames of a short file were never measured. A short WAV with a
+silent opening got `suspect-lossless` at cutoff 0.
+
+- The selection is now `analysis_starts`. Whenever the span is nonzero it always includes the first
+  valid start (0), the last valid start (`span`), and the central start `span / 2`, plus an evenly
+  spread grid up to `MAX_POSITIONS`. Duplicate starts are removed and the result is sorted. A zero
+  span still uses one start, at 0. Every channel is analyzed at every selected start.
+- The central start is `span / 2`, the midpoint between the first and the last valid start.
+
+The re-run calibration at the fix head is unchanged: every verdict holds and no cutoff moved. The
+source WAV remains `lossless` at 22050 Hz, MP3 64/128/192 remain `restore` at 11294/16349/18605 Hz,
+MP3 320 remains `low-benefit` at 20020 Hz, AAC 128/256 remain `low-benefit` at 19999/22050 Hz, and
+the FLAC from the 128 kb/s MP3 remains `suspect-lossless` at 16349 Hz.
+
+Red first: `SCRATCH/evidence-16/red-round2.txt` shows the two short-file regressions failing at
+runtime with `suspect-lossless` at cutoff 0, and the selection unit test failing to compile because
+`analysis_starts` did not exist. Green: `green-round2.txt`.
+
+The round-2 gate at `556078d` exits 0: board 53 records, tasks unittest 9 passed, Vitest 1 passed,
+cargo test 125 passed, pytest 13 passed.
