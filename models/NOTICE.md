@@ -20,11 +20,23 @@ project.
 
 ## License
 
-Apollo code and weights are licensed CC BY-SA 4.0. `apollo.onnx` adapts the
-weights, so it stays under CC BY-SA 4.0.
+Apollo code and weights are licensed under the Creative Commons
+Attribution-ShareAlike 4.0 International license (CC BY-SA 4.0). `apollo.onnx`
+adapts the weights, so it stays under CC BY-SA 4.0.
 
-- License: Creative Commons Attribution-ShareAlike 4.0 International
-- Link: https://creativecommons.org/licenses/by-sa/4.0/
+- License: Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)
+- Link: https://creativecommons.org/licenses/by-sa/4.0/legalcode
+
+Upstream copyright notice: the Licensor supplied none with the model. The
+repository `LICENSE` holds the CC BY-SA 4.0 text, and the model card names the
+creators but carries no copyright line. The only copyright notice in the
+repository is `Copyright 2019 Jian Wu` in `look2hear/utils/stft.py`, and that one
+file licenses under Apache-2.0 rather than under CC BY-SA 4.0.
+
+The model comes with no warranty. CC BY-SA 4.0 section 5 (Disclaimer of
+Warranties and Limitation of Liability) offers the Licensed Material as-is and
+as-available, and excludes the Licensor's liability for damages arising from its
+use.
 
 ## Modifications
 
