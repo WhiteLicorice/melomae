@@ -11,7 +11,7 @@ mod resample;
 
 use std::fmt;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use opusic_c::multistream::{Config as OpusMsConfig, Decoder as OpusMsDecoder};
@@ -360,12 +360,20 @@ fn needs_edit_list(short_name: &str) -> bool {
 /// Whether an MP3 stream declares its frame count with a Xing, Info, or VBRI header.
 ///
 /// Symphonia estimates `num_frames` from the bitrate and the physical length when no such header
-/// exists, so an estimate is not a declared count. Only the first few KiB are read, to locate the
-/// first MPEG frame and its tag.
+/// exists, so an estimate is not a declared count. Any leading ID3v2 tags are skipped by reading
+/// only their headers, so a tag of any size does not hide the audio; then a fixed 8 KiB window is
+/// read to locate the first MPEG frame and its tag. When no frame header is found in that window the
+/// count is treated as undeclared.
 fn mp3_declares_frame_count(path: &Path) -> bool {
     let Ok(mut file) = File::open(path) else {
         return false;
     };
+    let Some(audio_start) = mp3_audio_start(&mut file) else {
+        return false;
+    };
+    if file.seek(SeekFrom::Start(audio_start)).is_err() {
+        return false;
+    }
     let mut buffer = [0u8; 8 * 1024];
     let Ok(read) = file.read(&mut buffer) else {
         return false;
@@ -394,16 +402,34 @@ fn mp3_declares_frame_count(path: &Path) -> bool {
     }
 }
 
-/// The first MPEG audio frame offset, skipping an ID3v2 tag when one is present.
+/// The physical offset of the audio, past any leading ID3v2 tags.
+///
+/// Each tag's 10-byte header is read and validated without reading its body, then the file is
+/// positioned past it. The loop repeats while another ID3v2 header follows. A header whose
+/// synchsafe size has a high bit set is not a tag, so the audio starts there.
+fn mp3_audio_start<R: Read + Seek>(file: &mut R) -> Option<u64> {
+    let mut offset = 0u64;
+    loop {
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        let mut header = [0u8; 10];
+        let read = file.read(&mut header).ok()?;
+        if read < 10 || &header[..3] != b"ID3" {
+            return Some(offset);
+        }
+        if header[6..10].iter().any(|byte| *byte >= 0x80) {
+            return Some(offset);
+        }
+        let size = header[6..10]
+            .iter()
+            .fold(0u64, |value, byte| (value << 7) | u64::from(*byte));
+        let footer = header[5] & 0x10 != 0;
+        offset = offset.checked_add(10 + size + if footer { 10 } else { 0 })?;
+    }
+}
+
+/// The first MPEG audio frame offset in a window that starts at the audio.
 fn mp3_frame_start(data: &[u8]) -> Option<usize> {
     let mut offset = 0usize;
-    if data.len() >= 10 && &data[..3] == b"ID3" {
-        let size = data[6..10].iter().fold(0usize, |value, byte| {
-            (value << 7) | usize::from(byte & 0x7F)
-        });
-        let footer = data[5] & 0x10 != 0;
-        offset = 10 + size + if footer { 10 } else { 0 };
-    }
     while offset + 4 <= data.len() {
         if is_mpeg_frame_header(&data[offset..offset + 4]) {
             return Some(offset);
