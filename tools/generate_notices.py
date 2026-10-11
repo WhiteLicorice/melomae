@@ -2,16 +2,21 @@
 """Generate `THIRD_PARTY_NOTICES.md` from the dependency trees.
 
 Melomae must ship a notice for every bundled component (SRS section 11). This
-script builds that notice from three sources:
+script builds that notice from four sources:
 
     - the Rust crates that the shipped build links (Cargo), normal and build
       dependencies for every target, without dev-dependencies;
     - the production pnpm dependencies (JavaScript);
+    - the native libraries that a Rust crate vendors and links;
     - the components that no package manifest lists: the ONNX Runtime library
       and the Apollo model (Stack section J).
 
-For each component it reads the license text from the dependency source, when a
-license file is present, and groups the texts by SPDX identifier.
+Every component keeps its own license text, read from the source that it
+ships. The texts are grouped only when they are byte-identical after
+line-ending normalization, and each group names every component that it covers.
+`NOTICE` files are kept in full. A component that ships no license file is
+listed under the standard SPDX text for one of its declared identifiers, and
+the file records that it shipped none.
 
     python tools/generate_notices.py
     python tools/generate_notices.py --check
@@ -20,7 +25,10 @@ license file is present, and groups the texts by SPDX identifier.
 to the dependency trees must regenerate the notice. The gate runs that check.
 
 The output is deterministic: it holds no path, no date, and no host name. The
-two lockfiles fix the component set and the license texts. Standard library only.
+two lockfiles fix the component set. The standard SPDX texts are committed
+under `tools/spdx_texts`. The bundled ONNX Runtime documents are read from the
+pinned archive, whose Windows and Linux documents are identical. Standard
+library only.
 """
 
 from __future__ import annotations
@@ -34,13 +42,21 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = REPO_ROOT / "THIRD_PARTY_NOTICES.md"
+SPDX_TEXT_DIR = Path(__file__).resolve().parent / "spdx_texts"
+
+# The bundled ONNX Runtime release. `tools/fetch_onnxruntime.py` fetches this
+# archive; the generator reads its own `LICENSE` and `ThirdPartyNotices.txt`
+# from the extracted folder and fails when either is missing.
+RUNTIME_VERSION = "1.28.3"
+RUNTIME_TAG = f"v{RUNTIME_VERSION}"
+RUNTIME_DIR = REPO_ROOT / ".cache" / "onnxruntime" / RUNTIME_TAG
 
 # The components that no package manifest lists but the installer bundles
 # (Stack section J). The version of the model is the checkpoint revision.
 BUNDLED = [
     {
         "name": "onnxruntime",
-        "version": "1.28.3",
+        "version": RUNTIME_VERSION,
         "license": "MIT",
         "note": "The shared library the installer bundles (Stack section J).",
     },
@@ -52,6 +68,35 @@ BUNDLED = [
     },
 ]
 
+# Native libraries that a crate vendors and links. The crate package does not
+# ship the library's license at its top level, so the generator reads it from
+# the vendored source directory inside the crate. Keyed by crate name; each
+# entry is `(relative path, SPDX id or None)`.
+VENDORED_NATIVE = {
+    "opusic-sys": [
+        ("opus/COPYING", "BSD-3-Clause"),
+        ("opus/AUTHORS", None),
+    ],
+}
+
+# SQLite is in the public domain. The amalgamation that `libsqlite3-sys` bundles
+# carries a blessing in place of a legal notice, which is reproduced here rather
+# than the whole C file.
+SQLITE_BLESSING = """SQLite is in the public domain.
+
+The bundled SQLite amalgamation (`libsqlite3-sys`, `sqlite3/sqlite3.c`, SQLite
+version 3.53.2) carries this blessing in place of a legal notice:
+
+    The author disclaims copyright to this source code. In place of a legal
+    notice, here is a blessing:
+
+        May you do good and not evil.
+        May you find forgiveness for yourself and forgive others.
+        May you share freely, never taking more than you give.
+
+Source: the bundled amalgamation and https://www.sqlite.org/copyright.html
+"""
+
 # The license text for an identifier that has no file in the dependency trees.
 LICENSE_URLS = {
     "CC-BY-SA-4.0": "https://creativecommons.org/licenses/by-sa/4.0/legalcode.en",
@@ -59,6 +104,23 @@ LICENSE_URLS = {
     "MIT-0": "https://spdx.org/licenses/MIT-0.html",
     "LGPL-2.1-or-later": "https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html",
 }
+
+# The order in which one identifier is chosen for a component that ships no
+# license file. The permissive licenses come first, so a dual-licensed crate
+# reads its standard text from the alternative that Melomae distributes under.
+FALLBACK_PREFERENCE = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "0BSD",
+    "CC0-1.0",
+    "MIT-0",
+    "Unlicense",
+    "MPL-2.0",
+]
 
 LICENSE_FILE = re.compile(r"(?i)^(licen[cs]e|copying|unlicense|notice)")
 PREFIXES = ("LICENSE-", "LICENCE-", "COPYING-", "LICENSE", "LICENCE", "COPYING")
@@ -234,27 +296,129 @@ def clean_text(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
-def license_texts(component: dict) -> list[tuple[str, str]]:
-    """The (spdx id, text) pairs for one component, read from its source."""
-    directory = component["directory"]
+def spdx_text(identifier: str) -> str:
+    """The committed standard text for an SPDX identifier."""
+    path = SPDX_TEXT_DIR / f"{identifier}.txt"
+    if not path.is_file():
+        raise SystemExit(f"missing standard SPDX text: {path}")
+    return clean_text(path.read_text(encoding="utf-8"))
+
+
+def license_files(directory: Path) -> list[Path]:
+    """The license and notice files that a component ships.
+
+    The top level and the `license/` and `licenses/` subdirectories are read,
+    because both layouts are common.
+    """
     if not directory.is_dir():
         return []
-    found = []
-    for path in sorted(directory.iterdir()):
-        if not path.is_file() or not LICENSE_FILE.match(path.name):
+    candidates = [path for path in sorted(directory.iterdir()) if path.is_file()]
+    for name in ("license", "licenses"):
+        subdirectory = directory / name
+        if subdirectory.is_dir():
+            candidates += [path for path in sorted(subdirectory.iterdir()) if path.is_file()]
+    return [path for path in candidates if LICENSE_FILE.match(path.name)]
+
+
+def read_text(path: Path) -> str:
+    """The cleaned text of a license file."""
+    return clean_text(path.read_text(encoding="utf-8", errors="replace"))
+
+
+def fallback_ids(expression: str) -> list[str]:
+    """The one identifier used for a component that ships no license file.
+
+    The permissive ids come first. An id with no committed standard text, such
+    as `LGPL-2.1-or-later`, is skipped: a dual-licensed crate is distributed
+    under one of its other alternatives.
+    """
+    ids = named_ids(expression)
+    for preferred in FALLBACK_PREFERENCE:
+        if preferred in ids and (SPDX_TEXT_DIR / f"{preferred}.txt").is_file():
+            return [preferred]
+    return []
+
+
+def add_text(groups: dict, text: str, *, component, filename=None, spdx=None, no_file=False) -> None:
+    """Record that a component ships a text, or is covered by a standard one."""
+    entry = groups.setdefault(text, {"shipped": set(), "no_file": set(), "spdx": set()})
+    if no_file:
+        entry["no_file"].add(component)
+    else:
+        entry["shipped"].add((component[0], component[1], filename))
+    if spdx:
+        entry["spdx"].add(spdx)
+
+
+def component_texts(groups: dict, component: dict) -> None:
+    """Add one component's own license, notice, and standard texts."""
+    key = (component["name"], component["version"])
+    files = license_files(component["directory"])
+    if files:
+        for path in files:
+            text = read_text(path)
+            if text:
+                add_text(
+                    groups,
+                    text,
+                    component=key,
+                    filename=path.name,
+                    spdx=id_for_filename(path.name, component["license"]),
+                )
+        return
+    for identifier in fallback_ids(component["license"]):
+        add_text(groups, spdx_text(identifier), component=key, spdx=identifier, no_file=True)
+
+
+def vendored_texts(groups: dict, components: list[dict]) -> None:
+    """Add the license files of the native libraries a crate vendors and links."""
+    by_name = {component["name"]: component for component in components}
+    for crate, entries in VENDORED_NATIVE.items():
+        component = by_name.get(crate)
+        if component is None:
             continue
-        if path.name.upper().startswith("NOTICE"):
-            continue
-        identifier = id_for_filename(path.name, component["license"])
-        if identifier is None:
-            continue
-        try:
-            text = clean_text(path.read_text(encoding="utf-8", errors="replace"))
-        except OSError:
-            continue
-        if text:
-            found.append((identifier, text))
-    return found
+        for relative, spdx in entries:
+            path = component["directory"] / relative
+            if not path.is_file():
+                raise SystemExit(f"vendored native license missing: {path}")
+            add_text(
+                groups,
+                read_text(path),
+                component=(component["name"], component["version"]),
+                filename=relative,
+                spdx=spdx,
+            )
+    sqlite = by_name.get("libsqlite3-sys")
+    if sqlite is not None:
+        add_text(
+            groups,
+            clean_text(SQLITE_BLESSING),
+            component=(sqlite["name"], sqlite["version"]),
+            filename="sqlite3/sqlite3.c (public domain)",
+        )
+
+
+def runtime_documents(tag_dir: Path) -> list[tuple[str, str]]:
+    """The bundled runtime's own documents, read from the pinned archive.
+
+    Returns `(label, text)` pairs for the runtime `LICENSE` and
+    `ThirdPartyNotices.txt`. It fails when either document is missing, so a
+    broken or changed archive never silently drops attribution.
+    """
+    required = ("LICENSE", "ThirdPartyNotices.txt")
+    found: dict[str, Path] = {}
+    for directory in sorted(path for path in tag_dir.glob("*/") if path.is_dir()):
+        for name in required:
+            candidate = directory / name
+            if name not in found and candidate.is_file():
+                found[name] = candidate
+    missing = [name for name in required if name not in found]
+    if missing:
+        raise SystemExit(
+            f"ONNX Runtime {RUNTIME_VERSION} document missing under {tag_dir}: "
+            f"{', '.join(missing)}"
+        )
+    return [(name, read_text(found[name])) for name in required]
 
 
 def unique_components(components: list[dict]) -> list[dict]:
@@ -289,46 +453,96 @@ def component_table(components: list[dict], extra: str | None = None) -> list[st
     return lines
 
 
-def build_notices() -> str:
-    """The full contents of THIRD_PARTY_NOTICES.md."""
-    metadata = cargo_metadata()
-    rust = unique_components(rust_components(metadata))
-    scripts = unique_components(pnpm_components())
+def fence_for(text: str) -> str:
+    """A code fence longer than any backtick run in the text."""
+    fence = "```"
+    while fence in text:
+        fence += "`"
+    return fence
+
+
+def render_group(text: str, entry: dict) -> list[str]:
+    """One license text with the components that it covers."""
+    title = ", ".join(sorted(entry["spdx"])) or "License text"
+    lines = [f"### {title}", ""]
+    shipped = sorted(entry["shipped"], key=lambda item: (item[0].lower(), item[1], item[2]))
+    if shipped:
+        lines.append("Components covered by this text:")
+        lines.append("")
+        for name, version, filename in shipped:
+            lines.append(f"- {name} {version} (`{filename}`)")
+        lines.append("")
+    no_file = sorted(entry["no_file"], key=lambda item: (item[0].lower(), item[1]))
+    if no_file:
+        lines.append("Components that ship no license file, covered by the standard text:")
+        lines.append("")
+        for name, version in no_file:
+            lines.append(f"- {name} {version}")
+        lines.append("")
+    fence = fence_for(text)
+    lines.append(fence)
+    lines.append(text)
+    lines.append(fence)
+    lines.append("")
+    return lines
+
+
+def build_notices(*, rust=None, scripts=None, runtime=None) -> str:
+    """The full contents of THIRD_PARTY_NOTICES.md.
+
+    The three keyword arguments override the real inputs, so the tests can
+    build the notice from fixtures.
+    """
+    if rust is None:
+        rust = unique_components(rust_components(cargo_metadata()))
+    if scripts is None:
+        scripts = unique_components(pnpm_components())
+    if runtime is None:
+        runtime = runtime_documents(RUNTIME_DIR)
     bundled = sorted(BUNDLED, key=lambda item: item["name"].lower())
 
-    # One text per identifier. Every crate repeats the license body with its own
-    # copyright line, so a text per crate would repeat the same license hundreds
-    # of times. The component table above names each crate; the text below is the
-    # license itself. A crate that declares the identifier alone gives the clearest
-    # text, so it wins.
-    candidates: dict[str, list[tuple[bool, str, str]]] = {}
-    identifiers = set()
+    groups: dict[str, dict] = {}
     for component in rust + scripts:
+        component_texts(groups, component)
+    vendored_texts(groups, rust)
+    for label, text in runtime:
+        add_text(
+            groups,
+            clean_text(text),
+            component=("onnxruntime", RUNTIME_VERSION),
+            filename=label,
+            spdx="MIT" if label == "LICENSE" else None,
+        )
+
+    identifiers = set()
+    for component in rust + scripts + bundled:
         identifiers |= named_ids(component["license"])
-        for identifier, text in license_texts(component):
-            exact = sole_id(component["license"]) == identifier
-            candidates.setdefault(identifier, []).append(
-                (not exact, component["name"].lower(), component["version"], text)
-            )
-    for component in bundled:
-        identifiers |= named_ids(component["license"])
-    texts = {}
-    for identifier, found in candidates.items():
-        found.sort(key=lambda item: (item[0], item[1], item[2]))
-        texts[identifier] = found[0][3]
+    text_ids = set()
+    for entry in groups.values():
+        text_ids |= entry["spdx"]
+    other = sorted(identifiers - text_ids)
 
     lines = [
         "# Third-party notices",
         "",
         "Melomae is licensed under the GNU General Public License, version 3 or later",
         "(see `LICENSE`). This file lists each third-party component that Melomae",
-        "distributes or links, with the license of the component.",
+        "distributes or links, with the license of the component and the license and",
+        "notice texts that the component ships.",
         "",
         "The gate keeps this file current. `pnpm verify` fails when the file does not",
         "match the dependency trees.",
         "",
         "This file is generated. Do not edit it by hand. Run",
         "`python tools/generate_notices.py` to write it again.",
+        "",
+        "Each text below is reproduced in full. Components that ship the same text",
+        "share one copy. A component that ships no license file is listed under the",
+        "standard text for one of its declared identifiers.",
+        "",
+        "The bundled ONNX Runtime release ships the same `LICENSE` and",
+        "`ThirdPartyNotices.txt` on Windows and Linux. Both are reproduced once, in",
+        "full, below.",
         "",
         "## Components",
         "",
@@ -344,23 +558,18 @@ def build_notices() -> str:
         "",
         *component_table(bundled, extra="Note"),
         "",
-        "## License texts",
+        "## License and notice texts",
         "",
     ]
-    for identifier in sorted(texts):
-        lines.append(f"### {identifier}")
-        lines.append("")
-        lines.append("```")
-        lines.append(texts[identifier])
-        lines.append("```")
-        lines.append("")
-    missing = sorted(identifiers - set(texts))
-    if missing:
+    ordered = sorted(groups.items(), key=lambda item: (", ".join(sorted(item[1]["spdx"])).lower(), item[0]))
+    for text, entry in ordered:
+        lines.extend(render_group(text, entry))
+    if other:
         lines.append("### Other licenses")
         lines.append("")
         lines.append("The license text for each identifier below is at the given URL.")
         lines.append("")
-        for identifier in missing:
+        for identifier in other:
             url = LICENSE_URLS.get(identifier, "(no canonical URL recorded)")
             lines.append(f"- {identifier}: {url}")
         lines.append("")
@@ -382,8 +591,8 @@ def main(argv: list[str]) -> int:
         print(f"wrote {OUTPUT.name}")
         return 0
 
-    committed = OUTPUT.read_text(encoding="utf-8") if OUTPUT.is_file() else ""
-    if committed != generated:
+    committed = clean_text(OUTPUT.read_text(encoding="utf-8")) if OUTPUT.is_file() else ""
+    if committed != clean_text(generated):
         sys.stderr.write(
             f"{OUTPUT.name} is stale. Run `python tools/generate_notices.py` "
             "and commit the result.\n"
