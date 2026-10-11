@@ -11,12 +11,14 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
+use std::time::Instant;
 
 use melomae_core::decode::decode_file;
 use melomae_core::inference::chunk_budget::{choose_chunk, choose_chunk_for_machine, PAD_SECONDS};
 use melomae_core::inference::{
-    load_onnx_backend, ChunkedInference, InferenceError, Model, RestoreBackend, RestoreOutcome,
-    RestoreSettings, SAMPLE_RATE,
+    load_onnx_backend, load_onnx_backend_with_options, runtime_version, ChunkedInference,
+    InferenceError, Model, OnnxOptions, RestoreBackend, RestoreOutcome, RestoreSettings,
+    SAMPLE_RATE,
 };
 
 use common::{max_abs_diff, sine, write_wav_f32};
@@ -230,5 +232,122 @@ fn chunk_budget_60s_restore_peaks_within_15_percent_of_the_prediction() {
     assert!(
         error_percent.abs() <= 15.0,
         "the measured peak is off by {error_percent:.2}% (limit 15%)"
+    );
+}
+
+/// Read an environment variable as a boolean flag: "1" or "true".
+fn flag(name: &str) -> bool {
+    matches!(std::env::var(name).as_deref(), Ok("1") | Ok("true"))
+}
+
+/// Read an environment variable as an integer, with a default.
+fn number(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
+/// The first channel only, as a one-element channel list.
+fn first_channel(source: &[Vec<f32>]) -> Vec<Vec<f32>> {
+    vec![source[0].clone()]
+}
+
+/// A measurement that prints one machine-readable line.
+///
+/// Environment variables select the configuration, so each run is a fresh
+/// process:
+///
+/// - `MELOMAE_PROBE_CHUNK`: chunk seconds (default 17).
+/// - `MELOMAE_PROBE_MONO`: `1` uses one channel of the 60 s input.
+/// - `MELOMAE_PROBE_NO_ARENA`: `1` turns the CPU arena and memory patterns off.
+/// - `MELOMAE_PROBE_RTF`: `1` times the 6 s parity input instead.
+///
+/// It is `#[ignore]`d because every configuration can use more than 10 GiB.
+#[test]
+#[ignore = "measurement: run once per configuration while holding the gate slot"]
+fn chunk_budget_peak_probe() {
+    let model_path = env::var_os("MELOMAE_APOLLO_ONNX")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo_root().join("models").join("apollo.onnx"));
+    committed_bytes(&model_path);
+
+    let no_arena = flag("MELOMAE_PROBE_NO_ARENA");
+    let options = OnnxOptions {
+        memory_arena: !no_arena,
+        memory_pattern: !no_arena,
+    };
+    let backend = load_onnx_backend_with_options(setup::ort_library(), &model_path, options)
+        .expect("load the Apollo ONNX model");
+
+    let input_path = repo_root()
+        .join("tools")
+        .join("parity")
+        .join("input_wav.wav");
+
+    if flag("MELOMAE_PROBE_RTF") {
+        let source = decode_file(&input_path).expect("decode the committed 6 s input");
+        let input = source.channels().to_vec();
+        let settings = RestoreSettings {
+            chunk_seconds: Some(6.0),
+            overlap_seconds: OVERLAP_SECONDS,
+            chunk_pad_seconds: PAD_SECONDS as f64,
+        };
+        let start = Instant::now();
+        let outcome = backend
+            .restore(&input, &settings, &mut |_| {}, &AtomicBool::new(false))
+            .expect("run the restore");
+        let elapsed = start.elapsed().as_secs_f64();
+        assert!(matches!(outcome, RestoreOutcome::Complete(_)));
+        let seconds = input[0].len() as f64 / f64::from(SAMPLE_RATE);
+        println!(
+            "PROBE rtf version={:?} channels={} no_arena={no_arena} elapsed={elapsed:.3} \
+             seconds={seconds:.3} rtf={:.4}",
+            runtime_version(setup::ort_library()),
+            input.len(),
+            elapsed / seconds,
+        );
+        return;
+    }
+
+    let source = decode_file(&input_path).expect("decode the committed 6 s input");
+    let tiled = tiled_60s(source.channels());
+    let is_mono = flag("MELOMAE_PROBE_MONO");
+    let input = if is_mono {
+        first_channel(&tiled)
+    } else {
+        tiled
+    };
+    let chunk = number("MELOMAE_PROBE_CHUNK", 17);
+
+    let settings = RestoreSettings {
+        chunk_seconds: Some(chunk as f64),
+        overlap_seconds: OVERLAP_SECONDS,
+        chunk_pad_seconds: PAD_SECONDS as f64,
+    };
+    // The peak after the first chunk of the first channel. The callback runs
+    // before each chunk, so chunk index 1 is after chunk 0 finished.
+    let mut after_first_chunk = 0u64;
+    let start = Instant::now();
+    let outcome = backend
+        .restore(
+            &input,
+            &settings,
+            &mut |progress| {
+                if progress.chunk == 1 && progress.channel == 0 && after_first_chunk == 0 {
+                    after_first_chunk = peak_working_set_bytes();
+                }
+            },
+            &AtomicBool::new(false),
+        )
+        .expect("run the restore");
+    let elapsed = start.elapsed().as_secs_f64();
+    assert!(matches!(outcome, RestoreOutcome::Complete(_)));
+    let peak = peak_working_set_bytes();
+    println!(
+        "PROBE peak version={:?} chunk={chunk} channels={} mono={is_mono} no_arena={no_arena} \
+         after_first_chunk={after_first_chunk} peak={peak} elapsed={elapsed:.1}",
+        runtime_version(setup::ort_library()),
+        input.len(),
     );
 }

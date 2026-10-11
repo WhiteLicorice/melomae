@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-pub use onnx::OnnxModel;
+pub use onnx::{runtime_version, OnnxModel, OnnxOptions};
 
 /// The production restore backend: the chunked engine over the ONNX model.
 ///
@@ -584,8 +584,23 @@ pub fn load_onnx_backend(
     runtime_library: &Path,
     model: &Path,
 ) -> Result<OnnxBackend, InferenceError> {
+    load_onnx_backend_with_options(runtime_library, model, OnnxOptions::default())
+}
+
+/// Load the Apollo ONNX model from a caller-given runtime library and model path
+/// with explicit session options.
+///
+/// A measurement uses this to compare the CPU memory arena on and off.
+/// [`init_runtime`] runs first, so the process loads ONNX Runtime once.
+pub fn load_onnx_backend_with_options(
+    runtime_library: &Path,
+    model: &Path,
+    options: OnnxOptions,
+) -> Result<OnnxBackend, InferenceError> {
     init_runtime(runtime_library)?;
-    Ok(ChunkedInference::new(onnx::OnnxModel::load(model)?))
+    Ok(ChunkedInference::new(onnx::OnnxModel::load_with_options(
+        model, options,
+    )?))
 }
 
 #[cfg(test)]
