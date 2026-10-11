@@ -109,12 +109,45 @@ Melomae is a free, open-source desktop app. It restores a music collection that 
 
 ## §11 — Licensing, attribution, and risk
 
-1. Melomae code is licensed GPL-3.0-or-later.
+1. **Melomae code is licensed GPL-3.0-only.** The owner decided this on 2026-10-11. It replaces GPL-3.0-or-later.
+   - The app contains code translated from CC BY-SA 4.0 sources (§11.11). CC BY-SA 4.0 §3(b)(1) and §1(c) accept GPLv3 as the license for that code. They accept a later GPL version only if Creative Commons lists it.
+   - One license for all Melomae code keeps the project simple.
+   - Git history shows the owner as the only human author. The owner can relicense alone today.
+   - Accepted cost: the code has no automatic path to a later GPL version. A later relicense needs the consent of every copyright holder at that time.
+   - Rejected: GPL-3.0-or-later with a §14 proxy, because it adds a decision-maker. Rejected: a mix of GPL-3.0-only and GPL-3.0-or-later files, because it is harder to keep correct.
 2. The Apollo code and weights are licensed CC BY-SA 4.0. The local `LICENSE` in the Apollo clone and the Hugging Face model card both confirm this. There is no NonCommercial term.
 3. The app and its source credit the Apollo creators, name CC BY-SA 4.0, link the license and the source, and state the modifications (conversion to ONNX).
 4. Melomae must not suggest that the Apollo authors, Tsinghua University, or Tencent AI Lab endorse it (CC BY-SA 4.0 §2(a)(6)).
 5. Melomae uses no online data service. The free terms of MusicBrainz, the Cover Art Archive, and AcoustID cover non-commercial use only. `docs/evidence/2026-10-10-pivot.md` quotes them.
 6. The app ships a third-party notice file for every bundled component.
+7. **The model is a separate work.** `apollo.onnx` ships beside the app under CC BY-SA 4.0. The app is GPL-3.0-only (§11.1).
+   - The app loads the model at runtime from a path that the caller gives (`crates/melomae-core/src/inference/onnx.rs:3`). The installer adds the model as a resource (Stack §J). The model is not compiled into the app.
+   - GPLv3 §5 calls separate works on one medium an "aggregate" (`LICENSE:243-251`). The GPL does not apply to the model.
+   - The model keeps its own license. It needs no BY-SA Compatible License.
+   - CC BY-SA 4.0 §2(a)(4) can make the ONNX conversion a technical modification and not Adapted Material. The decision holds under both readings.
+   - The installer and the app terms must not restrict the copying of `apollo.onnx`. They must not encrypt the model (CC BY-SA 4.0 §2(a)(5)(c) and §3(b)(3)).
+   - Sources: CC BY-SA 4.0 legal code. GPLv3 (`LICENSE`).
+8. **The LLVM exception.** `deny.toml` admits `Apache-2.0 WITH LLVM-exception` through a per-crate exception for `target-lexicon` only. The global `allow` list does not contain it.
+   - `target-lexicon 0.12.16` is the only crate under this license. It is a build dependency only: `cfg-expr` → `system-deps`, under `[build-dependencies]` of the Linux GTK `-sys` crates (`cargo tree -i target-lexicon -e normal,build --target all`). It does not ship in the installer.
+   - The FSF lists Apache-2.0 as compatible with GPLv3. The LLVM exception only adds permissions.
+   - A new crate under this license fails the gate until the owner reviews it.
+   - Rejected: a global allow, which admits future crates without review. Rejected: `[licenses] include-build = false`, which removes every build dependency from the check. Rejected: `[graph] exclude`, which also hides the crate from the advisory, ban, and source checks.
+9. **The training-audio rights.** The release ships the model and does not wait.
+   - Apollo was trained on MUSDB18-HQ and MoisesDB (https://github.com/JusperLee/Apollo). MUSDB18 tracks "can only be used for academic purposes" (https://github.com/sigsep/website/blob/master/content/datasets/musdb.md). MoisesDB is CC BY-NC-SA 4.0 (https://github.com/moises-ai/moises-db/blob/main/LICENSE).
+   - The owner relies on the CC BY-SA 4.0 grant for the weights. Melomae follows CC BY-SA 4.0 and does not treat the dataset terms as binding.
+   - CC BY-SA 4.0 §1(i) limits the grant to rights that the Licensor has authority to license. §5(a) gives no warranty of non-infringement.
+10. **The hosted backend.** The backend (B-012) can run the model on the terms in §11.9.
+    - CC BY-SA 4.0 §3 applies only when You Share the material. §1(k) defines Share as providing material to the public. A model that runs on the server only is not Shared.
+    - Whether restored audio is Adapted Material (§1(a)) is not settled. The backend credits Apollo and obeys §11.4.
+    - If the backend sends the model to clients, §3(a) and §3(b) apply. The backend then must not encrypt the model.
+    - CC BY-SA 4.0 §2(b)(2) grants no patent or trademark rights.
+11. **Ported Apollo code.** The owner decided this on 2026-10-11.
+    - `crates/melomae-core/src/inference/mod.rs` translates `resolve_chunking`, `chunk_starts`, `crossfade_weights`, and `run_model` from upstream `inference.py` into Rust. Upstream contributors other than the Apollo authors wrote these functions (Part 1 table).
+    - `tools/export/real_dsp.py` computes the same mathematics as `Apollo.spec_band_split`, `Apollo.feature_extractor`, and `Apollo.forward` (`tools/export/vendor/look2hear/models/apollo.py:250-299`), in the same order. It copies no upstream text. The owner treats it as adapted, so that no argument is needed.
+    - The upstream repository is CC BY-SA 4.0. CC BY-SA 4.0 §1(a) names translation as a form of adaptation.
+    - Both files use GPL-3.0-only as the Adapter's License (§3(b)(1)). Both files carry the §3(a) attribution.
+    - Before 2026-10-11, both files carried GPL-3.0-or-later and had no attribution. `mod.rs` named only a local path. Under §6(a), a breach can end the rights. Under §6(b)(1), the rights come back if the breach is cured within 30 days of its discovery. The owner discovered it on 2026-10-11. **Cure deadline: 2026-11-10.** This applies only if the files are Adapted Material.
+    - Optional: the owner can ask the upstream copyright holders for other terms (§6(c)). For `inference.py`, those holders include Djshinshin and zbitouzakaria, as well as JusperLee.
 
 ## §12 — Quality targets
 
