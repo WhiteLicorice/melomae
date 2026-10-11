@@ -199,5 +199,8 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 | B-025 | [Explain a zero cutoff in triage](backlog/B-025-explain-a-zero-cutoff-in-triage.md) | TODO | 16 |
 | B-026 | [Handle directory cycles in the triage scan](backlog/B-026-handle-directory-cycles-in-the-triage-scan.md) | TODO | 16 |
 | B-027 | [Verify a cached ONNX Runtime library](backlog/B-027-verify-a-cached-onnx-runtime-library.md) | TODO | 33 |
+| B-028 | [Make the encode temporary file name unique](backlog/B-028-make-the-encode-temporary-file-name-unique.md) | TODO | 03 |
+| B-029 | [Isolate the MP4 decode test files](backlog/B-029-isolate-the-mp4-decode-test-files.md) | TODO | 34 |
+| B-030 | [Harden test temporary paths](backlog/B-030-harden-test-temporary-paths.md) | TODO | 34 |
 
 Each backlog record states why it does not block the MVP. Each record also states its promotion condition.

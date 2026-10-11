@@ -37,3 +37,6 @@ Do not place a defect that blocks an MVP user journey here. Put that task in `ta
 | B-025 | [Explain a zero cutoff in triage](B-025-explain-a-zero-cutoff-in-triage.md) |
 | B-026 | [Handle directory cycles in the triage scan](B-026-handle-directory-cycles-in-the-triage-scan.md) |
 | B-027 | [Verify a cached ONNX Runtime library](B-027-verify-a-cached-onnx-runtime-library.md) |
+| B-028 | [Make the encode temporary file name unique](B-028-make-the-encode-temporary-file-name-unique.md) |
+| B-029 | [Isolate the MP4 decode test files](B-029-isolate-the-mp4-decode-test-files.md) |
+| B-030 | [Harden test temporary paths](B-030-harden-test-temporary-paths.md) |
