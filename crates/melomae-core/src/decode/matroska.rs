@@ -109,10 +109,17 @@ impl<R: Read + Seek> Scanner<R> {
         })
     }
 
-    /// The byte limit for an element body: the physical file length, bounded by the nearest
-    /// finite ancestor.
-    fn limit(&self, parent_end: Option<u64>) -> u64 {
-        parent_end.map_or(self.file_len, |end| end.min(self.file_len))
+    /// The byte limit for an element body: the physical file length, bounded by the nearest finite
+    /// ancestor end and by the element's own end when it has one.
+    fn limit(&self, ancestor_end: Option<u64>, own_end: Option<u64>) -> u64 {
+        let mut limit = self.file_len;
+        if let Some(ancestor) = ancestor_end {
+            limit = limit.min(ancestor);
+        }
+        if let Some(own) = own_end {
+            limit = limit.min(own);
+        }
+        limit
     }
 
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Fail> {
@@ -270,20 +277,26 @@ fn scan<R: Read + Seek>(
     };
     scanner.seek(0)?;
 
+    // Walk every top-level element to the physical end of the file. The first Segment carries the
+    // Opus trim; any other element, and a truncation inside one, is still seen, so no byte is left
+    // unread and a trailing fragment cannot hide behind an early stop.
+    let mut parsed_segment = false;
     while let Some((id, _)) = read_id(scanner)? {
         let size = read_size(scanner)?;
         let body_start = scanner.pos;
         let body_end = scanner.bounded_end(body_start, size, scanner.file_len)?;
-        if id == ID_SEGMENT {
-            parse_segment(scanner, body_end, &mut state)?;
-            break;
+        if id == ID_SEGMENT && !parsed_segment {
+            parsed_segment = true;
+            parse_segment(scanner, None, body_end, &mut state)?;
+            continue;
         }
         skip(scanner, body_start, body_end)?;
     }
 
-    // The scan reached the end of the stream without a structural error, so its end of file is a
-    // valid boundary and a caller may accept the demuxer's matching clean end.
-    let valid_eof = true;
+    // The loop ended on a clean read of the physical end of the file, at an element boundary: the
+    // scan reached the end with no unread byte. A caller may then accept the demuxer's matching
+    // clean end.
+    let valid_eof = scanner.pos >= scanner.file_len;
     if !state.found_track {
         return Ok(ScanOutcome {
             trim: None,
@@ -302,18 +315,19 @@ fn scan<R: Read + Seek>(
 
 fn parse_segment<R: Read + Seek>(
     scanner: &mut Scanner<R>,
-    end: Option<u64>,
+    ancestor_end: Option<u64>,
+    own_end: Option<u64>,
     state: &mut State,
 ) -> Result<(), Fail> {
     loop {
-        let limit = scanner.limit(end);
+        let limit = scanner.limit(ancestor_end, own_end);
         if scanner.pos >= limit {
             return Ok(());
         }
         let Some((id, _)) = read_id(scanner)? else {
             // A physical end of file under a finite Segment is a truncation; under an unknown-size
             // Segment it is the clean end of the file.
-            return if end.is_none() {
+            return if own_end.is_none() {
                 Ok(())
             } else {
                 Err(Fail::Eof)
@@ -322,9 +336,13 @@ fn parse_segment<R: Read + Seek>(
         let size = read_size(scanner)?;
         let body_start = scanner.pos;
         let child_end = scanner.bounded_end(body_start, size, limit)?;
+        // The nearest finite ancestor for a child: its own end when it has one, otherwise the
+        // Segment's same ancestor. An unknown-size Cluster inside a finite Segment therefore ends
+        // at the Segment end at the latest.
+        let child_ancestor = child_end.or(own_end);
         match id {
-            ID_TRACKS => parse_tracks(scanner, child_end, state)?,
-            ID_CLUSTER => parse_cluster(scanner, child_end, state)?,
+            ID_TRACKS => parse_tracks(scanner, child_ancestor, child_end, state)?,
+            ID_CLUSTER => parse_cluster(scanner, child_ancestor, child_end, state)?,
             _ => skip(scanner, body_start, child_end)?,
         }
     }
@@ -332,11 +350,12 @@ fn parse_segment<R: Read + Seek>(
 
 fn parse_tracks<R: Read + Seek>(
     scanner: &mut Scanner<R>,
-    end: Option<u64>,
+    ancestor_end: Option<u64>,
+    own_end: Option<u64>,
     state: &mut State,
 ) -> Result<(), Fail> {
-    let end = end.ok_or(Fail::Bad("the Tracks element has no size"))?;
-    let limit = scanner.limit(Some(end));
+    let end = own_end.ok_or(Fail::Bad("the Tracks element has no size"))?;
+    let limit = scanner.limit(ancestor_end, Some(end));
     while scanner.pos < limit {
         let (id, _) = read_id(scanner)?.ok_or(Fail::Eof)?;
         let size = read_size(scanner)?;
@@ -363,7 +382,7 @@ fn parse_track_entry<R: Read + Seek>(
     let mut number = None;
     let mut is_opus = false;
     let mut delay_ns = 0u64;
-    let limit = scanner.limit(Some(end));
+    let limit = scanner.limit(None, Some(end));
     while scanner.pos < limit {
         let (id, _) = read_id(scanner)?.ok_or(Fail::Eof)?;
         let size = read_size(scanner)?;
@@ -388,11 +407,12 @@ fn parse_track_entry<R: Read + Seek>(
 
 fn parse_cluster<R: Read + Seek>(
     scanner: &mut Scanner<R>,
-    end: Option<u64>,
+    ancestor_end: Option<u64>,
+    own_end: Option<u64>,
     state: &mut State,
 ) -> Result<(), Fail> {
     loop {
-        let limit = scanner.limit(end);
+        let limit = scanner.limit(ancestor_end, own_end);
         if scanner.pos >= limit {
             return Ok(());
         }
@@ -400,7 +420,7 @@ fn parse_cluster<R: Read + Seek>(
         let Some((id, _)) = read_id(scanner)? else {
             // A clean EOF ends an unknown-size cluster. A finite cluster that ends before its
             // declared size is truncated.
-            return if end.is_none() {
+            return if own_end.is_none() {
                 Ok(())
             } else {
                 Err(Fail::Eof)
@@ -408,7 +428,7 @@ fn parse_cluster<R: Read + Seek>(
         };
         // An unknown-size cluster runs until an element that is not one of its children appears,
         // which is the RFC 8794 section 6.2 termination rule.
-        if end.is_none() && !is_cluster_child(id) {
+        if own_end.is_none() && !is_cluster_child(id) {
             scanner.seek(id_start)?;
             return Ok(());
         }
@@ -426,7 +446,7 @@ fn parse_cluster<R: Read + Seek>(
                 }
                 scanner.seek(end)?;
             }
-            ID_BLOCK_GROUP => parse_block_group(scanner, child_end, state)?,
+            ID_BLOCK_GROUP => parse_block_group(scanner, ancestor_end, child_end, state)?,
             _ => skip(scanner, body_start, child_end)?,
         }
     }
@@ -450,11 +470,12 @@ fn is_cluster_child(id: u32) -> bool {
 
 fn parse_block_group<R: Read + Seek>(
     scanner: &mut Scanner<R>,
+    ancestor_end: Option<u64>,
     end: Option<u64>,
     state: &mut State,
 ) -> Result<(), Fail> {
     let end = end.ok_or(Fail::Bad("a block group has no size"))?;
-    let limit = scanner.limit(Some(end));
+    let limit = scanner.limit(ancestor_end, Some(end));
     let mut track = None;
     let mut frames = 1usize;
     let mut padding_ns = 0i64;
@@ -1091,6 +1112,46 @@ mod tests {
         assert!(
             read_with_budget(&data, 1, 3).is_ok(),
             "three blocks within a budget of three must scan"
+        );
+    }
+
+    /// D1: an unknown-size Cluster inside a finite Segment ends at the Segment end at the latest. A
+    /// SimpleBlock whose declared body crosses that end is a truncation, not a recorded block.
+    #[test]
+    fn unknown_cluster_respects_finite_segment() {
+        let tracks = element(ID_TRACKS, &element(ID_TRACK_ENTRY, &track_entry(1, 0)));
+        let mut cluster = id(ID_CLUSTER);
+        cluster.push(0xFF);
+        cluster.extend_from_slice(&element(ID_SIMPLE_BLOCK, &[0x81, 0, 0, 0x80, 0xAA]));
+        let mut segment = tracks;
+        segment.extend_from_slice(&cluster);
+        let mut data = vec![0x1A, 0x45, 0xDF, 0xA3, 0x80];
+        data.extend_from_slice(&id(ID_SEGMENT));
+        data.extend_from_slice(&size(segment.len() - 1));
+        data.extend_from_slice(&segment);
+        let result = read(&data, 1);
+        eprintln!("UNKNOWN CLUSTER CROSSES FINITE SEGMENT {result:?}");
+        assert!(
+            result.is_err(),
+            "a block crosses its nearest finite ancestor"
+        );
+    }
+
+    /// D1: the scan keeps reading top-level elements to the physical end of the file. Bytes left
+    /// after the first Segment mean the scan did not reach the end, so it must not certify a clean
+    /// end of file.
+    #[test]
+    fn scan_does_not_prove_unread_tail() {
+        let mut data = file_with_blocks(&[element(ID_SIMPLE_BLOCK, &[0x81, 0, 0, 0x80])]);
+        data.extend_from_slice(&[0x1A, 0x45]);
+        let result = scan_bytes(&data, 1);
+        match &result {
+            Ok(outcome) => eprintln!("UNREAD TAIL valid_eof={}", outcome.valid_eof),
+            Err(error) => eprintln!("{error}"),
+        }
+        assert!(
+            result.is_err() || !result.unwrap().valid_eof,
+            "the scan did not reach the physical end"
         );
     }
 }
