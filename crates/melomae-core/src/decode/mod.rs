@@ -388,7 +388,7 @@ fn mp3_declares_frame_count(path: &Path) -> bool {
     match data.get(tag..tag + 4) {
         Some(kind) if kind == b"Xing" || kind == b"Info" => {
             // The base Xing/Info tag states a frame count only when bit 0 of its flags is set.
-            read_u32_be(data, tag + 4).map_or(false, |flags| flags & 0x1 != 0)
+            read_u32_be(data, tag + 4).is_some_and(|flags| flags & 0x1 != 0)
         }
         _ => false,
     }
