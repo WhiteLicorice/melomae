@@ -436,22 +436,25 @@ mod tests {
         }
     }
 
-    /// A model that marks this many samples at each edge as infinity. It mimics
-    /// the real model, whose output near an input edge is wrong.
+    /// A model that marks this many samples at each edge as a large finite
+    /// value. It mimics the real model, whose output near an input edge is
+    /// wrong. The marker is finite, because the engine now rejects a
+    /// non-finite retained sample, and the file's own edges are retained.
     struct DegradedEdgesModel {
         degraded: usize,
     }
 
     impl Model for DegradedEdgesModel {
         fn infer(&mut self, samples: &[f32]) -> Result<Vec<f32>, InferenceError> {
+            const MARKER: f32 = 1.0e6;
             let mut output = samples.to_vec();
             let degraded = self.degraded.min(output.len());
             let length = output.len();
             for sample in &mut output[..degraded] {
-                *sample = f32::INFINITY;
+                *sample = MARKER;
             }
             for sample in &mut output[length - degraded..] {
-                *sample = f32::INFINITY;
+                *sample = MARKER;
             }
             Ok(output)
         }
@@ -566,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn a_degraded_edges_model_leaves_no_infinity_when_the_pad_covers_the_edges() {
+    fn a_degraded_edges_model_is_discarded_by_the_pad() {
         let degraded = (0.05 * f64::from(SAMPLE_RATE)) as usize;
         let samples = ramp(80_000);
         let backend = ChunkedInference::new(DegradedEdgesModel { degraded });
@@ -587,8 +590,8 @@ mod tests {
         // them, as the Python test does.
         let interior = &restored[degraded..restored.len() - degraded];
         assert!(
-            interior.iter().all(|sample| sample.is_finite()),
-            "no infinity may reach the interior of the output"
+            interior.iter().all(|sample| *sample < 1.0e6),
+            "no degraded marker may reach the interior of the output"
         );
         assert_close(interior, &samples[degraded..samples.len() - degraded], 1e-6);
     }
@@ -812,5 +815,159 @@ mod tests {
         assert!(error.to_string().contains("shorter than one sample"));
         // No chunking is valid.
         assert_eq!(resolve_chunking(None, 1.0, 1.0).unwrap(), None);
+    }
+
+    /// A model that sets a shared cancel flag on its chosen call.
+    struct CancellingModel {
+        cancel: std::sync::Arc<AtomicBool>,
+        at: usize,
+        calls: usize,
+    }
+
+    impl Model for CancellingModel {
+        fn infer(&mut self, samples: &[f32]) -> Result<Vec<f32>, InferenceError> {
+            self.calls += 1;
+            if self.calls == self.at {
+                self.cancel.store(true, Ordering::Relaxed);
+            }
+            Ok(samples.to_vec())
+        }
+    }
+
+    /// A model whose every output sample is NaN.
+    struct AllNaNModel;
+
+    impl Model for AllNaNModel {
+        fn infer(&mut self, samples: &[f32]) -> Result<Vec<f32>, InferenceError> {
+            Ok(vec![f32::NAN; samples.len()])
+        }
+    }
+
+    /// A model that marks NaN from `from` onward on its first call only, so
+    /// the NaN lands where the crop discards it.
+    struct PadNaNModel {
+        from: usize,
+        calls: usize,
+    }
+
+    impl Model for PadNaNModel {
+        fn infer(&mut self, samples: &[f32]) -> Result<Vec<f32>, InferenceError> {
+            let mut output = samples.to_vec();
+            if self.calls == 0 {
+                for sample in &mut output[self.from..] {
+                    *sample = f32::NAN;
+                }
+            }
+            self.calls += 1;
+            Ok(output)
+        }
+    }
+
+    #[test]
+    fn a_cancel_in_the_last_chunk_returns_cancelled() {
+        // 1 s with 0.5 s chunks and 0.1 s overlap gives three chunks. The flag
+        // is set inside the last model call, so only a post-call check sees it.
+        let samples = ramp(44_100);
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let backend = ChunkedInference::new(CancellingModel {
+            cancel: std::sync::Arc::clone(&cancel),
+            at: 3,
+            calls: 0,
+        });
+        let outcome = backend
+            .restore(
+                std::slice::from_ref(&samples),
+                &settings(22_050, 4_410, 0),
+                &mut |_| {},
+                &cancel,
+            )
+            .expect("the restore must not fail");
+        assert_eq!(outcome, RestoreOutcome::Cancelled);
+    }
+
+    #[test]
+    fn a_cancel_in_the_full_file_call_returns_cancelled() {
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let backend = ChunkedInference::new(CancellingModel {
+            cancel: std::sync::Arc::clone(&cancel),
+            at: 1,
+            calls: 0,
+        });
+        let outcome = backend
+            .restore(
+                &[vec![0.1; 1_000]],
+                &RestoreSettings::default(),
+                &mut |_| {},
+                &cancel,
+            )
+            .expect("the restore must not fail");
+        assert_eq!(outcome, RestoreOutcome::Cancelled);
+    }
+
+    #[test]
+    fn a_cancel_in_the_last_channel_returns_cancelled() {
+        let channels = vec![vec![0.1; 1_000], vec![0.1; 1_000]];
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let backend = ChunkedInference::new(CancellingModel {
+            cancel: std::sync::Arc::clone(&cancel),
+            at: 2,
+            calls: 0,
+        });
+        let outcome = backend
+            .restore(&channels, &RestoreSettings::default(), &mut |_| {}, &cancel)
+            .expect("the restore must not fail");
+        assert_eq!(outcome, RestoreOutcome::Cancelled);
+    }
+
+    #[test]
+    fn a_short_full_file_output_is_an_error() {
+        let error = ChunkedInference::new(ShortOutputModel)
+            .restore(
+                &[vec![0.1; 1_000]],
+                &RestoreSettings::default(),
+                &mut |_| {},
+                &AtomicBool::new(false),
+            )
+            .expect_err("a short full-file output must fail");
+        assert!(error.to_string().contains("shorter"), "{error}");
+    }
+
+    #[test]
+    fn a_non_finite_retained_sample_is_an_error() {
+        for case in [settings(600, 100, 0), RestoreSettings::default()] {
+            let error = ChunkedInference::new(AllNaNModel)
+                .restore(
+                    &[vec![0.1; 1_000]],
+                    &case,
+                    &mut |_| {},
+                    &AtomicBool::new(false),
+                )
+                .expect_err("a non-finite sample must fail");
+            let message = error.to_string();
+            assert!(
+                message.contains("channel 0") && message.contains("index"),
+                "the error must name the channel and the index: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_non_finite_sample_outside_the_crop_is_not_an_error() {
+        // Chunk 0 is 600 samples long with 100 samples of pad. Its segment is
+        // 800 samples, and the last 200 are discarded. A NaN there does not
+        // reach the output.
+        let backend = ChunkedInference::new(PadNaNModel {
+            from: 600,
+            calls: 0,
+        });
+        let outcome = backend
+            .restore(
+                &[vec![0.1; 1_000]],
+                &settings(600, 100, 100),
+                &mut |_| {},
+                &AtomicBool::new(false),
+            )
+            .expect("a discarded NaN must not fail");
+        assert!(matches!(outcome, RestoreOutcome::Complete(_)));
     }
 }
