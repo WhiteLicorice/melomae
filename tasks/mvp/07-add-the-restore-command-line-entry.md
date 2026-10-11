@@ -2,7 +2,7 @@
 
 **Status:** TODO
 **Phase:** 1 — Restoration engine
-**Depends on:** 04, 05, 06
+**Depends on:** 04, 05, 06, 33
 **SRS:** §6, §7, §12
 **Stack:** §B
 **Assigned to:** Agent
