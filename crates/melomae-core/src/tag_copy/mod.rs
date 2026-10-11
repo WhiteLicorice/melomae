@@ -131,6 +131,94 @@ fn target_tag_type(format: OutputFormat) -> TagType {
     }
 }
 
+/// A field whose Picard name differs from lofty's generic mapping. The portable name is the
+/// Vorbis key. `id3` is the ID3v2 name, either a frame id or, when `id3_user_text` is set, a
+/// `TXXX` description. `mp4` is the MP4 freeform atom name, without the
+/// `----:com.apple.iTunes:` prefix.
+struct PicardMapping {
+    portable: &'static str,
+    id3: Option<&'static str>,
+    id3_user_text: bool,
+    mp4: Option<&'static str>,
+}
+
+/// The fields the MusicBrainz Picard tag mapping names differently from lofty.
+///
+/// `LABEL`: Picard maps ID3 `TPUB` to Vorbis `LABEL`, but lofty reads `TPUB` as `Publisher` and
+/// writes Vorbis `PUBLISHER`. `SCRIPT` and `RELEASESTATUS` have no ID3 `ItemKey` in lofty, so the
+/// generic layer reports or mis-names them. `ORIGINALYEAR` shares lofty's `OriginalReleaseDate`
+/// with `ORIGINALDATE`, and Picard defines no ID3 frame for it.
+///
+/// Source: <https://picard-docs.musicbrainz.org/en/latest/appendices/tag_mapping.html>, checked
+/// 2026-10-11.
+const PICARD_MAPPINGS: &[PicardMapping] = &[
+    PicardMapping {
+        portable: "LABEL",
+        id3: Some("TPUB"),
+        id3_user_text: false,
+        mp4: Some("LABEL"),
+    },
+    PicardMapping {
+        portable: "SCRIPT",
+        id3: Some("SCRIPT"),
+        id3_user_text: true,
+        mp4: Some("SCRIPT"),
+    },
+    PicardMapping {
+        portable: "RELEASESTATUS",
+        id3: Some("MusicBrainzAlbumStatus"),
+        id3_user_text: true,
+        mp4: Some("MusicBrainzAlbumStatus"),
+    },
+    PicardMapping {
+        portable: "ORIGINALYEAR",
+        id3: None,
+        id3_user_text: false,
+        mp4: None,
+    },
+];
+
+/// The mapping for a portable (Vorbis) name.
+fn picard_mapping(portable: &str) -> Option<&'static PicardMapping> {
+    PICARD_MAPPINGS.iter().find(|m| m.portable == portable)
+}
+
+/// The mapping for an ID3 `TXXX` description. The comparison ignores case, spaces, and
+/// underscores, so both the compact Picard name and the spaced lofty name match.
+fn picard_mapping_for_id3_text(description: &str) -> Option<&'static PicardMapping> {
+    PICARD_MAPPINGS
+        .iter()
+        .find(|m| m.id3_user_text && m.id3.is_some_and(|name| same_field_name(name, description)))
+}
+
+/// The mapping for an MP4 freeform atom name.
+fn picard_mapping_for_mp4(name: &str) -> Option<&'static PicardMapping> {
+    PICARD_MAPPINGS
+        .iter()
+        .find(|m| m.mp4.is_some_and(|native| same_field_name(native, name)))
+}
+
+/// Whether two field names are the same, ignoring case, spaces, and underscores.
+fn same_field_name(a: &str, b: &str) -> bool {
+    let normalize = |name: &str| -> String {
+        name.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_uppercase())
+            .collect()
+    };
+    normalize(a) == normalize(b)
+}
+
+/// The native name a mapped field takes in a tag type, or `None` when the type cannot hold it.
+fn mapped_native(mapping: &PicardMapping, tag_type: TagType) -> Option<&'static str> {
+    match tag_type {
+        TagType::Id3v2 => mapping.id3,
+        TagType::Mp4Ilst => mapping.mp4,
+        TagType::VorbisComments => Some(mapping.portable),
+        _ => None,
+    }
+}
+
 /// The portable name of a standard field: its Vorbis key where one exists, else its lofty name.
 fn standard_name(key: ItemKey) -> String {
     key.map_key(TagType::VorbisComments)
@@ -139,10 +227,17 @@ fn standard_name(key: ItemKey) -> String {
 }
 
 /// Whether the target tag type holds a standard item. A key with no mapping, or a binary value in a
-/// format that stores text only, cannot be carried.
+/// format that stores text only, cannot be carried. A Picard override decides the mapped fields,
+/// so lofty's own mapping cannot hide a field that Picard names differently.
 fn standard_is_supported(item: &TagItem, tag_type: TagType) -> bool {
+    let text = matches!(item.value(), ItemValue::Text(_) | ItemValue::Locator(_));
+    if !text {
+        return false;
+    }
+    if let Some(mapping) = picard_mapping(&standard_name(item.key())) {
+        return mapped_native(mapping, tag_type).is_some();
+    }
     item.key().map_key(tag_type).is_some()
-        && matches!(item.value(), ItemValue::Text(_) | ItemValue::Locator(_))
 }
 
 /// Whether the target format holds a custom field.
@@ -152,8 +247,11 @@ fn custom_is_supported(field: &CustomField, format: OutputFormat) -> bool {
         return false;
     }
     match format {
-        // A TXXX frame needs a non-empty description.
-        OutputFormat::Wav => !field.name.is_empty(),
+        // A TXXX frame needs a non-empty description. A mapped field needs an ID3 name at all.
+        OutputFormat::Wav => match picard_mapping(&field.name) {
+            Some(mapping) => mapping.id3.is_some(),
+            None => !field.name.is_empty(),
+        },
         // A Vorbis key holds ASCII 0x20 through 0x7D, and no `=`.
         OutputFormat::Flac | OutputFormat::Opus => is_valid_vorbis_key(&field.name),
     }
@@ -190,7 +288,58 @@ pub fn read_tags(path: &Path) -> Result<TagSet, TagError> {
         }
         _ => Vec::new(),
     };
+    correct_identities(path, file_type, &mut set)?;
     Ok(set)
+}
+
+/// Correct lofty's generic identity for the fields the Picard mapping distinguishes.
+///
+/// An ID3v2 tag stores the label in `TPUB`, and lofty reads that as `Publisher`. An ID3v2 tag has no
+/// separate publisher frame, so every `Publisher` becomes `Label`. A Vorbis `ORIGINALYEAR` comment
+/// shares lofty's `OriginalReleaseDate` with `ORIGINALDATE`, so it is split back out as its own
+/// field.
+fn correct_identities(path: &Path, file_type: FileType, set: &mut TagSet) -> Result<(), TagError> {
+    match file_type {
+        FileType::Mpeg | FileType::Wav | FileType::Aiff | FileType::Aac => {
+            for item in &mut set.standard {
+                if item.key() == ItemKey::Publisher {
+                    *item = TagItem::new(ItemKey::Label, item.value().clone());
+                }
+            }
+        }
+        FileType::Flac | FileType::Opus | FileType::Vorbis | FileType::Speex => {
+            let items = vorbis_items(path, file_type)?;
+            let years: Vec<String> = native_values(&items, "ORIGINALYEAR");
+            if !years.is_empty() {
+                // Rebuild the original date from the native `ORIGINALDATE` comments only, so the
+                // year value does not leak into it.
+                let dates = native_values(&items, "ORIGINALDATE");
+                set.standard
+                    .retain(|item| item.key() != ItemKey::OriginalReleaseDate);
+                for date in dates {
+                    set.standard.push(TagItem::new(
+                        ItemKey::OriginalReleaseDate,
+                        ItemValue::Text(date),
+                    ));
+                }
+                set.custom.push(CustomField {
+                    name: "ORIGINALYEAR".to_string(),
+                    values: years,
+                });
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Every value of a native key, matched without case.
+fn native_values(items: &[(String, String)], key: &str) -> Vec<String> {
+    items
+        .iter()
+        .filter(|(candidate, _)| candidate.eq_ignore_ascii_case(key))
+        .map(|(_, value)| value.clone())
+        .collect()
 }
 
 /// The custom fields of an ID3v2-carrying file: every `TXXX` frame whose description has no
@@ -207,7 +356,14 @@ fn read_id3_customs(path: &Path, file_type: FileType) -> Result<Vec<CustomField>
                 content,
                 ..
             }) => {
-                if ItemKey::from_key(TagType::Id3v2, description).is_none() {
+                if let Some(mapping) = picard_mapping_for_id3_text(description) {
+                    // A mapped `TXXX` frame, such as the script or the release status, crosses the
+                    // formats under its portable name.
+                    fields.push(CustomField {
+                        name: mapping.portable.to_string(),
+                        values: content.split('\0').map(str::to_string).collect(),
+                    });
+                } else if ItemKey::from_key(TagType::Id3v2, description).is_none() {
                     fields.push(CustomField {
                         name: description.to_string(),
                         values: content.split('\0').map(str::to_string).collect(),
@@ -274,7 +430,10 @@ fn read_mp4_customs(path: &Path) -> Result<Vec<CustomField>, TagError> {
             // `----:mean:name` of its identifier, a four-byte atom its four characters.
             let (key, name) = match ident {
                 AtomIdent::Freeform { mean, name } => {
-                    (format!("----:{mean}:{name}"), name.to_string())
+                    let portable = picard_mapping_for_mp4(name)
+                        .map(|mapping| mapping.portable.to_string())
+                        .unwrap_or_else(|| name.to_string());
+                    (format!("----:{mean}:{name}"), portable)
                 }
                 AtomIdent::Fourcc(fourcc) => (
                     fourcc.iter().map(|byte| char::from(*byte)).collect(),
@@ -302,12 +461,10 @@ fn values_from_atom(atom: &lofty::mp4::Atom<'static>, fields: &mut Vec<CustomFie
     fields.push(CustomField { name, values });
 }
 
-/// The custom fields of a FLAC, Opus, Vorbis, or Speex file: every comment key with no standard
-/// mapping.
-fn read_vorbis_customs(path: &Path, file_type: FileType) -> Result<Vec<CustomField>, TagError> {
+/// Every key and value of a Vorbis comment tag.
+fn vorbis_items(path: &Path, file_type: FileType) -> Result<Vec<(String, String)>, TagError> {
     let mut file = File::open(path).map_err(|error| TagError::new(path, error.to_string()))?;
     let options = ParseOptions::new();
-
     let items: Vec<(String, String)> = match file_type {
         FileType::Flac => {
             let flac = lofty::flac::FlacFile::read_from(&mut file, options)
@@ -331,6 +488,13 @@ fn read_vorbis_customs(path: &Path, file_type: FileType) -> Result<Vec<CustomFie
         }
         _ => Vec::new(),
     };
+    Ok(items)
+}
+
+/// The custom fields of a FLAC, Opus, Vorbis, or Speex file: every comment key with no standard
+/// mapping.
+fn read_vorbis_customs(path: &Path, file_type: FileType) -> Result<Vec<CustomField>, TagError> {
+    let items = vorbis_items(path, file_type)?;
 
     let mut fields: Vec<CustomField> = Vec::new();
     for (key, value) in items {
@@ -373,7 +537,18 @@ pub fn write_into(path: &Path, format: OutputFormat, tags: &TagSet) -> Result<()
 /// Write ID3v2 to a WAV output.
 fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
     let mut tag = Tag::new(TagType::Id3v2);
+    let mut user_text: Vec<(String, String)> = Vec::new();
     for item in &tags.standard {
+        if let Some(mapping) = picard_mapping(&standard_name(item.key())) {
+            // A mapped field with a `TXXX` native name is written by hand, because lofty's generic
+            // layer has no ID3 frame for it.
+            if mapping.id3_user_text {
+                if let (Some(value), Some(native)) = (item.value().text(), mapping.id3) {
+                    user_text.push((native.to_string(), value.to_string()));
+                }
+                continue;
+            }
+        }
         if standard_is_supported(item, TagType::Id3v2) {
             tag.push(item.clone());
         }
@@ -383,13 +558,21 @@ fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
     }
 
     let mut id3 = lofty::id3::v2::Id3v2Tag::from(tag);
+    for (name, value) in user_text {
+        id3.insert_user_text(name, value);
+    }
     for field in &tags.custom {
         if !custom_is_supported(field, OutputFormat::Wav) {
             continue;
         }
-        // A TXXX frame is identified by its description, so a multi-value field is one frame whose
-        // values are null-separated, exactly as ID3v2.4 defines it.
-        id3.insert_user_text(field.name.clone(), field.values.join("\0"));
+        // A mapped custom field, such as the release status, uses its native ID3 name. A TXXX
+        // frame is identified by its description, so a multi-value field is one frame whose values
+        // are null-separated, exactly as ID3v2.4 defines it.
+        let name = picard_mapping(&field.name)
+            .and_then(|mapping| mapping.id3)
+            .unwrap_or(&field.name)
+            .to_string();
+        id3.insert_user_text(name, field.values.join("\0"));
     }
 
     id3.save_to_path(path, WriteOptions::default())
