@@ -1,13 +1,13 @@
 # 34 — Make test temporary directories unique
 
-**Status:** TODO
+**Status:** DONE
 **Phase:** 1 — Restoration engine
 **Depends on:** 03
 **SRS:** §12
 **Stack:** §K
 **Assigned to:** Agent
-**Started:** —
-**Outcome:** —
+**Started:** 2026-10-11 — Base commit `102f78c`, clean tree, `git lfs pull` in the worktree. Baseline gate at `102f78c`: board 62 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 179 passed, pytest 19 passed.
+**Outcome:** DONE 2026-10-11. `TempDir::new` (`crates/melomae-core/tests/setup/mod.rs:56`) now names its directory `<prefix>-<pid>-<stamp>-<sequence>`, where `sequence` is a process-wide `AtomicU64`, and creates it with `fs::create_dir`, so a repeated name errors instead of reusing a directory another test removes. Seven other clock-and-pid temporary helpers were fixed the same way: `TempDb::new` in `crates/melomae-core/tests/triage_scan.rs`, `crates/melomae-core/tests/triage_round1_fixes.rs`, `crates/melomae-core/tests/store_e2e.rs`, `crates/melomae-core/tests/store_regressions.rs`, `crates/melomae-core/tests/store_recovery.rs`, `crates/melomae-core/src/store/race_tests.rs`, and the `crates/melomae-core/src/store/mod.rs` tests module. Left unchanged: `crates/melomae-core/src/decode/mp4.rs:550` `write_temp` uses a fixed shared directory with a distinct file name per test, not a clock-or-pid name and no drop, so it is not the same pattern; `crates/melomae-core/src/encode/mod.rs:219` `temporary_path` is production code and out of scope, with an unproven collision risk for two concurrent writes to one target. Tests added in `crates/melomae-core/tests/temp_dir.rs`: `temp_dir_new_returns_distinct_paths_under_threads` (16 barrier-synchronized threads by 500 rounds, no panic and no repeated path; red 10 of 10 at `102f78c` with `6 of 8000 calls panicked`) and the e2e `e2e_parallel_fixture_builds_keep_separate_directories` (two concurrent `Fixtures::build()` keep separate directories). Gate at `0837b5a`: `pnpm verify` exit 0, board 62 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 181 passed (baseline 179, +2 new tests), pytest 19 passed. Hosted CI on both operating systems is confirmed by the orchestrator after the branch push.
 
 ## Goal
 
@@ -34,10 +34,10 @@ Stop parallel tests from sharing, and deleting, one temporary fixture directory,
 
 ## Acceptance criteria
 
-- [ ] The new test failed first for the expected reason.
-- [ ] `cargo test --workspace` passes three times in a row on this machine with the default thread count.
+- [x] The new test failed first for the expected reason.
+- [x] `cargo test --workspace` passes three times in a row on this machine with the default thread count.
 - [ ] Hosted CI passes on both operating systems.
-- [ ] `pnpm verify` passes.
+- [x] `pnpm verify` passes.
 
 ## Verify
 
