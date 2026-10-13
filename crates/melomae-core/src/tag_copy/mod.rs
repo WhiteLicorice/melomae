@@ -1058,13 +1058,11 @@ fn multiset_holds(written: &[String], expected: &[String]) -> bool {
     true
 }
 
-/// Add a value to a `TXXX` frame's group, keyed by its description. The standard and the custom
-/// representation of one description land in the same group, so no value replaces another.
+/// Add a value to a `TXXX` frame's group, keyed by its exact description. The standard and the
+/// custom representation of one description carry the same native name, so they land in the same
+/// group; two distinct descriptions stay apart, so no identity merges.
 fn push_user_text(groups: &mut Vec<(String, Vec<String>)>, description: &str, value: String) {
-    match groups
-        .iter_mut()
-        .find(|(name, _)| same_field_name(name, description))
-    {
+    match groups.iter_mut().find(|(name, _)| name == description) {
         Some((_, values)) => values.push(value),
         None => groups.push((description.to_string(), vec![value])),
     }
