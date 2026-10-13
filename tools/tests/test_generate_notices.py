@@ -428,5 +428,6 @@ def test_a_nested_license_is_kept_but_test_and_bench_folders_are_excluded(tmp_pa
 def test_the_generated_app_declaration_offers_version_3_only() -> None:
     module = load_module()
     text = module.build_notices(rust=[], scripts=[], runtime=[])
-    assert "version 3 only" in text
-    assert "version 3 or later" not in text
+    assert "Melomae is licensed under the GNU General Public License, version 3 only" in text
+    # The old wording, split so this guard does not carry the phrase itself.
+    assert "version 3 " + "or " + "later" not in text
