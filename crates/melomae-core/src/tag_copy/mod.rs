@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::{AudioFile, FileType, TaggedFileExt};
-use lofty::id3::v2::{ExtendedTextFrame, Frame, FrameId, TextInformationFrame};
+use lofty::id3::v2::{ExtendedTextFrame, Frame, FrameId, TextInformationFrame, UrlLinkFrame};
 use lofty::mp4::{AtomData, AtomIdent};
 use lofty::ogg::tag::VorbisComments;
 use lofty::picture::Picture;
@@ -45,12 +45,22 @@ impl CustomField {
     }
 }
 
+/// A native ID3v2 frame the copier carries verbatim into a WAV output, because the generic model
+/// cannot represent it. `name` is how the returned list names it for a Vorbis target, where the
+/// frame has no plain equivalent.
+#[derive(Debug, Clone)]
+struct CarriedFrame {
+    name: String,
+    frame: Frame<'static>,
+}
+
 /// Every tag and picture read from one file.
 #[derive(Debug, Clone, Default)]
 pub struct TagSet {
     standard: Vec<TagItem>,
     custom: Vec<CustomField>,
     pictures: Vec<Picture>,
+    carried: Vec<CarriedFrame>,
 }
 
 impl TagSet {
@@ -70,7 +80,8 @@ impl TagSet {
     }
 
     /// The fields that the target format cannot hold. The job report lists these, so no field is
-    /// dropped in silence.
+    /// dropped in silence. A carried ID3v2 frame is preserved in a WAV output, and named for a
+    /// Vorbis target that has no plain equivalent.
     pub fn unsupported_for(&self, format: OutputFormat) -> Vec<String> {
         let tag_type = target_tag_type(format);
         let mut names = Vec::new();
@@ -82,6 +93,11 @@ impl TagSet {
         for field in &self.custom {
             if !custom_is_supported(field, format) {
                 names.push(field.name.clone());
+            }
+        }
+        if format != OutputFormat::Wav {
+            for carried in &self.carried {
+                names.push(carried.name.clone());
             }
         }
         names
@@ -178,6 +194,20 @@ const PICARD_MAPPINGS: &[PicardMapping] = &[
         id3: Some("TPUB"),
         id3_user_text: false,
         mp4: Some("LABEL"),
+    },
+    PicardMapping {
+        key: Some(ItemKey::TrackArtistUrl),
+        portable: "WEBSITE",
+        id3: Some("WOAR"),
+        id3_user_text: false,
+        mp4: None,
+    },
+    PicardMapping {
+        key: Some(ItemKey::CopyrightUrl),
+        portable: "LICENSE",
+        id3: Some("WCOP"),
+        id3_user_text: false,
+        mp4: None,
     },
     PicardMapping {
         key: Some(ItemKey::TrackArtists),
@@ -313,8 +343,17 @@ fn picard_mapping(portable: &str) -> Option<&'static PicardMapping> {
 }
 
 /// The mapping that overrides a standard [`ItemKey`], so its Picard name wins over lofty's.
+///
+/// Picard's license row is reached through two lofty keys: an ID3 `WCOP` frame reads as
+/// `CopyrightUrl`, and a Vorbis `LICENSE` comment reads as `License`. Both take the license row.
 fn picard_mapping_for_key(key: ItemKey) -> Option<&'static PicardMapping> {
-    PICARD_MAPPINGS.iter().find(|m| m.key == Some(key))
+    if let Some(mapping) = PICARD_MAPPINGS.iter().find(|m| m.key == Some(key)) {
+        return Some(mapping);
+    }
+    if key == ItemKey::License {
+        return picard_mapping("LICENSE");
+    }
+    None
 }
 
 /// The mapping for an ID3 `TXXX` description. The comparison ignores case, spaces, and
@@ -394,9 +433,21 @@ fn custom_is_supported(field: &CustomField, format: OutputFormat) -> bool {
             Some(mapping) => mapping.id3.is_some(),
             None => !field.name.is_empty(),
         },
-        // A Vorbis key holds ASCII 0x20 through 0x7D, and no `=`.
-        OutputFormat::Flac | OutputFormat::Opus => is_valid_vorbis_key(&field.name),
+        // A Vorbis key holds ASCII 0x20 through 0x7D, and no `=`. A Picard field whose Vorbis key is
+        // parameterized or two-part has no plain key the copier can write, so it is named instead.
+        OutputFormat::Flac | OutputFormat::Opus => {
+            is_valid_vorbis_key(&field.name) && !is_parameterized_picard_field(&field.name)
+        }
     }
+}
+
+/// Whether a custom field is a Picard field whose Vorbis key is parameterized or two-part, such as
+/// `MusicIP Fingerprint` (`FINGERPRINT=MusicMagic Fingerprint {fingerprint}`). The copier names it
+/// for a Vorbis target instead of writing it under a key that is not the documented one.
+fn is_parameterized_picard_field(name: &str) -> bool {
+    ["MusicMagic Fingerprint", "MusicIP Fingerprint"]
+        .iter()
+        .any(|candidate| same_field_name(candidate, name))
 }
 
 /// Whether a Vorbis comment accepts the key. This matches the library's own check, so the report
@@ -419,17 +470,19 @@ pub fn read_tags(path: &Path) -> Result<TagSet, TagError> {
         set.standard = tag.items().cloned().collect();
         set.pictures = tag.pictures().to_vec();
     }
-    set.custom = match file_type {
+    match file_type {
         // A WAV, AIFF, or AAC file carries ID3v2, so its custom fields are `TXXX` frames.
         FileType::Mpeg | FileType::Wav | FileType::Aiff | FileType::Aac => {
-            read_id3_customs(path, file_type)?
+            let (custom, carried) = read_id3_customs(path, file_type)?;
+            set.custom = custom;
+            set.carried = carried;
         }
-        FileType::Mp4 => read_mp4_customs(path)?,
+        FileType::Mp4 => set.custom = read_mp4_customs(path)?,
         FileType::Flac | FileType::Opus | FileType::Vorbis | FileType::Speex => {
-            read_vorbis_customs(path, file_type)?
+            set.custom = read_vorbis_customs(path, file_type)?;
         }
-        _ => Vec::new(),
-    };
+        _ => {}
+    }
     correct_identities(path, file_type, &mut set)?;
     Ok(set)
 }
@@ -467,6 +520,34 @@ fn correct_identities(path: &Path, file_type: FileType, set: &mut TagSet) -> Res
                     *item = TagItem::new(ItemKey::Label, item.value().clone());
                 }
             }
+            // A carried frame stands in for a generic item that would otherwise mis-represent it:
+            // a described `COMM` must not merge into `COMMENT`, a `POPM` must not become the
+            // lossy `RATING` key, and a malformed `MVIN` must not become a guessed movement.
+            let comment_bodies: Vec<String> = set
+                .carried
+                .iter()
+                .filter_map(|carried| match &carried.frame {
+                    Frame::Comment(frame) => Some(frame.content.to_string()),
+                    _ => None,
+                })
+                .collect();
+            let has_popm = set
+                .carried
+                .iter()
+                .any(|carried| matches!(carried.frame, Frame::Popularimeter(_)));
+            let malformed_movement = set.carried.iter().any(|carried| carried.name == "MVIN");
+            set.standard.retain(|item| {
+                let described_comment = item.key() == ItemKey::Comment
+                    && item
+                        .value()
+                        .text()
+                        .is_some_and(|text| comment_bodies.iter().any(|body| body == text));
+                let rating = has_popm && item.key() == ItemKey::Popularimeter;
+                let movement = malformed_movement
+                    && (item.key() == ItemKey::MovementNumber
+                        || item.key() == ItemKey::MovementTotal);
+                !(described_comment || rating || movement)
+            });
         }
         FileType::Flac | FileType::Opus | FileType::Vorbis | FileType::Speex => {
             let items = vorbis_items(path, file_type)?;
@@ -503,12 +584,21 @@ fn native_values(items: &[(String, String)], key: &str) -> Vec<String> {
         .collect()
 }
 
+/// The owner that marks a `UFID` frame as the MusicBrainz recording ID.
+const MUSICBRAINZ_UFID_OWNER: &str = "http://musicbrainz.org";
+
 /// The custom fields of an ID3v2-carrying file: every `TXXX` frame whose description has no
-/// standard mapping, plus every other frame the generic layer leaves behind.
-fn read_id3_customs(path: &Path, file_type: FileType) -> Result<Vec<CustomField>, TagError> {
+/// standard mapping, plus every other frame the generic layer leaves behind. The frames the generic
+/// model cannot represent are returned as carried frames, to be written verbatim into a WAV output
+/// and named for a Vorbis target.
+fn read_id3_customs(
+    path: &Path,
+    file_type: FileType,
+) -> Result<(Vec<CustomField>, Vec<CarriedFrame>), TagError> {
     let mut fields = Vec::new();
+    let mut carried = Vec::new();
     let Some(id3) = read_id3_tag(path, file_type)? else {
-        return Ok(fields);
+        return Ok((fields, carried));
     };
     for frame in &id3 {
         match frame {
@@ -531,8 +621,56 @@ fn read_id3_customs(path: &Path, file_type: FileType) -> Result<Vec<CustomField>
                     });
                 }
             }
-            // Every remaining frame has no standard mapping, so nothing may drop it in silence.
+            // A `UFID` with the MusicBrainz owner is the recording ID, which the generic layer
+            // carries. Any other owner is a different field, so the frame is carried and named.
+            Frame::UniqueFileIdentifier(ufid) => {
+                if ufid.owner.as_ref() != MUSICBRAINZ_UFID_OWNER {
+                    carried.push(CarriedFrame {
+                        name: "UFID".to_string(),
+                        frame: frame.clone(),
+                    });
+                }
+            }
+            // A `COMM` with a description is not the plain `COMMENT` field, so the frame is carried
+            // and named rather than merged into the comment.
+            Frame::Comment(comment) => {
+                if !comment.description.is_empty() {
+                    carried.push(CarriedFrame {
+                        name: format!("COMM:{}", comment.description),
+                        frame: frame.clone(),
+                    });
+                }
+            }
+            // The involved-people roles (`TIPL`/`IPLS`) reach the generic layer as standard items.
+            // The musician-credits `TMCL` has no mapping at all, so the frame is carried.
+            Frame::KeyValue(credits) => {
+                if credits.id().as_str() == "TMCL" {
+                    carried.push(CarriedFrame {
+                        name: "TMCL".to_string(),
+                        frame: frame.clone(),
+                    });
+                }
+            }
+            // Picard's rating row is the `RATING:user@email` Vorbis key, which the copier cannot
+            // write without a user, so the frame is carried and named.
+            Frame::Popularimeter(_) => {
+                carried.push(CarriedFrame {
+                    name: "POPM".to_string(),
+                    frame: frame.clone(),
+                });
+            }
+            // `MVIN` holds `number` or `number/count`. Anything else is malformed and is carried, so
+            // it is reported instead of guessed.
+            Frame::Text(text) if text.id().as_str() == "MVIN" => {
+                if !is_movement_value(&text.value) {
+                    carried.push(CarriedFrame {
+                        name: "MVIN".to_string(),
+                        frame: frame.clone(),
+                    });
+                }
+            }
             Frame::Picture(_) => {}
+            // Every remaining frame has no standard mapping, so nothing may drop it in silence.
             other => {
                 if ItemKey::from_key(TagType::Id3v2, other.id_str()).is_none() {
                     fields.push(CustomField {
@@ -543,7 +681,19 @@ fn read_id3_customs(path: &Path, file_type: FileType) -> Result<Vec<CustomField>
             }
         }
     }
-    Ok(fields)
+    Ok((fields, carried))
+}
+
+/// Whether an ID3 `MVIN` value is `number` or `number/count`, the two forms Picard defines.
+fn is_movement_value(value: &str) -> bool {
+    let mut parts = value.splitn(2, '/');
+    if parts.next().unwrap_or_default().parse::<u32>().is_err() {
+        return false;
+    }
+    match parts.next() {
+        None => true,
+        Some(count) => count.parse::<u32>().is_ok(),
+    }
 }
 
 /// The ID3v2 tag of an MP3, WAV, AIFF, or AAC file.
@@ -699,7 +849,32 @@ pub fn write_into(path: &Path, format: OutputFormat, tags: &TagSet) -> Result<()
 fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
     let mut tag = Tag::new(TagType::Id3v2);
     let mut user_text: Vec<(String, String)> = Vec::new();
+    let mut movement_number: Option<String> = None;
+    let mut movement_total: Option<String> = None;
+    let mut license: Option<String> = None;
     for item in &tags.standard {
+        // Picard's movement row is one `MVIN` frame, `number` or `number/count`. The two generic
+        // items are joined into one frame below.
+        match item.key() {
+            ItemKey::MovementNumber => {
+                movement_number = item.value().text().map(str::to_string);
+                continue;
+            }
+            ItemKey::MovementTotal => {
+                movement_total = item.value().text().map(str::to_string);
+                continue;
+            }
+            // Picard's license row is a URL frame when the value is a URL, and a `TXXX` otherwise.
+            ItemKey::License => {
+                license = item
+                    .value()
+                    .text()
+                    .or_else(|| item.value().locator())
+                    .map(str::to_string);
+                continue;
+            }
+            _ => {}
+        }
         if let Some(mapping) = picard_mapping_for_key(item.key()) {
             // A mapped field with a `TXXX` native name is written by hand, because lofty's generic
             // layer has no ID3 frame for it.
@@ -722,6 +897,27 @@ fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
     for (name, value) in user_text {
         id3.insert_user_text(name, value);
     }
+    if let Some(value) = license {
+        if is_http_url(&value) {
+            id3.insert(Frame::Url(UrlLinkFrame::new(
+                FrameId::Valid("WCOP".to_string().into()),
+                value,
+            )));
+        } else {
+            id3.insert_user_text("LICENSE".to_string(), value);
+        }
+    }
+    if let Some(number) = movement_number {
+        let value = match movement_total {
+            Some(total) => format!("{number}/{total}"),
+            None => number,
+        };
+        id3.insert(Frame::Text(TextInformationFrame::new(
+            FrameId::Valid("MVIN".to_string().into()),
+            TextEncoding::UTF8,
+            value,
+        )));
+    }
     for field in &tags.custom {
         if !custom_is_supported(field, OutputFormat::Wav) {
             continue;
@@ -736,13 +932,14 @@ fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
                     id3.insert_user_text(native.to_string(), value);
                 }
             }
+            // Picard's license row: a URL value is the `WCOP` frame, and anything else keeps the
+            // `TXXX:LICENSE` description.
+            Some(mapping) if mapping.id3 == Some("WCOP") && !is_http_url(&value) => {
+                id3.insert_user_text("LICENSE".to_string(), value);
+            }
             Some(mapping) => {
                 if let Some(native) = mapping.id3 {
-                    id3.insert(Frame::Text(TextInformationFrame::new(
-                        FrameId::Valid(native.to_string().into()),
-                        TextEncoding::UTF8,
-                        value,
-                    )));
+                    insert_id3_text_or_url(&mut id3, native, value);
                 }
             }
             None => {
@@ -750,9 +947,34 @@ fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
             }
         }
     }
+    // Re-insert the frames the generic model cannot represent, so a WAV output keeps them.
+    for carried in &tags.carried {
+        id3.insert(carried.frame.clone());
+    }
 
     id3.save_to_path(path, WriteOptions::default())
         .map_err(|error| TagError::new(path, format!("write the ID3 tag: {error}")))
+}
+
+/// Whether a license value is a URL, which ID3 stores in the `WCOP` frame rather than a `TXXX`.
+fn is_http_url(value: &str) -> bool {
+    value.starts_with("http://") || value.starts_with("https://")
+}
+
+/// Insert a text value under an ID3v2 frame id: a URL frame for a `W...` id, a text frame
+/// otherwise.
+fn insert_id3_text_or_url(id3: &mut lofty::id3::v2::Id3v2Tag, id: &str, value: String) {
+    let frame_id = FrameId::Valid(id.to_string().into());
+    let frame = if id.len() == 4 && id.starts_with('W') {
+        Frame::Url(UrlLinkFrame::new(frame_id, value))
+    } else {
+        Frame::Text(TextInformationFrame::new(
+            frame_id,
+            TextEncoding::UTF8,
+            value,
+        ))
+    };
+    id3.insert(frame);
 }
 
 /// Write Vorbis comments to a FLAC or Opus output.
@@ -773,9 +995,9 @@ fn write_vorbis(path: &Path, tags: &TagSet) -> Result<(), TagError> {
         // A Picard override decides the literal Vorbis key. Lofty's own conversion would name the
         // field differently: it writes `ENCODING` for the encoder settings where Picard uses
         // `ENCODERSETTINGS`, and `INITIALKEY` for the initial key where Picard uses `KEY`. A mapped
-        // text value is written by hand so the override wins.
+        // value is written by hand so the override wins; a URL field carries a locator, not text.
         if let Some(mapping) = picard_mapping_for_key(item.key()) {
-            if let Some(value) = item.value().text() {
+            if let Some(value) = item.value().text().or_else(|| item.value().locator()) {
                 mapped.push((mapping.portable.to_string(), value.to_string()));
                 continue;
             }
@@ -833,6 +1055,7 @@ mod tests {
             standard,
             custom,
             pictures: Vec::new(),
+            carried: Vec::new(),
         }
     }
 
