@@ -513,6 +513,12 @@ pub fn native_keys(path: &Path, kind: NativeKind) -> Vec<String> {
         .collect()
 }
 
+/// The raw native `(key, value)` pairs of a file, before the portable mapping. A test uses this to
+/// assert a literal target key and its exact value, such as `KEY=Am` or `MUSICBRAINZ_COMPOSERID`.
+pub fn native_pairs(path: &Path, kind: NativeKind) -> Vec<(String, String)> {
+    native_items(path, kind)
+}
+
 /// The native tag items of a file, as `(key, value)` pairs. An ID3v2 `TXXX` frame key is
 /// `TXXX:<description>`, and an MP4 freeform atom key is `----:com.apple.iTunes:<name>`.
 fn native_items(path: &Path, kind: NativeKind) -> Vec<(String, String)> {

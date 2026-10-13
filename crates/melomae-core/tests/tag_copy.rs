@@ -15,7 +15,9 @@ use std::path::Path;
 
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::AudioFile;
-use lofty::id3::v2::{Frame, FrameId, Id3v2Tag, TextInformationFrame};
+use lofty::id3::v2::{
+    BinaryFrame, Frame, FrameId, Id3v2Tag, TextInformationFrame, UnsynchronizedTextFrame,
+};
 use lofty::picture::PictureType;
 use lofty::prelude::TagExt;
 use lofty::tag::TagType;
@@ -26,9 +28,9 @@ use melomae_core::encode::{encode_with_tags, OutputFormat};
 use melomae_core::tag_copy::{read_tags, TagSet};
 
 use setup::tag_fixtures::{
-    expected_manifest, native_keys, native_manifest, source_kind, NativeKind, Source, TagFixtures,
-    ALBUM_ARTIST, ALBUM_ARTIST_SORT, COMPOSERS, CUSTOM_NAME, CUSTOM_VALUE, ORIGINAL_DATE,
-    ORIGINAL_YEAR, RELEASE_STATUS, RELEASE_STATUS_NATIVE, SCRIPT, TITLE,
+    expected_manifest, native_keys, native_manifest, native_pairs, source_kind, NativeKind, Source,
+    TagFixtures, ALBUM_ARTIST, ALBUM_ARTIST_SORT, COMPOSERS, CUSTOM_NAME, CUSTOM_VALUE,
+    ORIGINAL_DATE, ORIGINAL_YEAR, RELEASE_STATUS, RELEASE_STATUS_NATIVE, SCRIPT, TITLE,
 };
 
 /// The output formats, with the native tag kind and a file-name extension.
@@ -746,6 +748,836 @@ fn e2e_tag_copy_outputs_read_back_in_ffprobe() {
             }
         }
     }
+}
+
+// --- Fix round 3: the full Picard tag-mapping audit -------------------------------------------
+
+/// The two-line lyrics text the lyrics tests use.
+const LYRICS_TEXT: &str = "The first line\nThe second line";
+/// A musical-key value.
+const KEY_VALUE: &str = "Am";
+/// An integer BPM value.
+const BPM_INTEGER: &str = "120";
+/// A fractional BPM value that ID3 `TBPM` cannot hold.
+const BPM_FRACTIONAL: &str = "120.5";
+/// A composer sort-order value.
+const COMPOSER_SORT: &str = "Composer, The";
+/// The payload of a synchronized-lyrics frame. It must never become plain lyrics.
+const SYLT_PAYLOAD: &str = "SYNCED-PAYLOAD-NOT-PLAIN-LYRICS";
+
+/// One row of the live Picard tag mapping that has both an ID3v2 and a Vorbis entry.
+///
+/// `id3` is the native ID3v2 name: a text frame id such as `TIT2`, or a `TXXX` description such as
+/// `BARCODE` when `user_text` is set. `wav` is the raw ID3 key the native reader reports for the
+/// row in an ID3 output. `vorbis` is the documented Vorbis key.
+struct PicardRow {
+    label: &'static str,
+    id3: &'static str,
+    user_text: bool,
+    vorbis: &'static str,
+    value: &'static str,
+    wav: &'static str,
+}
+
+/// Every row of the live Picard mapping that carries both an ID3v2 and a Vorbis entry and whose
+/// ID3 side is a plain text frame or a `TXXX` frame.
+///
+/// Source: <https://picard-docs.musicbrainz.org/en/latest/_static/MusicBrainz_Picard_Tag_Map.html>,
+/// checked 2026-10-13. Rows whose ID3 side is an involved-people role (`TIPL`/`TMCL`), a URL frame,
+/// `UFID`, `COMM`, `POPM`, or whose Vorbis key carries a parameter or a second key, are recorded in
+/// `evidence-15/picard-tag-mapping.md` and reported to the orchestrator instead of asserted here.
+const PICARD_ROWS: &[PicardRow] = &[
+    PicardRow {
+        label: "Album",
+        id3: "TALB",
+        user_text: false,
+        vorbis: "ALBUM",
+        value: "Audit Album",
+        wav: "TALB",
+    },
+    PicardRow {
+        label: "Album Artist",
+        id3: "TPE2",
+        user_text: false,
+        vorbis: "ALBUMARTIST",
+        value: "Audit Album Artist",
+        wav: "TPE2",
+    },
+    PicardRow {
+        label: "Album Artist Sort Order",
+        id3: "TSO2",
+        user_text: false,
+        vorbis: "ALBUMARTISTSORT",
+        value: "Audit Album Artist Sort",
+        wav: "TSO2",
+    },
+    PicardRow {
+        label: "Album Artists",
+        id3: "ALBUMARTISTS",
+        user_text: true,
+        vorbis: "ALBUMARTISTS",
+        value: "Audit Album Artists",
+        wav: "TXXX:ALBUMARTISTS",
+    },
+    PicardRow {
+        label: "Album Sort Order",
+        id3: "TSOA",
+        user_text: false,
+        vorbis: "ALBUMSORT",
+        value: "Audit Album Sort",
+        wav: "TSOA",
+    },
+    PicardRow {
+        label: "Artist",
+        id3: "TPE1",
+        user_text: false,
+        vorbis: "ARTIST",
+        value: "Audit Artist",
+        wav: "TPE1",
+    },
+    PicardRow {
+        label: "Artist Sort Order",
+        id3: "TSOP",
+        user_text: false,
+        vorbis: "ARTISTSORT",
+        value: "Audit Artist Sort",
+        wav: "TSOP",
+    },
+    PicardRow {
+        label: "Artists",
+        id3: "Artists",
+        user_text: true,
+        vorbis: "ARTISTS",
+        value: "Audit Artists",
+        wav: "TXXX:Artists",
+    },
+    PicardRow {
+        label: "ASIN",
+        id3: "ASIN",
+        user_text: true,
+        vorbis: "ASIN",
+        value: "Audit ASIN",
+        wav: "TXXX:ASIN",
+    },
+    PicardRow {
+        label: "Barcode",
+        id3: "BARCODE",
+        user_text: true,
+        vorbis: "BARCODE",
+        value: "Audit Barcode",
+        wav: "TXXX:BARCODE",
+    },
+    PicardRow {
+        label: "BPM",
+        id3: "TBPM",
+        user_text: false,
+        vorbis: "BPM",
+        value: BPM_INTEGER,
+        wav: "TBPM",
+    },
+    PicardRow {
+        label: "Catalog Number",
+        id3: "CATALOGNUMBER",
+        user_text: true,
+        vorbis: "CATALOGNUMBER",
+        value: "Audit Catalog",
+        wav: "TXXX:CATALOGNUMBER",
+    },
+    PicardRow {
+        label: "Compilation",
+        id3: "TCMP",
+        user_text: false,
+        vorbis: "COMPILATION",
+        value: "1",
+        wav: "TCMP",
+    },
+    PicardRow {
+        label: "Composer",
+        id3: "TCOM",
+        user_text: false,
+        vorbis: "COMPOSER",
+        value: "Audit Composer",
+        wav: "TCOM",
+    },
+    PicardRow {
+        label: "Composer Sort Order",
+        id3: "TSOC",
+        user_text: false,
+        vorbis: "COMPOSERSORT",
+        value: COMPOSER_SORT,
+        wav: "TSOC",
+    },
+    PicardRow {
+        label: "Conductor",
+        id3: "TPE3",
+        user_text: false,
+        vorbis: "CONDUCTOR",
+        value: "Audit Conductor",
+        wav: "TPE3",
+    },
+    PicardRow {
+        label: "Copyright",
+        id3: "TCOP",
+        user_text: false,
+        vorbis: "COPYRIGHT",
+        value: "Audit Copyright",
+        wav: "TCOP",
+    },
+    PicardRow {
+        label: "Director",
+        id3: "DIRECTOR",
+        user_text: true,
+        vorbis: "DIRECTOR",
+        value: "Audit Director",
+        wav: "TXXX:DIRECTOR",
+    },
+    PicardRow {
+        label: "Disc Subtitle",
+        id3: "TSST",
+        user_text: false,
+        vorbis: "DISCSUBTITLE",
+        value: "Audit Disc Subtitle",
+        wav: "TSST",
+    },
+    PicardRow {
+        label: "Encoded By",
+        id3: "TENC",
+        user_text: false,
+        vorbis: "ENCODEDBY",
+        value: "Audit Encoded By",
+        wav: "TENC",
+    },
+    PicardRow {
+        label: "Encoder Settings",
+        id3: "TSSE",
+        user_text: false,
+        vorbis: "ENCODERSETTINGS",
+        value: "Audit Encoder Settings",
+        wav: "TSSE",
+    },
+    PicardRow {
+        label: "Genre",
+        id3: "TCON",
+        user_text: false,
+        vorbis: "GENRE",
+        value: "Audit Genre",
+        wav: "TCON",
+    },
+    PicardRow {
+        label: "Grouping",
+        id3: "TIT1",
+        user_text: false,
+        vorbis: "GROUPING",
+        value: "Audit Grouping",
+        wav: "TIT1",
+    },
+    PicardRow {
+        label: "Initial Key",
+        id3: "TKEY",
+        user_text: false,
+        vorbis: "KEY",
+        value: KEY_VALUE,
+        wav: "TKEY",
+    },
+    PicardRow {
+        label: "ISRC",
+        id3: "TSRC",
+        user_text: false,
+        vorbis: "ISRC",
+        value: "AUDIT0000001",
+        wav: "TSRC",
+    },
+    PicardRow {
+        label: "Language",
+        id3: "TLAN",
+        user_text: false,
+        vorbis: "LANGUAGE",
+        value: "eng",
+        wav: "TLAN",
+    },
+    PicardRow {
+        label: "Lyricist",
+        id3: "TEXT",
+        user_text: false,
+        vorbis: "LYRICIST",
+        value: "Audit Lyricist",
+        wav: "TEXT",
+    },
+    PicardRow {
+        label: "License",
+        id3: "LICENSE",
+        user_text: true,
+        vorbis: "LICENSE",
+        value: "Audit License",
+        wav: "TXXX:LICENSE",
+    },
+    PicardRow {
+        label: "Media",
+        id3: "TMED",
+        user_text: false,
+        vorbis: "MEDIA",
+        value: "Audit Media",
+        wav: "TMED",
+    },
+    PicardRow {
+        label: "Mood",
+        id3: "TMOO",
+        user_text: false,
+        vorbis: "MOOD",
+        value: "Audit Mood",
+        wav: "TMOO",
+    },
+    PicardRow {
+        label: "Movement",
+        id3: "MVNM",
+        user_text: false,
+        vorbis: "MOVEMENTNAME",
+        value: "Audit Movement",
+        wav: "MVNM",
+    },
+    PicardRow {
+        label: "MusicBrainz Artist ID",
+        id3: "MusicBrainz Artist Id",
+        user_text: true,
+        vorbis: "MUSICBRAINZ_ARTISTID",
+        value: "audit-artist-id",
+        wav: "TXXX:MusicBrainz Artist Id",
+    },
+    PicardRow {
+        label: "MusicBrainz Composer ID",
+        id3: "MusicBrainz Composer Id",
+        user_text: true,
+        vorbis: "MUSICBRAINZ_COMPOSERID",
+        value: "audit-composer-id",
+        wav: "TXXX:MusicBrainz Composer Id",
+    },
+    PicardRow {
+        label: "MusicBrainz Disc ID",
+        id3: "MusicBrainz Disc Id",
+        user_text: true,
+        vorbis: "MUSICBRAINZ_DISCID",
+        value: "audit-disc-id",
+        wav: "TXXX:MusicBrainz Disc Id",
+    },
+    PicardRow {
+        label: "MusicBrainz Original Artist ID",
+        id3: "MusicBrainz Original Artist Id",
+        user_text: true,
+        vorbis: "MUSICBRAINZ_ORIGINALARTISTID",
+        value: "audit-original-artist-id",
+        wav: "TXXX:MusicBrainz Original Artist Id",
+    },
+    PicardRow {
+        label: "MusicBrainz Original Release ID",
+        id3: "MusicBrainz Original Album Id",
+        user_text: true,
+        vorbis: "MUSICBRAINZ_ORIGINALALBUMID",
+        value: "audit-original-album-id",
+        wav: "TXXX:MusicBrainz Original Album Id",
+    },
+    PicardRow {
+        label: "MusicBrainz Release Artist ID",
+        id3: "MusicBrainz Album Artist Id",
+        user_text: true,
+        vorbis: "MUSICBRAINZ_ALBUMARTISTID",
+        value: "audit-album-artist-id",
+        wav: "TXXX:MusicBrainz Album Artist Id",
+    },
+    PicardRow {
+        label: "MusicBrainz Release Group ID",
+        id3: "MusicBrainz Release Group Id",
+        user_text: true,
+        vorbis: "MUSICBRAINZ_RELEASEGROUPID",
+        value: "audit-release-group-id",
+        wav: "TXXX:MusicBrainz Release Group Id",
+    },
+    PicardRow {
+        label: "MusicBrainz Release ID",
+        id3: "MusicBrainz Album Id",
+        user_text: true,
+        vorbis: "MUSICBRAINZ_ALBUMID",
+        value: "audit-album-id",
+        wav: "TXXX:MusicBrainz Album Id",
+    },
+    PicardRow {
+        label: "MusicBrainz Track ID",
+        id3: "MusicBrainz Release Track Id",
+        user_text: true,
+        vorbis: "MUSICBRAINZ_RELEASETRACKID",
+        value: "audit-release-track-id",
+        wav: "TXXX:MusicBrainz Release Track Id",
+    },
+    PicardRow {
+        label: "MusicBrainz TRM ID",
+        id3: "MusicBrainz TRM Id",
+        user_text: true,
+        vorbis: "MUSICBRAINZ_TRMID",
+        value: "audit-trm-id",
+        wav: "TXXX:MusicBrainz TRM Id",
+    },
+    PicardRow {
+        label: "MusicBrainz Work ID",
+        id3: "MusicBrainz Work Id",
+        user_text: true,
+        vorbis: "MUSICBRAINZ_WORKID",
+        value: "audit-work-id",
+        wav: "TXXX:MusicBrainz Work Id",
+    },
+    PicardRow {
+        label: "MusicIP PUID",
+        id3: "MusicIP PUID",
+        user_text: true,
+        vorbis: "MUSICIP_PUID",
+        value: "audit-puid",
+        wav: "TXXX:MusicIP PUID",
+    },
+    PicardRow {
+        label: "Original Filename",
+        id3: "TOFN",
+        user_text: false,
+        vorbis: "ORIGINALFILENAME",
+        value: "audit.mp3",
+        wav: "TOFN",
+    },
+    PicardRow {
+        label: "Record Label",
+        id3: "TPUB",
+        user_text: false,
+        vorbis: "LABEL",
+        value: "Audit Label",
+        wav: "TPUB",
+    },
+    PicardRow {
+        label: "Release Country",
+        id3: "MusicBrainz Album Release Country",
+        user_text: true,
+        vorbis: "RELEASECOUNTRY",
+        value: "US",
+        wav: "TXXX:MusicBrainz Album Release Country",
+    },
+    PicardRow {
+        label: "Release Status",
+        id3: "MusicBrainz Album Status",
+        user_text: true,
+        vorbis: "RELEASESTATUS",
+        value: "official",
+        wav: "TXXX:MusicBrainz Album Status",
+    },
+    PicardRow {
+        label: "Release Type",
+        id3: "MusicBrainz Album Type",
+        user_text: true,
+        vorbis: "RELEASETYPE",
+        value: "album",
+        wav: "TXXX:MusicBrainz Album Type",
+    },
+    PicardRow {
+        label: "Remixer",
+        id3: "TPE4",
+        user_text: false,
+        vorbis: "REMIXER",
+        value: "Audit Remixer",
+        wav: "TPE4",
+    },
+    PicardRow {
+        label: "ReplayGain Album Gain",
+        id3: "REPLAYGAIN_ALBUM_GAIN",
+        user_text: true,
+        vorbis: "REPLAYGAIN_ALBUM_GAIN",
+        value: "-3.5 dB",
+        wav: "TXXX:REPLAYGAIN_ALBUM_GAIN",
+    },
+    PicardRow {
+        label: "ReplayGain Album Range",
+        id3: "REPLAYGAIN_ALBUM_RANGE",
+        user_text: true,
+        vorbis: "REPLAYGAIN_ALBUM_RANGE",
+        value: "0.50",
+        wav: "TXXX:REPLAYGAIN_ALBUM_RANGE",
+    },
+    PicardRow {
+        label: "ReplayGain Track Gain",
+        id3: "REPLAYGAIN_TRACK_GAIN",
+        user_text: true,
+        vorbis: "REPLAYGAIN_TRACK_GAIN",
+        value: "-4.5 dB",
+        wav: "TXXX:REPLAYGAIN_TRACK_GAIN",
+    },
+    PicardRow {
+        label: "Script",
+        id3: "SCRIPT",
+        user_text: true,
+        vorbis: "SCRIPT",
+        value: "Latn",
+        wav: "TXXX:SCRIPT",
+    },
+    PicardRow {
+        label: "Show Work & Movement",
+        id3: "SHOWMOVEMENT",
+        user_text: true,
+        vorbis: "SHOWMOVEMENT",
+        value: "1",
+        wav: "TXXX:SHOWMOVEMENT",
+    },
+    PicardRow {
+        label: "Subtitle",
+        id3: "TIT3",
+        user_text: false,
+        vorbis: "SUBTITLE",
+        value: "Audit Subtitle",
+        wav: "TIT3",
+    },
+    PicardRow {
+        label: "Track Title",
+        id3: "TIT2",
+        user_text: false,
+        vorbis: "TITLE",
+        value: "Audit Title",
+        wav: "TIT2",
+    },
+    PicardRow {
+        label: "Track Title Sort Order",
+        id3: "TSOT",
+        user_text: false,
+        vorbis: "TITLESORT",
+        value: "Audit, Title",
+        wav: "TSOT",
+    },
+    PicardRow {
+        label: "Work Title",
+        id3: "WORK",
+        user_text: true,
+        vorbis: "WORK",
+        value: "Audit Work",
+        wav: "TXXX:WORK",
+    },
+    PicardRow {
+        label: "Writer",
+        id3: "Writer",
+        user_text: true,
+        vorbis: "WRITER",
+        value: "Audit Writer",
+        wav: "TXXX:Writer",
+    },
+];
+
+/// One table-driven audit of the live Picard mapping. One row is one line of test data. Each row's
+/// native ID3v2 field is written into an MP3, copied to FLAC, Opus, and WAV, and read back with a
+/// native reader. The Vorbis target must carry the documented Vorbis key with the exact value, and
+/// the WAV target the documented ID3 key. A row that is skipped, renamed, or altered is a failure.
+#[test]
+fn picard_tag_mapping_audit_holds_for_every_dual_format_row() {
+    let sources = setup::TempDir::new("melomae-picard-audit-src");
+    let outputs = setup::TempDir::new("melomae-picard-audit-out");
+    let source = sources.join("audit.mp3");
+    write_id3(&source, |tag| {
+        for row in PICARD_ROWS {
+            if row.user_text {
+                tag.insert_user_text(row.id3.to_string(), row.value.to_string());
+            } else {
+                tag.insert(text_frame(row.id3, row.value));
+            }
+        }
+    });
+
+    // The fixture must hold every row natively, so the audit cannot start from a partial source.
+    let source_pairs = native_pairs(&source, NativeKind::Mp3);
+    for row in PICARD_ROWS {
+        assert!(
+            source_pairs.contains(&(row.wav.to_string(), row.value.to_string())),
+            "{}: the fixture did not write the native source field {}={:?}",
+            row.label,
+            row.wav,
+            row.value
+        );
+    }
+
+    let tags = read_tags(&source).expect("read the audit source");
+    let audio = decode_file(&source).expect("decode the audit source");
+
+    let mut measured: Vec<(OutputFormat, Vec<(String, String)>, Vec<String>)> = Vec::new();
+    let mut failures = Vec::new();
+    for (format, kind, extension) in OUTPUTS {
+        let target = outputs.join(&format!("audit.{extension}"));
+        match encode_with_tags(&audio, &target, format, Some(&tags)) {
+            Ok((_, report)) => measured.push((format, native_pairs(&target, kind), report)),
+            Err(error) => failures.push(format!("{format:?} encode failed: {error}")),
+        }
+    }
+
+    println!("--- picard audit measured ---");
+    for (format, pairs, report) in &measured {
+        println!("{format:?} report={report:?}\n{pairs:?}");
+    }
+
+    for row in PICARD_ROWS {
+        for (format, pairs, _report) in &measured {
+            let key = match format {
+                OutputFormat::Wav => row.wav,
+                OutputFormat::Flac | OutputFormat::Opus => row.vorbis,
+            };
+            if !pairs.contains(&(key.to_string(), row.value.to_string())) {
+                failures.push(format!(
+                    "{} -> {format:?}: expected {key}={:?}",
+                    row.label, row.value
+                ));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} Picard mapping rows were not honored:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// Finding 1: an ordinary ID3 `USLT` frame maps to the Vorbis `LYRICS` key, not `UNSYNCEDLYRICS`.
+/// The WAV output keeps the `USLT` frame, and a Vorbis `LYRICS` source writes the `USLT` frame.
+#[test]
+fn picard_lyrics_use_the_literal_native_names() {
+    let fixtures = TagFixtures::build();
+    let outputs = setup::TempDir::new("melomae-picard-lyrics");
+    let path = fixtures.path(Source::Mp3);
+    append_id3(&path, |tag| {
+        tag.insert(Frame::UnsynchronizedText(UnsynchronizedTextFrame::new(
+            TextEncoding::UTF8,
+            *b"eng",
+            "",
+            LYRICS_TEXT,
+        )));
+    });
+
+    let mut file = std::fs::File::open(&path).expect("open the MP3");
+    let mpeg = lofty::mpeg::MpegFile::read_from(&mut file, ParseOptions::new()).expect("read MP3");
+    assert!(
+        mpeg.id3v2()
+            .map(|tag| tag
+                .iter()
+                .any(|frame| matches!(frame, Frame::UnsynchronizedText(text)
+                if text.content == LYRICS_TEXT && text.description.is_empty())))
+            .unwrap_or(false),
+        "the fixture must hold a native USLT frame with its exact text"
+    );
+
+    let tags = read_tags(&path).expect("read the source tags");
+    let audio = decode_file(&path).expect("decode the source");
+    for (format, kind, extension) in [
+        (OutputFormat::Flac, NativeKind::Flac, "flac"),
+        (OutputFormat::Opus, NativeKind::Opus, "opus"),
+    ] {
+        let target = outputs.join(&format!("lyrics.{extension}"));
+        encode_with_tags(&audio, &target, format, Some(&tags)).expect("encode");
+        let pairs = native_pairs(&target, kind);
+        assert!(
+            pairs.contains(&("LYRICS".to_string(), LYRICS_TEXT.to_string())),
+            "{extension}: USLT must map to Picard LYRICS, got {pairs:?}"
+        );
+        assert!(
+            !pairs.iter().any(|(key, _)| key == "UNSYNCEDLYRICS"),
+            "{extension}: lofty's UNSYNCEDLYRICS alias must not appear, got {pairs:?}"
+        );
+    }
+
+    let target = outputs.join("lyrics.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        wav_has_unsynchronized_text(&target, LYRICS_TEXT),
+        "the WAV output must keep the USLT frame"
+    );
+
+    let flac = fixtures.path(Source::Flac);
+    append_vorbis(&flac, "LYRICS", LYRICS_TEXT);
+    let tags = read_tags(&flac).expect("read the FLAC tags");
+    let audio = decode_file(&flac).expect("decode the FLAC");
+    let target = outputs.join("lyrics-from-vorbis.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        wav_has_unsynchronized_text(&target, LYRICS_TEXT),
+        "a Vorbis LYRICS must write the ID3 USLT frame"
+    );
+}
+
+/// Finding 2: an ID3 `TKEY` frame maps to the Vorbis `KEY` key, not `INITIALKEY`, in every target,
+/// and a Vorbis `KEY` source writes the ID3 `TKEY` frame.
+#[test]
+fn picard_initial_key_uses_the_literal_native_names() {
+    let fixtures = TagFixtures::build();
+    let outputs = setup::TempDir::new("melomae-picard-key");
+    let path = fixtures.path(Source::Mp3);
+    append_id3(&path, |tag| {
+        tag.insert(text_frame("TKEY", KEY_VALUE));
+    });
+    assert!(
+        native_pairs(&path, NativeKind::Mp3).contains(&("TKEY".to_string(), KEY_VALUE.to_string())),
+        "the fixture must hold a native TKEY frame"
+    );
+
+    let tags = read_tags(&path).expect("read the source tags");
+    let audio = decode_file(&path).expect("decode the source");
+    for (format, kind, extension) in OUTPUTS {
+        let target = outputs.join(&format!("key.{extension}"));
+        encode_with_tags(&audio, &target, format, Some(&tags)).expect("encode");
+        let pairs = native_pairs(&target, kind);
+        if format == OutputFormat::Wav {
+            assert!(
+                pairs.contains(&("TKEY".to_string(), KEY_VALUE.to_string())),
+                "{extension}: a WAV output keeps the TKEY frame, got {pairs:?}"
+            );
+        } else {
+            assert!(
+                pairs.contains(&("KEY".to_string(), KEY_VALUE.to_string())),
+                "{extension}: TKEY must map to Picard KEY, got {pairs:?}"
+            );
+            assert!(
+                !pairs.iter().any(|(key, _)| key == "INITIALKEY"),
+                "{extension}: INITIALKEY must not appear, got {pairs:?}"
+            );
+        }
+    }
+
+    let flac = fixtures.path(Source::Flac);
+    append_vorbis(&flac, "KEY", KEY_VALUE);
+    let tags = read_tags(&flac).expect("read the FLAC tags");
+    let audio = decode_file(&flac).expect("decode the FLAC");
+    let target = outputs.join("key-from-vorbis.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        native_pairs(&target, NativeKind::Wav)
+            .contains(&("TKEY".to_string(), KEY_VALUE.to_string())),
+        "a Vorbis KEY must write the ID3 TKEY frame"
+    );
+}
+
+/// Finding 3: an ID3 `TBPM` frame maps to the Vorbis `BPM` key and `TSOC` to `COMPOSERSORT`, WAV
+/// keeps `TBPM` and `TSOC`, a fractional BPM keeps its exact text in Vorbis and is reported for
+/// WAV, and a Vorbis `COMPOSERSORT` source writes the ID3 `TSOC` frame.
+#[test]
+fn picard_bpm_and_composer_sort_fit_the_vorbis_outputs() {
+    let fixtures = TagFixtures::build();
+    let outputs = setup::TempDir::new("melomae-picard-bpm-sort");
+    let path = fixtures.path(Source::Mp3);
+    append_id3(&path, |tag| {
+        tag.insert(text_frame("TBPM", BPM_INTEGER));
+        tag.insert(text_frame("TSOC", COMPOSER_SORT));
+    });
+    let source_pairs = native_pairs(&path, NativeKind::Mp3);
+    assert!(source_pairs.contains(&("TBPM".to_string(), BPM_INTEGER.to_string())));
+    assert!(source_pairs.contains(&("TSOC".to_string(), COMPOSER_SORT.to_string())));
+
+    let tags = read_tags(&path).expect("read the source tags");
+    let audio = decode_file(&path).expect("decode the source");
+    for (format, kind, extension) in OUTPUTS {
+        let target = outputs.join(&format!("bpm-sort.{extension}"));
+        let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags)).expect("encode");
+        let pairs = native_pairs(&target, kind);
+        if format == OutputFormat::Wav {
+            assert!(
+                pairs.contains(&("TBPM".to_string(), BPM_INTEGER.to_string())),
+                "{extension}: a WAV output keeps TBPM, got {pairs:?}"
+            );
+            assert!(
+                pairs.contains(&("TSOC".to_string(), COMPOSER_SORT.to_string())),
+                "{extension}: a WAV output keeps TSOC, got {pairs:?}"
+            );
+        } else {
+            assert!(
+                pairs.contains(&("BPM".to_string(), BPM_INTEGER.to_string())),
+                "{extension}: TBPM must map to Picard BPM, got {pairs:?} report={report:?}"
+            );
+            assert!(
+                pairs.contains(&("COMPOSERSORT".to_string(), COMPOSER_SORT.to_string())),
+                "{extension}: TSOC must map to Picard COMPOSERSORT, got {pairs:?} report={report:?}"
+            );
+        }
+        assert!(
+            !report
+                .iter()
+                .any(|name| name == "IntegerBpm" || name == "ComposerSortOrder"),
+            "{extension}: the fields are supported, got {report:?}"
+        );
+    }
+
+    // A fractional BPM keeps its exact text in a Vorbis target, and is reported for WAV.
+    let flac = fixtures.path(Source::Flac);
+    append_vorbis(&flac, "BPM", BPM_FRACTIONAL);
+    let tags = read_tags(&flac).expect("read the FLAC tags");
+    let audio = decode_file(&flac).expect("decode the FLAC");
+    for (format, kind, extension) in [
+        (OutputFormat::Flac, NativeKind::Flac, "flac"),
+        (OutputFormat::Opus, NativeKind::Opus, "opus"),
+    ] {
+        let target = outputs.join(&format!("fractional.{extension}"));
+        encode_with_tags(&audio, &target, format, Some(&tags)).expect("encode");
+        assert!(
+            native_pairs(&target, kind).contains(&("BPM".to_string(), BPM_FRACTIONAL.to_string())),
+            "{extension}: a fractional BPM must keep its exact text"
+        );
+    }
+    let target = outputs.join("fractional.wav");
+    let (_, report) =
+        encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        report.contains(&"BPM".to_string()),
+        "a fractional BPM that ID3 cannot hold must be reported, got {report:?}"
+    );
+
+    // A Vorbis COMPOSERSORT source writes the ID3 TSOC frame.
+    append_vorbis(&flac, "COMPOSERSORT", COMPOSER_SORT);
+    let tags = read_tags(&flac).expect("read the FLAC tags");
+    let audio = decode_file(&flac).expect("decode the FLAC");
+    let target = outputs.join("sort-from-vorbis.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        native_pairs(&target, NativeKind::Wav)
+            .contains(&("TSOC".to_string(), COMPOSER_SORT.to_string())),
+        "a Vorbis COMPOSERSORT must write the ID3 TSOC frame"
+    );
+}
+
+/// Ruling 2: synchronized lyrics (`SYLT`) stay separate. The copier must never turn their binary
+/// payload into plain lyrics; the frame is reported instead.
+#[test]
+fn picard_synchronized_lyrics_stay_separate() {
+    let fixtures = TagFixtures::build();
+    let outputs = setup::TempDir::new("melomae-picard-sylt");
+    let path = fixtures.path(Source::Mp3);
+    append_id3(&path, |tag| {
+        tag.insert(Frame::Binary(BinaryFrame::new(
+            FrameId::Valid("SYLT".to_string().into()),
+            SYLT_PAYLOAD.as_bytes().to_vec(),
+        )));
+    });
+
+    let tags = read_tags(&path).expect("read the source tags");
+    let audio = decode_file(&path).expect("decode the source");
+    for (format, kind, extension) in OUTPUTS {
+        let target = outputs.join(&format!("sylt.{extension}"));
+        let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags)).expect("encode");
+        let pairs = native_pairs(&target, kind);
+        assert!(
+            !pairs.iter().any(|(key, _)| key == "LYRICS"),
+            "{extension}: synchronized lyrics must not become LYRICS, got {pairs:?}"
+        );
+        assert!(
+            report.contains(&"SYLT".to_string()),
+            "{extension}: the synchronized-lyrics frame must be reported, got {report:?}"
+        );
+    }
+}
+
+/// Whether a WAV output holds a `USLT` frame with the given text.
+fn wav_has_unsynchronized_text(path: &Path, text: &str) -> bool {
+    let mut file = std::fs::File::open(path).expect("open the WAV");
+    let wav =
+        lofty::iff::wav::WavFile::read_from(&mut file, ParseOptions::new()).expect("read WAV");
+    wav.id3v2()
+        .map(|tag| {
+            tag.iter().any(|frame| {
+                matches!(frame, Frame::UnsynchronizedText(unsync) if unsync.content == text)
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// Build a one-second MP3 and replace its ID3v2 tag with `build`.
