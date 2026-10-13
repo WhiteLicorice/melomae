@@ -17,7 +17,7 @@ use std::time::Instant;
 
 use clap::{Args, ValueEnum};
 use melomae_core::decode::{decode_file, AudioBuffer};
-use melomae_core::encode::{encode, OutputFormat as EncodeFormat};
+use melomae_core::encode::{encode_with_cancel, EncodeResult, OutputFormat as EncodeFormat};
 use melomae_core::inference::chunk_budget::{choose_chunk_for_machine, FileShape};
 use melomae_core::inference::{
     load_onnx_backend, RestoreBackend, RestoreOutcome, RestoreProgress, RestoreSettings,
@@ -141,6 +141,12 @@ enum Failure {
 
 /// Run one restore from the parsed arguments.
 fn execute(args: &RestoreArgs) -> Result<(), Failure> {
+    // Install the handler first, so a cancel is honored during the decode and the model load too.
+    install_cancel_handler().map_err(Failure::Message)?;
+
+    // Reject an output the CLI must not write before any input is read or model is loaded.
+    preflight_output(&args.input, &args.output).map_err(Failure::Message)?;
+
     let model = resolve(
         args.model.as_deref(),
         DEFAULT_MODEL_NAME,
@@ -157,7 +163,9 @@ fn execute(args: &RestoreArgs) -> Result<(), Failure> {
     .map_err(Failure::Message)?;
 
     // Decode first, so a bad input reports before the model is loaded.
-    let audio = decode_file(&args.input).map_err(|error| Failure::Message(error.to_string()))?;
+    let audio = decode_file(&args.input).map_err(|error| stage_error(error.to_string()))?;
+    check_cancelled()?;
+
     let shape = FileShape {
         frames: audio.frames() as u64,
         channels: audio.channel_count() as u64,
@@ -183,36 +191,126 @@ fn execute(args: &RestoreArgs) -> Result<(), Failure> {
     };
 
     let backend =
-        load_onnx_backend(&runtime, &model).map_err(|error| Failure::Message(error.to_string()))?;
-    install_cancel_handler().map_err(Failure::Message)?;
+        load_onnx_backend(&runtime, &model).map_err(|error| stage_error(error.to_string()))?;
+    check_cancelled()?;
 
     let channels = audio.channel_count();
     let started = Instant::now();
     let mut progress = |report: RestoreProgress| {
-        eprintln!(
-            "chunk {}/{} channel {}/{} elapsed {:.1}s",
-            report.chunk + 1,
-            report.chunks,
-            report.channel + 1,
-            channels,
-            started.elapsed().as_secs_f64()
-        );
+        // One line per temporal chunk. The channels run one after the other, so the chunk is
+        // reported when its last channel starts.
+        if report.channel + 1 == channels {
+            eprintln!(
+                "chunk {}/{} elapsed {:.1}s",
+                report.chunk + 1,
+                report.chunks,
+                started.elapsed().as_secs_f64()
+            );
+        }
     };
 
     let outcome = backend
         .restore(audio.channels(), &settings, &mut progress, &CANCELLED)
         .map_err(|error| Failure::Message(error.to_string()))?;
+    check_cancelled()?;
 
-    // A cancel writes no output file. The encoder only runs on a complete restore, and
-    // it writes a temporary file and renames it at the end (task 06), so a failure there
-    // leaves no target either.
+    // A cancel writes no output file. The encoder only runs on a complete restore, and it is
+    // cancel-aware, so a cancel during the encode leaves no target and no temporary file either.
     let restored = match outcome {
         RestoreOutcome::Cancelled => return Err(Failure::Cancelled),
         RestoreOutcome::Complete(restored) => AudioBuffer::new(audio.sample_rate(), restored),
     };
-    encode(&restored, &args.output, args.format.as_encode())
-        .map_err(|error| Failure::Message(error.to_string()))?;
+
+    match encode_with_cancel(&restored, &args.output, args.format.as_encode(), &CANCELLED)
+        .map_err(|error| Failure::Message(error.to_string()))?
+    {
+        EncodeResult::Cancelled => Err(Failure::Cancelled),
+        EncodeResult::Complete(outcome) => {
+            // SRS §7.4: report how many samples the integer format clamped.
+            if args.format.as_encode().is_integer() && outcome.clamped > 0 {
+                eprintln!("melomae-cli: clamped {} samples", outcome.clamped);
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Fail the run when the caller has cancelled it.
+fn check_cancelled() -> Result<(), Failure> {
+    if CANCELLED.load(Ordering::SeqCst) {
+        Err(Failure::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+/// Turn a stage error into a failure: a cancel that landed during the stage is a cancel, not an
+/// error, even when the stage reported it as one.
+fn stage_error(message: String) -> Failure {
+    if CANCELLED.load(Ordering::SeqCst) {
+        Failure::Cancelled
+    } else {
+        Failure::Message(message)
+    }
+}
+
+/// Reject an output the CLI must not write, before any input is read or model is loaded.
+///
+/// The output must not resolve to the input, must not already exist, and its parent must be an
+/// existing directory. Melomae never replaces a file and never creates the output folder here; the
+/// app's skip-or-replace policy is task 17's (SRS §8).
+fn preflight_output(input: &Path, output: &Path) -> Result<(), String> {
+    if resolves_to_the_input(input, output) {
+        return Err(format!(
+            "the output is the input: `{}`. Melomae never replaces a file.",
+            output.display()
+        ));
+    }
+    if output.exists() {
+        return Err(format!(
+            "the output already exists: `{}`. Melomae never replaces a file.",
+            output.display()
+        ));
+    }
+    let parent = output.parent().unwrap_or_else(|| Path::new(""));
+    if !parent.as_os_str().is_empty() && !parent.is_dir() {
+        return Err(format!(
+            "the output directory does not exist: `{}`.",
+            parent.display()
+        ));
+    }
     Ok(())
+}
+
+/// Whether `output` resolves to the same file as `input`.
+///
+/// The file identity is compared first (a volume and file id on Windows, a device and inode on
+/// Linux), then the canonical parent plus file name, case-insensitively on Windows. The second
+/// comparison also covers an output path that does not exist yet.
+fn resolves_to_the_input(input: &Path, output: &Path) -> bool {
+    if let Ok(true) = same_file::is_same_file(input, output) {
+        return true;
+    }
+    match (comparable_path(input), comparable_path(output)) {
+        (Some(input), Some(output)) => input == output,
+        _ => false,
+    }
+}
+
+/// The canonical parent directory plus file name, lower-cased on Windows.
+fn comparable_path(path: &Path) -> Option<String> {
+    let parent = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let parent = parent.canonicalize().ok()?;
+    let name = path.file_name()?;
+    let text = parent.join(name).to_string_lossy().into_owned();
+    Some(if cfg!(windows) {
+        text.to_lowercase()
+    } else {
+        text
+    })
 }
 
 /// Install the process cancel handler once.
