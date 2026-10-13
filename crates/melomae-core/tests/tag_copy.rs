@@ -1261,6 +1261,10 @@ const PICARD_ROWS: &[PicardRow] = &[
     },
 ];
 
+/// One measured output: its format, the native `(key, value)` pairs it holds, and the report of the
+/// fields the target could not hold.
+type MeasuredOutput = (OutputFormat, Vec<(String, String)>, Vec<String>);
+
 /// One table-driven audit of the live Picard mapping. One row is one line of test data. Each row's
 /// native ID3v2 field is written into an MP3, copied to FLAC, Opus, and WAV, and read back with a
 /// native reader. The Vorbis target must carry the documented Vorbis key with the exact value, and
@@ -1295,7 +1299,7 @@ fn picard_tag_mapping_audit_holds_for_every_dual_format_row() {
     let tags = read_tags(&source).expect("read the audit source");
     let audio = decode_file(&source).expect("decode the audit source");
 
-    let mut measured: Vec<(OutputFormat, Vec<(String, String)>, Vec<String>)> = Vec::new();
+    let mut measured: Vec<MeasuredOutput> = Vec::new();
     let mut failures = Vec::new();
     for (format, kind, extension) in OUTPUTS {
         let target = outputs.join(&format!("audit.{extension}"));

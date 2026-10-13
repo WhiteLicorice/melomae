@@ -16,11 +16,12 @@ use std::path::{Path, PathBuf};
 
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::{AudioFile, FileType, TaggedFileExt};
-use lofty::id3::v2::{ExtendedTextFrame, Frame};
+use lofty::id3::v2::{ExtendedTextFrame, Frame, FrameId, TextInformationFrame};
 use lofty::mp4::{AtomData, AtomIdent};
 use lofty::ogg::tag::VorbisComments;
 use lofty::picture::Picture;
 use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
+use lofty::TextEncoding;
 
 use crate::encode::OutputFormat;
 
@@ -146,14 +147,30 @@ struct PicardMapping {
 
 /// The fields the MusicBrainz Picard tag mapping names differently from lofty.
 ///
-/// `LABEL`: Picard maps ID3 `TPUB` to Vorbis `LABEL`, but lofty reads `TPUB` as `Publisher` and
-/// writes Vorbis `PUBLISHER`. `SCRIPT` and `RELEASESTATUS` have no ID3 `ItemKey` in lofty, so the
-/// generic layer reports or mis-names them. `ORIGINALYEAR` shares lofty's `OriginalReleaseDate`
-/// with `ORIGINALDATE`, and Picard defines no ID3 frame for it. `ENCODERSETTINGS`: Picard's Vorbis
-/// key is `ENCODERSETTINGS`, but lofty writes `ENCODING` for the same `EncoderSettings` item.
+/// Each row holds the Picard Vorbis key as the portable name. `key` is the lofty [`ItemKey`] the
+/// row overrides when the field arrives as a standard item, so the reader and writer use the Picard
+/// name instead of lofty's. `id3` is the ID3v2 frame id, or, when `id3_user_text` is set, the `TXXX`
+/// description. `mp4` is the iTunes MP4 name without the `----:com.apple.iTunes:` prefix.
 ///
-/// Source: <https://picard-docs.musicbrainz.org/en/latest/appendices/tag_mapping.html>, checked
-/// 2026-10-11.
+/// `LABEL`: Picard maps ID3 `TPUB` to Vorbis `LABEL`, but lofty reads `TPUB` as `Publisher` and
+/// writes Vorbis `PUBLISHER`. `LYRICS`: Picard maps ID3 `USLT` to Vorbis `LYRICS`, but lofty names
+/// `UnsyncLyrics` `UNSYNCEDLYRICS`. `KEY`: Picard's Vorbis key is `KEY`, but lofty prefers
+/// `INITIALKEY`. `BPM`: Picard maps ID3 `TBPM` to Vorbis `BPM`, but lofty's `IntegerBpm` has no
+/// Vorbis key. `COMPOSERSORT`: Picard maps ID3 `TSOC` to Vorbis `COMPOSERSORT`, but lofty's
+/// `ComposerSortOrder` has no Vorbis key. `WRITER`: Picard maps ID3 `TXXX:Writer` to Vorbis
+/// `WRITER`, but lofty's Vorbis key for `Writer` is `AUTHOR`. `ARTISTS`: Picard's ID3 name is
+/// `TXXX:Artists`, but lofty writes `TXXX:ARTISTS`. `WORK`: Picard maps ID3 `TXXX:WORK`
+/// to Vorbis `WORK`, but lofty writes a bare `WORK` text frame, which is invalid. `TOFN`:
+/// `OriginalFileName` has no Vorbis key in lofty. `SCRIPT` and `RELEASESTATUS`: no ID3 `ItemKey` in
+/// lofty, so the generic layer reports or mis-names them. `ORIGINALYEAR`: shares lofty's
+/// `OriginalReleaseDate` with `ORIGINALDATE`, and Picard defines no ID3 frame for it.
+/// `ENCODERSETTINGS`: Picard's Vorbis key is `ENCODERSETTINGS`, but lofty writes `ENCODING`.
+/// `MUSICBRAINZ_COMPOSERID`, `MUSICBRAINZ_DISCID`, `MUSICBRAINZ_ORIGINALARTISTID`,
+/// `MUSICBRAINZ_ORIGINALALBUMID`, `MUSICBRAINZ_TRMID`, `MUSICIP_PUID`: lofty has no mapping, so the
+/// generic layer passes the spaced ID3 description straight through as the Vorbis key.
+///
+/// Source: <https://picard-docs.musicbrainz.org/en/latest/_static/MusicBrainz_Picard_Tag_Map.html>,
+/// checked 2026-10-13.
 const PICARD_MAPPINGS: &[PicardMapping] = &[
     PicardMapping {
         key: None,
@@ -163,7 +180,14 @@ const PICARD_MAPPINGS: &[PicardMapping] = &[
         mp4: Some("LABEL"),
     },
     PicardMapping {
-        key: None,
+        key: Some(ItemKey::TrackArtists),
+        portable: "ARTISTS",
+        id3: Some("Artists"),
+        id3_user_text: true,
+        mp4: Some("ARTISTS"),
+    },
+    PicardMapping {
+        key: Some(ItemKey::Script),
         portable: "SCRIPT",
         id3: Some("SCRIPT"),
         id3_user_text: true,
@@ -189,6 +213,97 @@ const PICARD_MAPPINGS: &[PicardMapping] = &[
         id3: Some("TSSE"),
         id3_user_text: false,
         mp4: None,
+    },
+    PicardMapping {
+        key: Some(ItemKey::UnsyncLyrics),
+        portable: "LYRICS",
+        id3: Some("USLT"),
+        id3_user_text: false,
+        mp4: Some("©lyr"),
+    },
+    PicardMapping {
+        key: Some(ItemKey::InitialKey),
+        portable: "KEY",
+        id3: Some("TKEY"),
+        id3_user_text: false,
+        mp4: Some("initialkey"),
+    },
+    PicardMapping {
+        key: Some(ItemKey::IntegerBpm),
+        portable: "BPM",
+        id3: Some("TBPM"),
+        id3_user_text: false,
+        mp4: Some("tmpo"),
+    },
+    PicardMapping {
+        key: Some(ItemKey::ComposerSortOrder),
+        portable: "COMPOSERSORT",
+        id3: Some("TSOC"),
+        id3_user_text: false,
+        mp4: Some("soco"),
+    },
+    PicardMapping {
+        key: Some(ItemKey::Writer),
+        portable: "WRITER",
+        id3: Some("Writer"),
+        id3_user_text: true,
+        mp4: None,
+    },
+    PicardMapping {
+        key: Some(ItemKey::Work),
+        portable: "WORK",
+        id3: Some("WORK"),
+        id3_user_text: true,
+        mp4: Some("©wrk"),
+    },
+    PicardMapping {
+        key: Some(ItemKey::OriginalFileName),
+        portable: "ORIGINALFILENAME",
+        id3: Some("TOFN"),
+        id3_user_text: false,
+        mp4: None,
+    },
+    PicardMapping {
+        key: None,
+        portable: "MUSICBRAINZ_COMPOSERID",
+        id3: Some("MusicBrainz Composer Id"),
+        id3_user_text: true,
+        mp4: Some("MusicBrainz Composer Id"),
+    },
+    PicardMapping {
+        key: None,
+        portable: "MUSICBRAINZ_DISCID",
+        id3: Some("MusicBrainz Disc Id"),
+        id3_user_text: true,
+        mp4: Some("MusicBrainz Disc Id"),
+    },
+    PicardMapping {
+        key: None,
+        portable: "MUSICBRAINZ_ORIGINALARTISTID",
+        id3: Some("MusicBrainz Original Artist Id"),
+        id3_user_text: true,
+        mp4: Some("MusicBrainz Original Artist Id"),
+    },
+    PicardMapping {
+        key: None,
+        portable: "MUSICBRAINZ_ORIGINALALBUMID",
+        id3: Some("MusicBrainz Original Album Id"),
+        id3_user_text: true,
+        mp4: Some("MusicBrainz Original Album Id"),
+    },
+    PicardMapping {
+        key: None,
+        portable: "MUSICBRAINZ_TRMID",
+        id3: Some("MusicBrainz TRM Id"),
+        id3_user_text: true,
+        mp4: Some("MusicBrainz TRM Id"),
+    },
+    PicardMapping {
+        key: None,
+        portable: "MUSICIP_PUID",
+        id3: Some("MusicIP PUID"),
+        id3_user_text: true,
+        mp4: Some("MusicIP PUID"),
     },
 ];
 
@@ -253,13 +368,15 @@ fn standard_name(key: ItemKey) -> String {
 
 /// Whether the target tag type holds a standard item. A key with no mapping, or a binary value in a
 /// format that stores text only, cannot be carried. A Picard override decides the mapped fields,
-/// so lofty's own mapping cannot hide a field that Picard names differently.
+/// so lofty's own mapping cannot hide a field that Picard names differently. The override is keyed
+/// by [`ItemKey`], so two Picard names that share a Vorbis key, such as integer and fractional BPM,
+/// are not conflated.
 fn standard_is_supported(item: &TagItem, tag_type: TagType) -> bool {
     let text = matches!(item.value(), ItemValue::Text(_) | ItemValue::Locator(_));
     if !text {
         return false;
     }
-    if let Some(mapping) = picard_mapping(&standard_name(item.key())) {
+    if let Some(mapping) = picard_mapping_for_key(item.key()) {
         return mapped_native(mapping, tag_type).is_some();
     }
     item.key().map_key(tag_type).is_some()
@@ -324,6 +441,25 @@ pub fn read_tags(path: &Path) -> Result<TagSet, TagError> {
 /// shares lofty's `OriginalReleaseDate` with `ORIGINALDATE`, so it is split back out as its own
 /// field.
 fn correct_identities(path: &Path, file_type: FileType, set: &mut TagSet) -> Result<(), TagError> {
+    // Picard's lyrics row is one field: the ID3 `USLT` frame and the Vorbis `LYRICS` key. lofty
+    // splits it into `Lyrics` and `UnsyncLyrics`, so both become `UnsyncLyrics`, which the override
+    // row maps back to `USLT` and `LYRICS`.
+    //
+    // Picard's BPM row is one field: the ID3 `TBPM` frame and the Vorbis `BPM` key. An integral BPM
+    // becomes `IntegerBpm` so the override writes the ID3 frame. A fractional BPM stays `Bpm`, which
+    // has no ID3 frame, so a target that cannot hold the exact text reports it instead of rounding.
+    for item in &mut set.standard {
+        if item.key() == ItemKey::Lyrics {
+            *item = TagItem::new(ItemKey::UnsyncLyrics, item.value().clone());
+        } else if item.key() == ItemKey::Bpm
+            && item
+                .value()
+                .text()
+                .is_some_and(|text| text.parse::<i64>().is_ok())
+        {
+            *item = TagItem::new(ItemKey::IntegerBpm, item.value().clone());
+        }
+    }
     match file_type {
         FileType::Mpeg | FileType::Wav | FileType::Aiff | FileType::Aac => {
             for item in &mut set.standard {
@@ -564,7 +700,7 @@ fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
     let mut tag = Tag::new(TagType::Id3v2);
     let mut user_text: Vec<(String, String)> = Vec::new();
     for item in &tags.standard {
-        if let Some(mapping) = picard_mapping(&standard_name(item.key())) {
+        if let Some(mapping) = picard_mapping_for_key(item.key()) {
             // A mapped field with a `TXXX` native name is written by hand, because lofty's generic
             // layer has no ID3 frame for it.
             if mapping.id3_user_text {
@@ -590,14 +726,29 @@ fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
         if !custom_is_supported(field, OutputFormat::Wav) {
             continue;
         }
-        // A mapped custom field, such as the release status, uses its native ID3 name. A TXXX
-        // frame is identified by its description, so a multi-value field is one frame whose values
-        // are null-separated, exactly as ID3v2.4 defines it.
-        let name = picard_mapping(&field.name)
-            .and_then(|mapping| mapping.id3)
-            .unwrap_or(&field.name)
-            .to_string();
-        id3.insert_user_text(name, field.values.join("\0"));
+        // A mapped custom field uses its native ID3 name: a user-text frame is identified by its
+        // description, and any other frame by its id. A multi-value field is one frame whose values
+        // are null-separated, as ID3v2.4 defines it.
+        let value = field.values.join("\0");
+        match picard_mapping(&field.name) {
+            Some(mapping) if mapping.id3_user_text => {
+                if let Some(native) = mapping.id3 {
+                    id3.insert_user_text(native.to_string(), value);
+                }
+            }
+            Some(mapping) => {
+                if let Some(native) = mapping.id3 {
+                    id3.insert(Frame::Text(TextInformationFrame::new(
+                        FrameId::Valid(native.to_string().into()),
+                        TextEncoding::UTF8,
+                        value,
+                    )));
+                }
+            }
+            None => {
+                id3.insert_user_text(field.name.clone(), value);
+            }
+        }
     }
 
     id3.save_to_path(path, WriteOptions::default())
@@ -620,9 +771,10 @@ fn write_vorbis(path: &Path, tags: &TagSet) -> Result<(), TagError> {
             continue;
         }
         // A Picard override decides the literal Vorbis key. Lofty's own conversion would name the
-        // field differently: it writes `ENCODING` for the encoder settings, where Picard uses
-        // `ENCODERSETTINGS`. A mapped text value is written by hand so the override wins.
-        if let Some(mapping) = picard_mapping(&standard_name(item.key())) {
+        // field differently: it writes `ENCODING` for the encoder settings where Picard uses
+        // `ENCODERSETTINGS`, and `INITIALKEY` for the initial key where Picard uses `KEY`. A mapped
+        // text value is written by hand so the override wins.
+        if let Some(mapping) = picard_mapping_for_key(item.key()) {
             if let Some(value) = item.value().text() {
                 mapped.push((mapping.portable.to_string(), value.to_string()));
                 continue;
