@@ -94,8 +94,12 @@ NVIDIA_WHEELS = [
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TAG = f"{ORT_TAG}-cuda{CUDA_MAJOR}"
 TAG_DIR = REPO_ROOT / ".cache" / "cuda" / TAG
-LIB_DIR = TAG_DIR / "lib"
+ARCHIVE_DIR = REPO_ROOT / ".cache" / "cuda" / "archives"
 COMPLETE_MARKER = ".complete"
+
+# A browser user agent. GitHub throttles the default `Python-urllib` agent, so an
+# unset agent makes the download about an order of magnitude slower.
+USER_AGENT = "melomae-fetch-cuda/1"
 
 # The library the engine loads, and the CUDA provider library it needs.
 RUNTIME_NAME = "onnxruntime.dll"
@@ -120,8 +124,28 @@ def sha256_of(path: Path) -> str:
 
 def download(url: str) -> bytes:
     """Fetch a URL. Separated out so a test can replace it."""
-    with urllib.request.urlopen(url) as response:  # noqa: S310 - pinned https URL
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request) as response:  # noqa: S310 - pinned https URL
         return response.read()
+
+
+def fetch_archive(file_name: str, url: str, expected_sha256: str, *, fetch=download) -> Path:
+    """Return the pinned archive, downloading it into the archive cache on first use.
+
+    An archive whose SHA-256 already matches is reused, so a re-run after a failure
+    does not download gigabytes again. A mismatch removes the file, so a partial or
+    corrupt archive is never reused.
+    """
+    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    target = ARCHIVE_DIR / file_name
+    if target.is_file() and sha256_of(target) == expected_sha256:
+        return target
+    target.write_bytes(fetch(url))
+    digest = sha256_of(target)
+    if digest != expected_sha256:
+        target.unlink(missing_ok=True)
+        raise ChecksumError(f"{file_name}: sha256 {digest} does not match {expected_sha256}")
+    return target
 
 
 def is_complete(tag_dir: Path) -> bool:
@@ -169,11 +193,7 @@ def install_all(archives: list[tuple[str, str, str, str]], *, fetch=download) ->
         unpacked = content / "lib"
         unpacked.mkdir(parents=True)
         for file_name, url, expected_sha256, _kind in archives:
-            archive = staging / file_name
-            archive.write_bytes(fetch(url))
-            digest = sha256_of(archive)
-            if digest != expected_sha256:
-                raise ChecksumError(f"{file_name}: sha256 {digest} does not match {expected_sha256}")
+            archive = fetch_archive(file_name, url, expected_sha256, fetch=fetch)
             extract_libraries(archive, unpacked)
 
         for required in (RUNTIME_NAME, PROVIDER_NAME):
