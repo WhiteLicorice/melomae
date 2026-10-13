@@ -113,6 +113,7 @@ full, below.
 | darling | 0.24.1 | MIT |
 | darling_core | 0.24.1 | MIT |
 | darling_macro | 0.24.1 | MIT |
+| data-encoding | 2.11.1 | MIT |
 | dbus | 0.9.12 | Apache-2.0/MIT |
 | defmt | 1.1.1 | MIT OR Apache-2.0 |
 | defmt-macros | 1.1.1 | MIT OR Apache-2.0 |
@@ -252,6 +253,8 @@ full, below.
 | linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | litemap | 0.8.3 | Unicode-3.0 |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 |
+| lofty | 0.25.4 | MIT OR Apache-2.0 |
+| lofty_attr | 0.13.0 | MIT OR Apache-2.0 |
 | log | 0.4.34 | MIT OR Apache-2.0 |
 | markup5ever | 0.38.0 | MIT OR Apache-2.0 |
 | matrixmultiply | 0.3.11 | MIT/Apache-2.0 |
@@ -293,6 +296,7 @@ full, below.
 | objc2-ui-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | objc2-user-notifications | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | objc2-web-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
+| ogg_pager | 0.7.2 | MIT OR Apache-2.0 |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 |
 | once_cell_polyfill | 1.70.2 | MIT OR Apache-2.0 |
 | open | 5.4.4 | MIT |
@@ -307,6 +311,7 @@ full, below.
 | parking | 2.2.1 | Apache-2.0 OR MIT |
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 |
 | parking_lot_core | 0.9.12 | MIT OR Apache-2.0 |
+| paste | 1.0.15 | MIT OR Apache-2.0 |
 | percent-encoding | 2.3.2 | MIT OR Apache-2.0 |
 | phf | 0.13.1 | MIT |
 | phf_codegen | 0.13.1 | MIT |
@@ -12809,6 +12814,7 @@ Components covered by this text:
 - libc 0.2.189 (`LICENSE-APACHE`)
 - num_enum 0.7.6 (`LICENSE-APACHE`)
 - num_enum_derive 0.7.6 (`LICENSE-APACHE`)
+- paste 1.0.15 (`LICENSE-APACHE`)
 - proc-macro2 1.0.107 (`LICENSE-APACHE`)
 - quote 1.0.47 (`LICENSE-APACHE`)
 - ref-cast 1.0.27 (`LICENSE-APACHE`)
@@ -20961,6 +20967,8 @@ Components that ship no license file, covered by the standard text:
 - dlopen2_derive 0.4.3
 - jni-sys-macros 0.4.1
 - libappindicator-sys 0.9.0
+- lofty 0.25.4
+- lofty_attr 0.13.0
 - ndk 0.9.0
 - ndk-sys 0.6.0+11769913
 - objc2 0.6.4
@@ -20981,6 +20989,7 @@ Components that ship no license file, covered by the standard text:
 - objc2-ui-kit 0.3.2
 - objc2-user-notifications 0.3.2
 - objc2-web-kit 0.3.2
+- ogg_pager 0.7.2
 - r-efi 5.3.0
 - r-efi 6.0.0
 - realfft 3.5.0
@@ -21277,6 +21286,7 @@ Components covered by this text:
 - once_cell 1.21.4 (`LICENSE-MIT`)
 - ordered-stream 0.2.0 (`LICENSE-MIT`)
 - parking 2.2.1 (`LICENSE-MIT`)
+- paste 1.0.15 (`LICENSE-MIT`)
 - pin-project-lite 0.2.17 (`LICENSE-MIT`)
 - piper 0.2.5 (`LICENSE-MIT`)
 - polling 3.11.0 (`LICENSE-MIT`)
@@ -21871,6 +21881,37 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+```
+
+### MIT
+
+Components covered by this text:
+
+- data-encoding 2.11.1 (`LICENSE`)
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2015-2020 Julien Cretin
+Copyright (c) 2017-2020 Google Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
 
 ### MIT
