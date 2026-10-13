@@ -11,12 +11,14 @@ script builds that notice from four sources:
     - the components that no package manifest lists: the ONNX Runtime library
       and the Apollo model (Stack section J).
 
-Every component keeps its own license text, read from the source that it
-ships. The texts are grouped only when they are byte-identical after
-line-ending normalization, and each group names every component that it covers.
-`NOTICE` files are kept in full. A component that ships no license file is
-listed under the standard SPDX text for one of its declared identifiers, and
-the file records that it shipped none.
+Every component keeps its own license, notice, and copyright texts, read from
+the source that it ships. The texts are grouped only when they are byte-identical
+after line-ending normalization, and each group names every component that it
+covers. `NOTICE` and `COPYRIGHT` files are kept in full. A document beside the
+code it covers, such as `src/unicode_tables/LICENSE-UNICODE`, is read too, and
+the file records its path. A component that ships no such document is listed
+under the standard SPDX text for one of its declared identifiers, and the file
+records that it shipped none.
 
     python tools/generate_notices.py
     python tools/generate_notices.py --check
@@ -35,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -122,7 +125,35 @@ FALLBACK_PREFERENCE = [
     "MPL-2.0",
 ]
 
-LICENSE_FILE = re.compile(r"(?i)^(licen[cs]e|copying|unlicense|notice)")
+LICENSE_FILE = re.compile(r"(?i)^(licen[cs]e|copying|copyright|unlicense|notice)")
+# The nested walk matches a document name only: a license word, an optional
+# `-suffix`, and an optional text extension. A source file such as
+# `src/copying.rs` is not a license document and does not match.
+NESTED_LICENSE_FILE = re.compile(
+    r"(?i)^(licen[cs]e|copying|copyright|notice|unlicense)([-_][^.]*)?(\.(txt|md|rst))?$"
+)
+# Folders whose notice files describe test, benchmark, or example inputs, not
+# the shipped code. The nested walk skips them.
+EXCLUDED_DIRS = frozenset(
+    {"test", "tests", "bench", "benches", "example", "examples", "fixture", "fixtures"}
+)
+# Nested notice documents that the shipped build does not compile, keyed by
+# crate name and the document path inside the crate. Each entry records the
+# evidence that its code is outside the shipped targets; the enabled feature
+# set is read from `cargo metadata`.
+EXCLUDED_NESTED = {
+    # `vendored` is off (enabled: `default`, `pkg-config`), so the crate links
+    # the system libdbus and never builds the bundled tree.
+    "libdbus-sys": frozenset(
+        {"vendor/dbus/COPYING", "vendor/dbus/cmake/modules/COPYING-CMAKE-SCRIPTS"}
+    ),
+    # `bundled-sqlcipher` is off (enabled: `bundled`), so the shipped build uses
+    # the plain SQLite amalgamation, not the SQLCipher code.
+    "libsqlite3-sys": frozenset({"sqlcipher/LICENSE"}),
+    # The `spin` module is `#[cfg(not(feature = "std"))]`; `std` is enabled, so
+    # the crate does not compile this file.
+    "tracing-core": frozenset({"src/spin/LICENSE"}),
+}
 PREFIXES = ("LICENSE-", "LICENCE-", "COPYING-", "LICENSE", "LICENCE", "COPYING")
 EXPRESSION_TOKENS = re.compile(r"\b(AND|OR)\b|[()/]")
 
@@ -305,7 +336,7 @@ def spdx_text(identifier: str) -> str:
 
 
 def license_files(directory: Path) -> list[Path]:
-    """The license and notice files that a component ships.
+    """The license, notice, and copyright files at a component's top level.
 
     The top level and the `license/` and `licenses/` subdirectories are read,
     because both layouts are common.
@@ -318,6 +349,30 @@ def license_files(directory: Path) -> list[Path]:
         if subdirectory.is_dir():
             candidates += [path for path in sorted(subdirectory.iterdir()) if path.is_file()]
     return [path for path in candidates if LICENSE_FILE.match(path.name)]
+
+
+def nested_license_files(directory: Path) -> list[Path]:
+    """The license, notice, and copyright documents below a component root.
+
+    Some components keep a notice beside the data or code it covers, such as
+    `src/unicode_tables/LICENSE-UNICODE`. The walk reads those. It skips the
+    test, bench, example, and fixture folders, whose files cover inputs rather
+    than the shipped code, and it does not follow a directory symlink, so a
+    dependency's `node_modules` link never pulls in a second package.
+    """
+    if not directory.is_dir():
+        return []
+    found: list[Path] = []
+    for root, directories, filenames in os.walk(directory, followlinks=False):
+        directories[:] = [
+            name
+            for name in directories
+            if name.lower() not in EXCLUDED_DIRS and not (Path(root) / name).is_symlink()
+        ]
+        for filename in sorted(filenames):
+            if NESTED_LICENSE_FILE.match(filename):
+                found.append(Path(root) / filename)
+    return found
 
 
 def read_text(path: Path) -> str:
@@ -351,18 +406,33 @@ def add_text(groups: dict, text: str, *, component, filename=None, spdx=None, no
 
 
 def component_texts(groups: dict, component: dict) -> None:
-    """Add one component's own license, notice, and standard texts."""
+    """Add one component's own license, notice, and copyright texts.
+
+    A component that ships any such document never gets a standard SPDX text:
+    the generic fallback could replace the attribution the component supplies.
+    """
     key = (component["name"], component["version"])
-    files = license_files(component["directory"])
-    if files:
-        for path in files:
+    top = license_files(component["directory"])
+    seen = set(top)
+    labelled = [(path.name, path) for path in top]
+    excluded = EXCLUDED_NESTED.get(component["name"], frozenset())
+    for path in nested_license_files(component["directory"]):
+        if path in seen:
+            continue
+        seen.add(path)
+        label = path.relative_to(component["directory"]).as_posix()
+        if label in excluded:
+            continue
+        labelled.append((label, path))
+    if labelled:
+        for label, path in labelled:
             text = read_text(path)
             if text:
                 add_text(
                     groups,
                     text,
                     component=key,
-                    filename=path.name,
+                    filename=label,
                     spdx=id_for_filename(path.name, component["license"]),
                 )
         return
@@ -525,7 +595,7 @@ def build_notices(*, rust=None, scripts=None, runtime=None) -> str:
     lines = [
         "# Third-party notices",
         "",
-        "Melomae is licensed under the GNU General Public License, version 3 or later",
+        "Melomae is licensed under the GNU General Public License, version 3 only",
         "(see `LICENSE`). This file lists each third-party component that Melomae",
         "distributes or links, with the license of the component and the license and",
         "notice texts that the component ships.",
