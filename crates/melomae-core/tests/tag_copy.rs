@@ -2918,16 +2918,22 @@ fn the_write_check_reports_a_value_the_wav_writer_drops() {
 
 // --- Fix round 6: distinct custom descriptions must not merge ---------------------------------
 
-/// The values a native reader reports for one custom description. A WAV `TXXX` frame is keyed by
-/// `TXXX:<description>`; a Vorbis comment keeps the description as its key.
+/// The values a native reader reports for one custom description, matched by its exact key. A WAV
+/// `TXXX` frame is keyed by `TXXX:<description>`; a Vorbis comment keeps the description as its key.
+/// The match is exact, so `MixedName` and `mixedname` are two different fields.
 fn custom_values(path: &Path, kind: NativeKind, description: &str) -> Vec<String> {
-    let id3_key = format!("TXXX:{description}");
-    let native_key = if matches!(kind, NativeKind::Wav | NativeKind::Mp3) {
-        id3_key.as_str()
+    let key = if matches!(kind, NativeKind::Wav | NativeKind::Mp3) {
+        format!("TXXX:{description}")
     } else {
-        description
+        description.to_string()
     };
-    native_field_values(path, kind, description, native_key)
+    let mut values: Vec<String> = native_pairs(path, kind)
+        .into_iter()
+        .filter(|(candidate, _)| candidate == &key)
+        .flat_map(|(_, value)| value.split('\0').map(str::to_string).collect::<Vec<_>>())
+        .collect();
+    values.sort();
+    values
 }
 
 /// Fix round 6, finding 1: four custom descriptions that differ only by case, underscore, hyphen, or
