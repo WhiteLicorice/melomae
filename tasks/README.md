@@ -214,5 +214,14 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 | B-039 | [Compare the restore against the golden at the reference settings](backlog/B-039-compare-the-restore-against-the-golden-at-the-reference-settings.md) | TODO | 07 |
 | B-040 | [Publish the restore output exclusively](backlog/B-040-publish-the-restore-output-exclusively.md) | TODO | 07 |
 | B-041 | [Report a failed temporary file removal](backlog/B-041-report-a-failed-temporary-file-removal.md) | TODO | 06 |
+| B-042 | [Compare complete pictures in the tag write check](backlog/B-042-compare-complete-pictures-in-the-tag-write-check.md) | TODO | 15 |
+| B-043 | [Honor the ID3v2.4 extended header in the raw frame count](backlog/B-043-honor-the-id3v2-4-extended-header-in-the-raw-frame-count.md) | TODO | 15 |
+| B-044 | [Keep equal described and plain comments apart](backlog/B-044-keep-equal-described-and-plain-comments-apart.md) | TODO | 15 |
+| B-045 | [Make the Group B assertions match their messages](backlog/B-045-make-the-group-b-assertions-match-their-messages.md) | TODO | 15 |
+| B-046 | [Map the Group B tag frames](backlog/B-046-map-the-group-b-tag-frames.md) | TODO | 15 |
+| B-047 | [Report a value that fails numeric conversion](backlog/B-047-report-a-value-that-fails-numeric-conversion.md) | TODO | 15 |
+| B-048 | [Carry the payloads of mapped frames](backlog/B-048-carry-the-payloads-of-mapped-frames.md) | TODO | 15 |
+| B-049 | [Split ID3v2.3 slash values when confirmed](backlog/B-049-split-id3v2-3-slash-values-when-confirmed.md) | TODO | 15 |
+| B-050 | [Write repeated WOAR frames in WAV](backlog/B-050-write-repeated-woar-frames-in-wav.md) | TODO | 15 |
 
 Each backlog record states why it does not block the MVP. Each record also states its promotion condition.
