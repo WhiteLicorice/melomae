@@ -6,9 +6,9 @@
 //! [`TagSet`] into an output file in the output's own tag format: ID3 for WAV, Vorbis comments for
 //! FLAC and Opus.
 //!
-//! The standard-field mapping is lofty's, which follows the MusicBrainz Picard tag mapping. A
-//! field that the target format cannot hold is never dropped in silence: [`TagSet::unsupported_for`]
-//! names it.
+//! The standard-field mapping starts from lofty's generic mapping, and an explicit override table
+//! corrects the rows where lofty's key differs from the MusicBrainz Picard tag mapping. A field that
+//! the target format cannot hold is never dropped in silence: [`TagSet::unsupported_for`] names it.
 
 use std::fmt;
 use std::fs::File;
@@ -851,7 +851,7 @@ fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
     let mut user_text: Vec<(String, String)> = Vec::new();
     let mut movement_number: Option<String> = None;
     let mut movement_total: Option<String> = None;
-    let mut license: Option<String> = None;
+    let mut license: Vec<String> = Vec::new();
     for item in &tags.standard {
         // Picard's movement row is one `MVIN` frame, `number` or `number/count`. The two generic
         // items are joined into one frame below.
@@ -864,13 +864,13 @@ fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
                 movement_total = item.value().text().map(str::to_string);
                 continue;
             }
-            // Picard's license row is a URL frame when the value is a URL, and a `TXXX` otherwise.
-            ItemKey::License => {
-                license = item
-                    .value()
-                    .text()
-                    .or_else(|| item.value().locator())
-                    .map(str::to_string);
+            // Picard's license row arrives two ways: a Vorbis `LICENSE` comment reads as `License`,
+            // and an ID3 `WCOP` URL frame reads as `CopyrightUrl`. Every value is collected here,
+            // from both forms, and the whole row is written once below.
+            ItemKey::License | ItemKey::CopyrightUrl => {
+                if let Some(value) = item.value().text().or_else(|| item.value().locator()) {
+                    license.push(value.to_string());
+                }
                 continue;
             }
             _ => {}
@@ -897,16 +897,6 @@ fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
     for (name, value) in user_text {
         id3.insert_user_text(name, value);
     }
-    if let Some(value) = license {
-        if is_http_url(&value) {
-            id3.insert(Frame::Url(UrlLinkFrame::new(
-                FrameId::Valid("WCOP".to_string().into()),
-                value,
-            )));
-        } else {
-            id3.insert_user_text("LICENSE".to_string(), value);
-        }
-    }
     if let Some(number) = movement_number {
         let value = match movement_total {
             Some(total) => format!("{number}/{total}"),
@@ -922,6 +912,12 @@ fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
         if !custom_is_supported(field, OutputFormat::Wav) {
             continue;
         }
+        // Picard's license row is one field. Collect every value here; the frame is chosen once
+        // below, from both the standard and the custom representations.
+        if picard_mapping(&field.name).is_some_and(|mapping| mapping.portable == "LICENSE") {
+            license.extend(field.values.iter().cloned());
+            continue;
+        }
         // A mapped custom field uses its native ID3 name: a user-text frame is identified by its
         // description, and any other frame by its id. A multi-value field is one frame whose values
         // are null-separated, as ID3v2.4 defines it.
@@ -932,11 +928,6 @@ fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
                     id3.insert_user_text(native.to_string(), value);
                 }
             }
-            // Picard's license row: a URL value is the `WCOP` frame, and anything else keeps the
-            // `TXXX:LICENSE` description.
-            Some(mapping) if mapping.id3 == Some("WCOP") && !is_http_url(&value) => {
-                id3.insert_user_text("LICENSE".to_string(), value);
-            }
             Some(mapping) => {
                 if let Some(native) = mapping.id3 {
                     insert_id3_text_or_url(&mut id3, native, value);
@@ -945,6 +936,19 @@ fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
             None => {
                 id3.insert_user_text(field.name.clone(), value);
             }
+        }
+    }
+    // Picard's license row: one `WCOP` URL frame for a single URL, and one `TXXX:LICENSE` frame
+    // otherwise. Two or more values become one null-separated `TXXX:LICENSE` frame, as ID3v2.4
+    // defines a multi-value text frame, so no value is dropped.
+    if !license.is_empty() {
+        if license.len() == 1 && is_http_url(&license[0]) {
+            id3.insert(Frame::Url(UrlLinkFrame::new(
+                FrameId::Valid("WCOP".to_string().into()),
+                license[0].clone(),
+            )));
+        } else {
+            id3.insert_user_text("LICENSE".to_string(), license.join("\0"));
         }
     }
     // Re-insert the frames the generic model cannot represent, so a WAV output keeps them.
