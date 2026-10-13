@@ -1,8 +1,8 @@
 [package]
 name = "melomae"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Restore a music collection you already own, on your own machine."
+authors = ["Rene Andre Bedonia Jocsing"]
 edition = "2021"
 license.workspace = true
 
