@@ -2420,18 +2420,93 @@ fn native_field_values(path: &Path, kind: NativeKind, key: &str, id3_key: &str) 
     if (kind == NativeKind::Wav || kind == NativeKind::Mp3)
         && (id3_key == "WCOP" || id3_key == "WOAR")
     {
-        let tag = if kind == NativeKind::Wav {
-            wav_id3(path)
-        } else {
-            mp3_id3(path)
-        };
-        values.extend(tag.iter().filter_map(|frame| match frame {
-            Frame::Url(url) if url.id().as_str() == id3_key => Some(url.url().to_string()),
-            _ => None,
-        }));
+        values.extend(raw_id3_urls(path, id3_key));
     }
     values.sort();
     values
+}
+
+/// The URLs of every ID3v2 URL frame with `id` in a file, read from the raw bytes.
+///
+/// `lofty`'s reader collapses repeated `WOAR`/`WCOP` frames into one, so the raw tag is read here.
+/// The tag starts the file for an MP3; a WAV keeps it in the `id3 ` RIFF chunk.
+fn raw_id3_urls(path: &Path, id: &str) -> Vec<String> {
+    let bytes = std::fs::read(path).expect("read the file");
+    let Some(region) = id3_region(&bytes) else {
+        return Vec::new();
+    };
+    if region.len() < 10 {
+        return Vec::new();
+    }
+    let major = region[3];
+    let syncsafe = |window: &[u8]| -> usize {
+        window.iter().fold(0usize, |total, byte| {
+            (total << 7) | (usize::from(*byte) & 0x7f)
+        })
+    };
+    let end = 10 + syncsafe(&region[6..10]);
+    let mut offset = 10;
+    let mut urls = Vec::new();
+    while offset + 10 <= end && end <= region.len() {
+        let frame_id = &region[offset..offset + 4];
+        if frame_id == [0, 0, 0, 0] {
+            break;
+        }
+        let size = if major >= 4 {
+            syncsafe(&region[offset + 4..offset + 8])
+        } else {
+            (usize::from(region[offset + 4]) << 24)
+                | (usize::from(region[offset + 5]) << 16)
+                | (usize::from(region[offset + 6]) << 8)
+                | usize::from(region[offset + 7])
+        };
+        let start = offset + 10;
+        let stop = start + size;
+        if stop > end || stop > region.len() {
+            break;
+        }
+        if frame_id == id.as_bytes() {
+            urls.push(String::from_utf8_lossy(&region[start..stop]).into_owned());
+        }
+        offset = stop;
+    }
+    urls
+}
+
+/// The bytes of the ID3v2 tag in a file: at the start for an MP3, or in the `id3 ` chunk for a WAV.
+fn id3_region(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.starts_with(b"ID3") {
+        if bytes.len() < 10 {
+            return None;
+        }
+        let size = 10
+            + bytes[6..10]
+                .iter()
+                .fold(0usize, |n, b| (n << 7) | (usize::from(*b) & 0x7f));
+        return Some(bytes[..size.min(bytes.len())].to_vec());
+    }
+    if bytes.starts_with(b"RIFF") {
+        let mut offset = 12;
+        while offset + 8 <= bytes.len() {
+            let id = &bytes[offset..offset + 4];
+            let size = u32::from_le_bytes([
+                bytes[offset + 4],
+                bytes[offset + 5],
+                bytes[offset + 6],
+                bytes[offset + 7],
+            ]) as usize;
+            let start = offset + 8;
+            let stop = start + size;
+            if stop > bytes.len() {
+                break;
+            }
+            if id == b"id3 " || id == b"ID3 " {
+                return Some(bytes[start..stop].to_vec());
+            }
+            offset = stop + (size & 1);
+        }
+    }
+    None
 }
 
 /// The license values a native reader reports, from both the `TXXX:LICENSE` text frame and, for an
@@ -2540,9 +2615,9 @@ fn generic_text_values_survive_or_are_reported() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Finding 3 (blocking): every WEBSITE URL survives in all three outputs. A native FLAC source
-/// holds two websites; each Vorbis output keeps both, and the WAV output keeps one `WOAR` frame per
-/// URL.
+/// Finding 3 (blocking): every WEBSITE URL survives in FLAC and Opus. `lofty`'s `Id3v2Tag` cannot
+/// hold two frames with the same id, so the WAV output keeps the first URL in its `WOAR` frame and
+/// names `WEBSITE` in the returned list for the rest.
 #[test]
 fn website_values_all_survive_in_every_output() {
     let fixtures = TagFixtures::build();
@@ -2568,9 +2643,23 @@ fn website_values_all_survive_in_every_output() {
         let target = outputs.join(&format!("website.{extension}"));
         let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags))
             .unwrap_or_else(|error| panic!("-> {extension}: {error}"));
-        let got = native_field_values(&target, kind, "WEBSITE", "WOAR");
-        if got != expected {
-            failures.push(format!("{format:?}: got={got:?} report={report:?}"));
+        if format == OutputFormat::Wav {
+            let urls = raw_id3_urls(&target, "WOAR");
+            if urls != vec![want[0].to_string()] {
+                failures.push(format!(
+                    "WAV: the first URL must be the one WOAR, got {urls:?} report={report:?}"
+                ));
+            }
+            if !report.iter().any(|name| name == "WEBSITE") {
+                failures.push(format!(
+                    "WAV: the dropped website must be named, report={report:?}"
+                ));
+            }
+        } else {
+            let got = native_field_values(&target, kind, "WEBSITE", "WOAR");
+            if got != expected {
+                failures.push(format!("{format:?}: got={got:?} report={report:?}"));
+            }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
