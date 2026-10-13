@@ -9,7 +9,10 @@
 //! The standard-field mapping starts from lofty's generic mapping, and an explicit override table
 //! corrects the rows where lofty's key differs from the MusicBrainz Picard tag mapping. A field that
 //! the target format cannot hold is never dropped in silence: [`TagSet::unsupported_for`] names it.
+//! [`write_losses`] compares the source with a read-back of the written file, so a value a writer
+//! drops is named too, even when no rule predicted the loss.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -61,6 +64,10 @@ pub struct TagSet {
     custom: Vec<CustomField>,
     pictures: Vec<Picture>,
     carried: Vec<CarriedFrame>,
+    /// Fields the source reader itself lost, so the report names them even though the tag set no
+    /// longer holds a value to compare. `lofty` can collapse several valid frames with the same id
+    /// into one; the id is recorded here.
+    lost: Vec<String>,
 }
 
 impl TagSet {
@@ -81,10 +88,11 @@ impl TagSet {
 
     /// The fields that the target format cannot hold. The job report lists these, so no field is
     /// dropped in silence. A carried ID3v2 frame is preserved in a WAV output, and named for a
-    /// Vorbis target that has no plain equivalent.
+    /// Vorbis target that has no plain equivalent. A field the source reader already lost is named
+    /// for every target.
     pub fn unsupported_for(&self, format: OutputFormat) -> Vec<String> {
         let tag_type = target_tag_type(format);
-        let mut names = Vec::new();
+        let mut names = self.lost.clone();
         for item in &self.standard {
             if !standard_is_supported(item, tag_type) {
                 names.push(standard_name(item.key()));
@@ -461,8 +469,38 @@ fn is_valid_vorbis_key(key: &str) -> bool {
 
 /// Read every tag and picture from a file.
 pub fn read_tags(path: &Path) -> Result<TagSet, TagError> {
-    let tagged =
-        lofty::read_from_path(path).map_err(|error| TagError::new(path, error.to_string()))?;
+    read_tags_inner(path, None)
+}
+
+/// Read every tag and picture from a file whose name does not carry its format.
+///
+/// The write check reads the temporary output file back, and its name ends in `.tmp`, so the
+/// extension cannot decide the format. `format` names the tag family instead. The reading path is
+/// the same as [`read_tags`].
+pub fn read_written_tags(path: &Path, format: OutputFormat) -> Result<TagSet, TagError> {
+    read_tags_inner(path, Some(file_type_for(format)))
+}
+
+/// The file type an output format writes, for a reader that cannot use the file extension.
+fn file_type_for(format: OutputFormat) -> FileType {
+    match format {
+        OutputFormat::Flac => FileType::Flac,
+        OutputFormat::Wav => FileType::Wav,
+        OutputFormat::Opus => FileType::Opus,
+    }
+}
+
+/// Read every tag and picture from a file, with an optional file type when the extension is not
+/// enough.
+fn read_tags_inner(path: &Path, forced: Option<FileType>) -> Result<TagSet, TagError> {
+    let tagged = match forced {
+        Some(file_type) => lofty::probe::Probe::open(path)
+            .and_then(|probe| probe.set_file_type(file_type).read())
+            .map_err(|error| TagError::new(path, error.to_string()))?,
+        None => {
+            lofty::read_from_path(path).map_err(|error| TagError::new(path, error.to_string()))?
+        }
+    };
     let file_type = tagged.file_type();
 
     let mut set = TagSet::default();
@@ -473,9 +511,10 @@ pub fn read_tags(path: &Path) -> Result<TagSet, TagError> {
     match file_type {
         // A WAV, AIFF, or AAC file carries ID3v2, so its custom fields are `TXXX` frames.
         FileType::Mpeg | FileType::Wav | FileType::Aiff | FileType::Aac => {
-            let (custom, carried) = read_id3_customs(path, file_type)?;
+            let (custom, carried, lost) = read_id3_customs(path, file_type)?;
             set.custom = custom;
             set.carried = carried;
+            set.lost = lost;
         }
         FileType::Mp4 => set.custom = read_mp4_customs(path)?,
         FileType::Flac | FileType::Opus | FileType::Vorbis | FileType::Speex => {
@@ -587,19 +626,30 @@ fn native_values(items: &[(String, String)], key: &str) -> Vec<String> {
 /// The owner that marks a `UFID` frame as the MusicBrainz recording ID.
 const MUSICBRAINZ_UFID_OWNER: &str = "http://musicbrainz.org";
 
+/// What [`read_id3_customs`] returns: the custom fields, the frames carried verbatim, and the
+/// fields the reader itself lost.
+type Id3Customs = (Vec<CustomField>, Vec<CarriedFrame>, Vec<String>);
+
 /// The custom fields of an ID3v2-carrying file: every `TXXX` frame whose description has no
 /// standard mapping, plus every other frame the generic layer leaves behind. The frames the generic
 /// model cannot represent are returned as carried frames, to be written verbatim into a WAV output
-/// and named for a Vorbis target.
-fn read_id3_customs(
-    path: &Path,
-    file_type: FileType,
-) -> Result<(Vec<CustomField>, Vec<CarriedFrame>), TagError> {
+/// and named for a Vorbis target. The third value names a field the reader itself lost.
+fn read_id3_customs(path: &Path, file_type: FileType) -> Result<Id3Customs, TagError> {
     let mut fields = Vec::new();
     let mut carried = Vec::new();
+    let mut lost = Vec::new();
     let Some(id3) = read_id3_tag(path, file_type)? else {
-        return Ok((fields, carried));
+        return Ok((fields, carried, lost));
     };
+    // An ID3v2.4 tag may hold several `WOAR` frames, one per website. `lofty`'s reader keeps only
+    // one, so a small walk over the raw tag counts them. When the raw tag holds more than the reader
+    // exposes, the website field is named in the report instead of losing a URL in silence.
+    if file_type == FileType::Mpeg {
+        let exposed = id3.iter().filter(|frame| frame.id_str() == "WOAR").count();
+        if raw_id3_frame_count(path, "WOAR").is_some_and(|raw| raw > exposed) {
+            lost.push("WEBSITE".to_string());
+        }
+    }
     for frame in &id3 {
         match frame {
             Frame::UserText(ExtendedTextFrame {
@@ -609,11 +659,15 @@ fn read_id3_customs(
             }) => {
                 if let Some(mapping) = picard_mapping_for_id3_text(description) {
                     // A mapped `TXXX` frame, such as the script or the release status, crosses the
-                    // formats under its portable name.
-                    fields.push(CustomField {
-                        name: mapping.portable.to_string(),
-                        values: content.split('\0').map(str::to_string).collect(),
-                    });
+                    // formats under its portable name. When the generic layer also carries the frame
+                    // as a standard item, that item keeps the value under the portable name, so a
+                    // custom copy would duplicate every value.
+                    if ItemKey::from_key(TagType::Id3v2, description).is_none() {
+                        fields.push(CustomField {
+                            name: mapping.portable.to_string(),
+                            values: content.split('\0').map(str::to_string).collect(),
+                        });
+                    }
                 } else if ItemKey::from_key(TagType::Id3v2, description).is_none() {
                     fields.push(CustomField {
                         name: description.to_string(),
@@ -681,7 +735,58 @@ fn read_id3_customs(
             }
         }
     }
-    Ok((fields, carried))
+    Ok((fields, carried, lost))
+}
+
+/// The contents of every frame with an id in the raw ID3v2 tag at the start of a file, in order.
+///
+/// `lofty`'s reader can collapse several valid frames with the same id into one. A small walk over
+/// the frame headers reaches them all, so the copier can count or read them. It adds no dependency
+/// and covers the ID3v2.3 and 2.4 frame-size forms. It returns `None` when the file has no ID3v2
+/// tag, so a caller can fall back to the reader's view.
+fn raw_id3_frame_values(path: &Path, wanted: &str) -> Option<Vec<Vec<u8>>> {
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.len() < 10 || &bytes[0..3] != b"ID3" {
+        return None;
+    }
+    let major = bytes[3];
+    let syncsafe = |window: &[u8]| -> usize {
+        window.iter().fold(0usize, |total, byte| {
+            (total << 7) | (usize::from(*byte) & 0x7f)
+        })
+    };
+    let end = 10 + syncsafe(&bytes[6..10]);
+    let mut offset = 10;
+    let mut values = Vec::new();
+    while offset + 10 <= end && end <= bytes.len() {
+        let id = &bytes[offset..offset + 4];
+        if id == [0, 0, 0, 0] {
+            break;
+        }
+        let size = if major >= 4 {
+            syncsafe(&bytes[offset + 4..offset + 8])
+        } else {
+            (usize::from(bytes[offset + 4]) << 24)
+                | (usize::from(bytes[offset + 5]) << 16)
+                | (usize::from(bytes[offset + 6]) << 8)
+                | usize::from(bytes[offset + 7])
+        };
+        let start = offset + 10;
+        let stop = start + size;
+        if stop > end || stop > bytes.len() {
+            break;
+        }
+        if id == wanted.as_bytes() {
+            values.push(bytes[start..stop].to_vec());
+        }
+        offset = stop;
+    }
+    Some(values)
+}
+
+/// The number of frames with an id in the raw ID3v2 tag at the start of a file.
+fn raw_id3_frame_count(path: &Path, wanted: &str) -> Option<usize> {
+    raw_id3_frame_values(path, wanted).map(|values| values.len())
 }
 
 /// Whether an ID3 `MVIN` value is `number` or `number/count`, the two forms Picard defines.
@@ -845,13 +950,141 @@ pub fn write_into(path: &Path, format: OutputFormat, tags: &TagSet) -> Result<()
     }
 }
 
+/// The source fields whose values the written file does not hold.
+///
+/// The caller reads the output back with [`read_written_tags`] and compares it with the source. The
+/// comparison is in the portable key space the copier uses, counting multiplicity, so a loss inside
+/// a writer is named in the report instead of disappearing. A field that a writer is known to
+/// transform (the movement pair into one `MVIN`, a license URL into `WCOP`, a date) is compared in
+/// its canonical form, so a deliberate transform counts as preserved.
+pub fn write_losses(source: &TagSet, output: &TagSet) -> Vec<String> {
+    let expected = canonical_values(source);
+    let produced = canonical_values(output);
+    let mut lost = Vec::new();
+    for (name, values) in &expected {
+        let holds = produced
+            .get(name)
+            .is_some_and(|written| multiset_holds(written, values));
+        if !holds && !lost.contains(name) {
+            lost.push(name.clone());
+        }
+    }
+    lost
+}
+
+/// The `(name, value)` pairs of a tag set in the portable key space: a standard field by its Picard
+/// or Vorbis key, a custom field by its own name. One pair per value; a carried frame is not a
+/// portable field, so it is left out.
+fn portable_values(tags: &TagSet) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    for item in &tags.standard {
+        let value = item
+            .value()
+            .text()
+            .or_else(|| item.value().locator())
+            .unwrap_or_default()
+            .to_string();
+        pairs.push((standard_name(item.key()), value));
+    }
+    for field in &tags.custom {
+        for value in &field.values {
+            pairs.push((field.name.clone(), value.clone()));
+        }
+    }
+    pairs
+}
+
+/// The portable values of a tag set, grouped by field name and sorted, with the movement pair
+/// joined into the one `MOVEMENT` field the copier uses. A value is split on the ID3v2.4
+/// multi-value separator, so one null-separated frame counts as its separate values.
+fn canonical_values(tags: &TagSet) -> BTreeMap<String, Vec<String>> {
+    let mut numbers = Vec::new();
+    let mut totals = Vec::new();
+    let mut fields: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (name, value) in portable_values(tags) {
+        for part in value.split('\0') {
+            match name.as_str() {
+                "MOVEMENT" => numbers.push(part.to_string()),
+                "MOVEMENTTOTAL" => totals.push(part.to_string()),
+                _ => fields
+                    .entry(name.clone())
+                    .or_default()
+                    .push(part.to_string()),
+            }
+        }
+    }
+    for token in movement_tokens(&numbers, &totals) {
+        fields
+            .entry("MOVEMENT".to_string())
+            .or_default()
+            .push(token);
+    }
+    for values in fields.values_mut() {
+        values.sort();
+    }
+    fields
+}
+
+/// The `MVIN` tokens of a movement number and total list. A number with a total at the same
+/// position joins as `number/total`, a number already carrying a slash stays, a bare number stays,
+/// and a total with no number becomes `?/total` because Picard's `MVIN` needs a number.
+fn movement_tokens(numbers: &[String], totals: &[String]) -> Vec<String> {
+    let mut tokens = Vec::new();
+    for (index, number) in numbers.iter().enumerate() {
+        if number.contains('/') {
+            tokens.push(number.clone());
+        } else if let Some(total) = totals.get(index) {
+            tokens.push(format!("{number}/{total}"));
+        } else {
+            tokens.push(number.clone());
+        }
+    }
+    for total in totals.iter().skip(numbers.len()) {
+        tokens.push(format!("?/{total}"));
+    }
+    tokens
+}
+
+/// Whether `written` holds every value of `expected`, counting multiplicity. An extra value in
+/// `written` does not matter, because the check reports a loss, not an addition.
+fn multiset_holds(written: &[String], expected: &[String]) -> bool {
+    let mut available = written.to_vec();
+    for value in expected {
+        let Some(position) = available.iter().position(|candidate| candidate == value) else {
+            return false;
+        };
+        available.remove(position);
+    }
+    true
+}
+
+/// Add a value to a `TXXX` frame's group, keyed by its description. The standard and the custom
+/// representation of one description land in the same group, so no value replaces another.
+fn push_user_text(groups: &mut Vec<(String, Vec<String>)>, description: &str, value: String) {
+    match groups
+        .iter_mut()
+        .find(|(name, _)| same_field_name(name, description))
+    {
+        Some((_, values)) => values.push(value),
+        None => groups.push((description.to_string(), vec![value])),
+    }
+}
+
 /// Write ID3v2 to a WAV output.
+///
+/// A multi-value field is one frame whose values are null-separated, as ID3v2.4 defines a
+/// multi-value text frame. That is how `ARTISTS`, `WRITER`, `WORK`, the record label, and the
+/// license keep every value; one `WOAR` frame is written per website, because a URL frame holds a
+/// single URL.
 fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
     let mut tag = Tag::new(TagType::Id3v2);
-    let mut user_text: Vec<(String, String)> = Vec::new();
+    let mut user_text: Vec<(String, Vec<String>)> = Vec::new();
     let mut movement_number: Option<String> = None;
     let mut movement_total: Option<String> = None;
     let mut license: Vec<String> = Vec::new();
+    let mut labels: Vec<String> = Vec::new();
+    let mut websites: Vec<String> = Vec::new();
+    let mut other: Vec<(String, String)> = Vec::new();
     for item in &tags.standard {
         // Picard's movement row is one `MVIN` frame, `number` or `number/count`. The two generic
         // items are joined into one frame below.
@@ -873,14 +1106,30 @@ fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
                 }
                 continue;
             }
+            // Picard's record label is the ID3 `TPUB` frame. The generic conversion keeps one value,
+            // so every label is collected and written as one null-separated frame below.
+            ItemKey::Label => {
+                if let Some(value) = item.value().text() {
+                    labels.push(value.to_string());
+                }
+                continue;
+            }
+            // Picard's artist website is the ID3 `WOAR` URL frame. A URL frame holds one URL, so
+            // every website is collected and written as its own frame below.
+            ItemKey::TrackArtistUrl => {
+                if let Some(value) = item.value().text().or_else(|| item.value().locator()) {
+                    websites.push(value.to_string());
+                }
+                continue;
+            }
             _ => {}
         }
         if let Some(mapping) = picard_mapping_for_key(item.key()) {
             // A mapped field with a `TXXX` native name is written by hand, because lofty's generic
-            // layer has no ID3 frame for it.
+            // layer has no ID3 frame for it. Every value is collected, so they are written together.
             if mapping.id3_user_text {
                 if let (Some(value), Some(native)) = (item.value().text(), mapping.id3) {
-                    user_text.push((native.to_string(), value.to_string()));
+                    push_user_text(&mut user_text, native, value.to_string());
                 }
                 continue;
             }
@@ -889,13 +1138,74 @@ fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
             tag.push(item.clone());
         }
     }
+    for field in &tags.custom {
+        if !custom_is_supported(field, OutputFormat::Wav) {
+            continue;
+        }
+        // Picard's license and website rows are written from all of their values together, so the
+        // custom representation reaches the same frames as the standard one.
+        let portable = picard_mapping(&field.name).map(|mapping| mapping.portable);
+        if portable == Some("LICENSE") {
+            license.extend(field.values.iter().cloned());
+            continue;
+        }
+        if portable == Some("WEBSITE") {
+            websites.extend(field.values.iter().cloned());
+            continue;
+        }
+        // A mapped custom field uses its native ID3 name: a user-text frame is identified by its
+        // description, and any other frame by its id.
+        match picard_mapping(&field.name) {
+            Some(mapping) if mapping.id3_user_text => {
+                if let Some(native) = mapping.id3 {
+                    for value in &field.values {
+                        push_user_text(&mut user_text, native, value.clone());
+                    }
+                }
+            }
+            Some(mapping) => {
+                if let Some(native) = mapping.id3 {
+                    other.push((native.to_string(), field.values.join("\0")));
+                }
+            }
+            None => {
+                for value in &field.values {
+                    push_user_text(&mut user_text, &field.name, value.clone());
+                }
+            }
+        }
+    }
     for picture in &tags.pictures {
         tag.push_picture(picture.clone());
     }
 
     let mut id3 = lofty::id3::v2::Id3v2Tag::from(tag);
-    for (name, value) in user_text {
-        id3.insert_user_text(name, value);
+    // One `TXXX` frame per description, its values null-separated. The standard and custom
+    // representations of a description are already combined, so no value replaces another.
+    for (description, values) in user_text {
+        id3.insert_user_text(description, values.join("\0"));
+    }
+    // One `TPUB` frame for the record label, its values null-separated.
+    if !labels.is_empty() {
+        id3.insert(Frame::Text(TextInformationFrame::new(
+            FrameId::Valid("TPUB".to_string().into()),
+            TextEncoding::UTF8,
+            labels.join("\0"),
+        )));
+    }
+    // Picard's website row becomes one `WOAR` frame. `Id3v2Tag` cannot hold two frames with the
+    // same id: `UrlLinkFrame`'s equality and hash use only `header.id`
+    // (`lofty-0.25.4/src/id3/v2/items/url_link_frame.rs:18-28`), and the only way to add a frame,
+    // `FrameList::push`, is crate private (`lofty-0.25.4/src/id3/v2/frame/list.rs:264`). So the first
+    // website is written, and the write check names `WEBSITE` in the returned list for the rest.
+    if let Some(url) = websites.into_iter().next() {
+        id3.insert(Frame::Url(UrlLinkFrame::new(
+            FrameId::Valid("WOAR".to_string().into()),
+            url,
+        )));
+    }
+    for (native, value) in other {
+        insert_id3_text_or_url(&mut id3, &native, value);
     }
     if let Some(number) = movement_number {
         let value = match movement_total {
@@ -907,36 +1217,6 @@ fn write_id3(path: &Path, tags: &TagSet) -> Result<(), TagError> {
             TextEncoding::UTF8,
             value,
         )));
-    }
-    for field in &tags.custom {
-        if !custom_is_supported(field, OutputFormat::Wav) {
-            continue;
-        }
-        // Picard's license row is one field. Collect every value here; the frame is chosen once
-        // below, from both the standard and the custom representations.
-        if picard_mapping(&field.name).is_some_and(|mapping| mapping.portable == "LICENSE") {
-            license.extend(field.values.iter().cloned());
-            continue;
-        }
-        // A mapped custom field uses its native ID3 name: a user-text frame is identified by its
-        // description, and any other frame by its id. A multi-value field is one frame whose values
-        // are null-separated, as ID3v2.4 defines it.
-        let value = field.values.join("\0");
-        match picard_mapping(&field.name) {
-            Some(mapping) if mapping.id3_user_text => {
-                if let Some(native) = mapping.id3 {
-                    id3.insert_user_text(native.to_string(), value);
-                }
-            }
-            Some(mapping) => {
-                if let Some(native) = mapping.id3 {
-                    insert_id3_text_or_url(&mut id3, native, value);
-                }
-            }
-            None => {
-                id3.insert_user_text(field.name.clone(), value);
-            }
-        }
     }
     // Picard's license row: one `WCOP` URL frame for a single URL, and one `TXXX:LICENSE` frame
     // otherwise. Two or more values become one null-separated `TXXX:LICENSE` frame, as ID3v2.4
@@ -1060,6 +1340,7 @@ mod tests {
             custom,
             pictures: Vec::new(),
             carried: Vec::new(),
+            lost: Vec::new(),
         }
     }
 
