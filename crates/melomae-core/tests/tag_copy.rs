@@ -789,6 +789,22 @@ struct PicardRow {
 /// `evidence-15/picard-tag-mapping.md` and reported to the orchestrator instead of asserted here.
 const PICARD_ROWS: &[PicardRow] = &[
     PicardRow {
+        label: "AcoustID",
+        id3: "Acoustid Id",
+        user_text: true,
+        vorbis: "ACOUSTID_ID",
+        value: "89f7b982-f29d-4ad1-b442-f904907ad8b1",
+        wav: "TXXX:Acoustid Id",
+    },
+    PicardRow {
+        label: "AcoustID Fingerprint",
+        id3: "Acoustid Fingerprint",
+        user_text: true,
+        vorbis: "ACOUSTID_FINGERPRINT",
+        value: "AQAA-test",
+        wav: "TXXX:Acoustid Fingerprint",
+    },
+    PicardRow {
         label: "Album",
         id3: "TALB",
         user_text: false,
@@ -1189,6 +1205,14 @@ const PICARD_ROWS: &[PicardRow] = &[
         wav: "TXXX:REPLAYGAIN_ALBUM_GAIN",
     },
     PicardRow {
+        label: "ReplayGain Album Peak",
+        id3: "REPLAYGAIN_ALBUM_PEAK",
+        user_text: true,
+        vorbis: "REPLAYGAIN_ALBUM_PEAK",
+        value: "0.987654",
+        wav: "TXXX:REPLAYGAIN_ALBUM_PEAK",
+    },
+    PicardRow {
         label: "ReplayGain Album Range",
         id3: "REPLAYGAIN_ALBUM_RANGE",
         user_text: true,
@@ -1197,12 +1221,36 @@ const PICARD_ROWS: &[PicardRow] = &[
         wav: "TXXX:REPLAYGAIN_ALBUM_RANGE",
     },
     PicardRow {
+        label: "ReplayGain Reference Loudness",
+        id3: "REPLAYGAIN_REFERENCE_LOUDNESS",
+        user_text: true,
+        vorbis: "REPLAYGAIN_REFERENCE_LOUDNESS",
+        value: "89.0 dB",
+        wav: "TXXX:REPLAYGAIN_REFERENCE_LOUDNESS",
+    },
+    PicardRow {
         label: "ReplayGain Track Gain",
         id3: "REPLAYGAIN_TRACK_GAIN",
         user_text: true,
         vorbis: "REPLAYGAIN_TRACK_GAIN",
         value: "-4.5 dB",
         wav: "TXXX:REPLAYGAIN_TRACK_GAIN",
+    },
+    PicardRow {
+        label: "ReplayGain Track Peak",
+        id3: "REPLAYGAIN_TRACK_PEAK",
+        user_text: true,
+        vorbis: "REPLAYGAIN_TRACK_PEAK",
+        value: "0.876543",
+        wav: "TXXX:REPLAYGAIN_TRACK_PEAK",
+    },
+    PicardRow {
+        label: "ReplayGain Track Range",
+        id3: "REPLAYGAIN_TRACK_RANGE",
+        user_text: true,
+        vorbis: "REPLAYGAIN_TRACK_RANGE",
+        value: "5.50",
+        wav: "TXXX:REPLAYGAIN_TRACK_RANGE",
     },
     PicardRow {
         label: "Script",
