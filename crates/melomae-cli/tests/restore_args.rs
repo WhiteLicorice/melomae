@@ -4,8 +4,16 @@
 //! the model is loaded, so the suite stays fast. Argument errors use clap's usage
 //! error, which exits 2. The error cases that the restore entry itself reports exit 1.
 
+#[path = "../../melomae-core/tests/common/mod.rs"]
+mod common;
+#[path = "../../melomae-core/tests/setup/mod.rs"]
+mod setup;
+
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+
+use setup::TempDir;
 
 /// The CLI binary under test.
 fn cli() -> PathBuf {
@@ -143,4 +151,152 @@ fn restore_reports_a_missing_input_file() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("no-such-input.wav"), "{stderr}");
+}
+
+/// Run the CLI with owned arguments and capture its output.
+fn run_owned(args: &[String]) -> Output {
+    Command::new(cli())
+        .args(args)
+        .output()
+        .expect("run the CLI")
+}
+
+/// The sorted file names in a directory.
+fn directory_entries(path: &Path) -> Vec<String> {
+    let mut entries: Vec<String> = fs::read_dir(path)
+        .expect("read the directory")
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    entries.sort();
+    entries
+}
+
+/// The restore arguments for an input path and an explicit output path, with existing files for
+/// the model and runtime, so the output preflight is what stops the run.
+fn restore_arguments(input: &Path, output: &Path) -> Vec<String> {
+    let existing = an_existing_file();
+    vec![
+        "restore".to_string(),
+        input.display().to_string(),
+        output.display().to_string(),
+        "--model".to_string(),
+        existing.display().to_string(),
+        "--onnxruntime".to_string(),
+        existing.display().to_string(),
+    ]
+}
+
+/// Fix round 1, B1: the CLI must refuse an output that resolves to the input.
+#[test]
+fn restore_rejects_the_output_equal_to_the_input() {
+    let dir = TempDir::new("melomae-cli-identity");
+    let input = dir.join("input.wav");
+    let bytes = b"the input audio bytes".to_vec();
+    fs::write(&input, &bytes).expect("write the input");
+
+    // The same path, a "." prefix spelling of it, and (on Windows) a different case.
+    let mut spellings = vec![
+        input.clone(),
+        input.parent().unwrap().join(".").join("input.wav"),
+    ];
+    #[cfg(windows)]
+    spellings.push(input.parent().unwrap().join("INPUT.WAV"));
+
+    for output in spellings {
+        let result = run_owned(&restore_arguments(&input, &output));
+        assert_eq!(result.status.code(), Some(1), "output {}", output.display());
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            stderr.contains("the output is the input"),
+            "the message must refuse the identity: {stderr}"
+        );
+        assert!(
+            stderr.to_lowercase().contains("input.wav"),
+            "the message must name the path: {stderr}"
+        );
+        assert_eq!(
+            fs::read(&input).expect("read the input"),
+            bytes,
+            "the input must not change for {}",
+            output.display()
+        );
+    }
+    assert_eq!(
+        directory_entries(dir.path()),
+        vec!["input.wav".to_string()],
+        "no temporary file may remain"
+    );
+}
+
+/// Fix round 1, B1: the CLI must refuse an existing output and leave it unchanged.
+#[test]
+fn restore_rejects_an_existing_output() {
+    let dir = TempDir::new("melomae-cli-output-exists");
+    let input = dir.join("input.wav");
+    let output = dir.join("output.flac");
+    let input_bytes = b"the input audio bytes".to_vec();
+    let output_bytes = b"KEEP THIS OUTPUT".to_vec();
+    fs::write(&input, &input_bytes).expect("write the input");
+    fs::write(&output, &output_bytes).expect("write the output");
+
+    let result = run_owned(&restore_arguments(&input, &output));
+
+    assert_eq!(result.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("the output already exists"),
+        "the message must refuse an existing output: {stderr}"
+    );
+    assert!(
+        stderr.contains("output.flac"),
+        "the message must name the output: {stderr}"
+    );
+    assert_eq!(
+        fs::read(&output).expect("read the output"),
+        output_bytes,
+        "the existing output must stay byte-identical"
+    );
+    assert_eq!(
+        fs::read(&input).expect("read the input"),
+        input_bytes,
+        "the input must not change"
+    );
+    assert_eq!(
+        directory_entries(dir.path()),
+        vec!["input.wav".to_string(), "output.flac".to_string()],
+        "no temporary file may remain"
+    );
+}
+
+/// Fix round 1, B1: a missing output parent exits 1, names the folder, and creates nothing.
+#[test]
+fn restore_rejects_a_missing_output_parent() {
+    let dir = TempDir::new("melomae-cli-parent");
+    let input = dir.join("input.wav");
+    let input_bytes = b"the input audio bytes".to_vec();
+    fs::write(&input, &input_bytes).expect("write the input");
+    let missing = dir.path().join("absent");
+    let output = missing.join("output.flac");
+
+    let result = run_owned(&restore_arguments(&input, &output));
+
+    assert_eq!(result.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("the output directory does not exist"),
+        "the message must name the missing folder: {stderr}"
+    );
+    assert!(
+        stderr.contains("absent"),
+        "the message must name the folder: {stderr}"
+    );
+    assert!(
+        !missing.exists(),
+        "the CLI must not create the output folder"
+    );
+    assert_eq!(
+        fs::read(&input).expect("read the input"),
+        input_bytes,
+        "the input must not change"
+    );
 }

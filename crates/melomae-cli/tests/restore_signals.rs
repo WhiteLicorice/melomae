@@ -11,6 +11,7 @@ mod common;
 mod setup;
 
 use std::env;
+use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -130,6 +131,105 @@ fn send_interrupt(child: &Child) {
     assert_eq!(killed, 0, "kill(SIGINT) must reach the child");
 }
 
+/// Send a second interrupt, ignoring the result. The child may have exited already.
+#[cfg(windows)]
+fn send_interrupt_quietly(child: &Child) {
+    use windows_sys::Win32::System::Console::{GenerateConsoleCtrlEvent, CTRL_BREAK_EVENT};
+    unsafe {
+        GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child.id());
+    }
+}
+
+/// Send a second interrupt, ignoring the result. The child may have exited already.
+#[cfg(unix)]
+fn send_interrupt_quietly(child: &Child) {
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGINT);
+    }
+}
+
+/// Spawn `restore` in its own process group, with stderr piped.
+fn spawn_restore(input: &Path, output: &Path) -> Child {
+    let mut command = Command::new(cli());
+    command
+        .arg("restore")
+        .arg(input)
+        .arg(output)
+        .args(["--format", "flac", "--device", "cpu"])
+        .arg("--model")
+        .arg(model_path())
+        .arg("--onnxruntime")
+        .arg(setup::ort_library())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    spawn_in_new_group(&mut command);
+    command.spawn().expect("spawn the CLI")
+}
+
+/// Read the child's stderr line by line on a background thread.
+fn drain_stderr(child: &mut Child) -> mpsc::Receiver<String> {
+    let stderr = child.stderr.take().expect("the stderr pipe");
+    let (sender, receiver) = mpsc::channel::<String>();
+    thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    receiver
+}
+
+/// Wait for the first stderr line that `predicate` accepts.
+fn wait_for_line(
+    receiver: &mpsc::Receiver<String>,
+    timeout: Duration,
+    predicate: impl Fn(&str) -> bool,
+) -> String {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(line) if predicate(&line) => return line,
+            Ok(_) => continue,
+            Err(_) => break,
+        }
+    }
+    panic!("the expected stderr line never arrived");
+}
+
+/// Wait for the encoder's temporary file for the output to appear, and return its name.
+fn wait_for_temporary(dir: &Path, prefix: &str, timeout: Duration) -> String {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let found = fs::read_dir(dir).ok().and_then(|entries| {
+            entries.flatten().find_map(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                (name.starts_with(prefix) && name.ends_with(".tmp")).then_some(name)
+            })
+        });
+        if let Some(name) = found {
+            return name;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    panic!(
+        "the encoder temporary file never appeared in {}",
+        dir.display()
+    );
+}
+
+/// The file names in `dir` other than the input.
+fn stray_files(dir: &Path, input_name: &str) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .expect("read the temporary directory")
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name != input_name)
+        .collect();
+    names.sort();
+    names
+}
+
 #[test]
 fn e2e_restore_cancel_exits_130_and_leaves_no_output() {
     require_lfs(&model_path());
@@ -203,5 +303,88 @@ fn e2e_restore_cancel_exits_130_and_leaves_no_output() {
     assert!(
         stray.is_empty(),
         "a cancelled restore leaves no temporary file: {stray:?}"
+    );
+}
+
+/// Fix round 1, B2: an early interrupt, right after the first stderr line and before any chunk
+/// line, must still exit 130 with no output and no temporary file. The handler is installed before
+/// decode and the model load, so this window is covered.
+#[test]
+fn e2e_restore_early_cancel_exits_130_and_leaves_no_output() {
+    require_lfs(&model_path());
+    let dir = TempDir::new("melomae-cli-early-cancel");
+    let input = build_tiled_input(&dir, 3, "input_18s.wav");
+    let output = dir.join("restored.flac");
+
+    let mut child = spawn_restore(&input, &output);
+    let receiver = drain_stderr(&mut child);
+
+    // The start line is printed before the model runs, so the interrupt lands before inference.
+    let first = wait_for_line(&receiver, Duration::from_secs(300), |line| {
+        line.starts_with("melomae-cli:")
+    });
+    assert!(
+        !first.starts_with("chunk "),
+        "the start line must precede any chunk line: {first}"
+    );
+
+    send_interrupt(&child);
+    send_interrupt_quietly(&child);
+
+    let status = wait_with_timeout(&mut child, Duration::from_secs(120))
+        .expect("the CLI must exit after the interrupt");
+
+    assert_eq!(status.code(), Some(130), "a cancelled restore exits 130");
+    assert!(
+        !output.exists(),
+        "a cancelled restore leaves no output file"
+    );
+    assert_eq!(
+        stray_files(dir.path(), "input_18s.wav"),
+        Vec::<String>::new(),
+        "a cancelled restore leaves no temporary file"
+    );
+}
+
+/// Fix round 1, B2: an interrupt during the FLAC encode must abort the publication. The test waits
+/// until the encoder's temporary file exists, then interrupts. The final rename is the completion
+/// boundary, so a cancel before it exits 130 and leaves no output and no temporary file. A second
+/// interrupt does nothing harmful.
+#[test]
+fn e2e_restore_encode_cancel_exits_130_and_leaves_no_output() {
+    require_lfs(&model_path());
+    let dir = TempDir::new("melomae-cli-encode-cancel");
+    let input = build_tiled_input(&dir, 3, "input_18s.wav");
+    let output = dir.join("restored.flac");
+
+    let mut child = spawn_restore(&input, &output);
+    let _receiver = drain_stderr(&mut child);
+
+    // Wait until the encoder has created its temporary file, so the interrupt lands mid-encode.
+    let temporary = wait_for_temporary(
+        dir.path(),
+        ".restored.flac.melomae-",
+        Duration::from_secs(300),
+    );
+    assert!(
+        temporary.starts_with(".restored.flac.melomae-"),
+        "the temporary file is the encoder's: {temporary}"
+    );
+
+    send_interrupt(&child);
+    send_interrupt_quietly(&child);
+
+    let status = wait_with_timeout(&mut child, Duration::from_secs(120))
+        .expect("the CLI must exit after the interrupt");
+
+    assert_eq!(status.code(), Some(130), "a cancelled restore exits 130");
+    assert!(
+        !output.exists(),
+        "a cancelled encode must not publish the output"
+    );
+    assert_eq!(
+        stray_files(dir.path(), "input_18s.wav"),
+        Vec::<String>::new(),
+        "a cancelled encode leaves no temporary file"
     );
 }

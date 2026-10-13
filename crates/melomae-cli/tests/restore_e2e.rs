@@ -20,9 +20,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use melomae_core::decode::decode_file;
-use melomae_core::inference::SAMPLE_RATE;
+use melomae_core::inference::{chunk_starts, SAMPLE_RATE};
 
-use common::{max_abs_diff, write_wav_f32};
+use common::{max_abs_diff, sine, write_wav_f32};
 use setup::TempDir;
 
 /// The SRS §12.1 parity limit on the maximum absolute difference.
@@ -179,8 +179,9 @@ fn assert_success(output: &Output) {
     );
 }
 
-/// Build `tiles` copies of the committed 6 s parity input as one WAV in the temp dir.
-fn build_tiled_input(dir: &TempDir, tiles: usize, name: &str) -> PathBuf {
+/// Build `tiles` copies of the committed 6 s parity input, keeping the first `channels` channels,
+/// as one WAV in the temp dir.
+fn build_tiled_input(dir: &TempDir, tiles: usize, channels: usize, name: &str) -> PathBuf {
     let source_path = repo_root()
         .join("tools")
         .join("parity")
@@ -189,6 +190,7 @@ fn build_tiled_input(dir: &TempDir, tiles: usize, name: &str) -> PathBuf {
     let tiled: Vec<Vec<f32>> = source
         .channels()
         .iter()
+        .take(channels)
         .map(|channel| {
             let mut out = Vec::with_capacity(channel.len() * tiles);
             for _ in 0..tiles {
@@ -216,30 +218,13 @@ fn rmse(a: &[f32], b: &[f32]) -> f64 {
     (sum / a.len() as f64).sqrt()
 }
 
-/// One parsed progress line.
-#[derive(Debug, PartialEq, Eq)]
-struct Progress {
-    chunk: usize,
-    chunks: usize,
-    channel: usize,
-    channels: usize,
-}
-
-/// Parse a `chunk n/m channel c/C elapsed S.Ss` line.
-fn parse_progress(line: &str) -> Progress {
+/// Parse a `chunk n/m elapsed S.Ss` line into `(n, m)`.
+fn parse_progress(line: &str) -> (usize, usize) {
     let parts: Vec<&str> = line.split_whitespace().collect();
     assert_eq!(parts[0], "chunk", "progress line: {line}");
-    assert_eq!(parts[2], "channel", "progress line: {line}");
-    assert_eq!(parts[4], "elapsed", "progress line: {line}");
-    assert!(parts[5].ends_with('s'), "progress line: {line}");
-    let (chunk, chunks) = split_pair(parts[1]);
-    let (channel, channels) = split_pair(parts[3]);
-    Progress {
-        chunk,
-        chunks,
-        channel,
-        channels,
-    }
+    assert_eq!(parts[2], "elapsed", "progress line: {line}");
+    assert!(parts[3].ends_with('s'), "progress line: {line}");
+    split_pair(parts[1])
 }
 
 /// Split a `a/b` progress token.
@@ -285,7 +270,7 @@ fn e2e_restore_wav_matches_golden() {
 
     let _engine = engine_lock();
     let dir = TempDir::new("melomae-cli-golden");
-    let input = build_tiled_input(&dir, 3, "input_18s.wav");
+    let input = build_tiled_input(&dir, 3, 2, "input_18s.wav");
     let output = dir.join("restored.wav");
 
     let result = run_restore(&input, &output, "wav");
@@ -319,56 +304,70 @@ fn e2e_restore_wav_matches_golden() {
     }
 }
 
-/// Scope item 2: one progress line per chunk per channel, on stderr, naming the chunk
-/// index, the chunk count, and the elapsed time.
+/// Scope item 2: one progress line per temporal chunk, on stderr, naming the chunk index, the
+/// chunk count, and the elapsed time. Stdout stays empty.
 ///
-/// The input is 36 s, longer than the 30 s maximum chunk (task 05 scope 4), so the run
-/// always has more than one chunk and the per-chunk reporting is exercised whatever
-/// memory the machine has.
+/// The input is 36 s, longer than the 30 s maximum chunk (task 05 scope 4), so the run always has
+/// more than one chunk whatever the memory. The expected line count is computed from the decoded
+/// frame count, the chosen chunk, and the core `chunk_starts` helper, not read from the output's
+/// own denominator. Both a mono and a stereo input are checked.
 #[test]
 fn e2e_restore_reports_one_progress_line_per_chunk() {
     require_lfs(&model_path());
     let _engine = engine_lock();
-    let dir = TempDir::new("melomae-cli-progress");
-    let input = build_tiled_input(&dir, 6, "input_36s.wav");
-    let output = dir.join("restored.flac");
+    for (channels, name) in [(1usize, "input_36s_mono.wav"), (2, "input_36s_stereo.wav")] {
+        let dir = TempDir::new("melomae-cli-progress");
+        let input = build_tiled_input(&dir, 6, channels, name);
+        let output = dir.join("restored.flac");
 
-    let result = run_restore(&input, &output, "flac");
-    assert_success(&result);
-
-    let stderr = String::from_utf8_lossy(&result.stderr);
-    let lines: Vec<&str> = stderr
-        .lines()
-        .filter(|line| line.starts_with("chunk "))
-        .collect();
-    assert!(
-        !lines.is_empty(),
-        "the restore must report progress: {stderr}"
-    );
-
-    let first = parse_progress(lines[0]);
-    assert!(
-        first.chunks > 1,
-        "the fixture must take more than one chunk: {first:?}"
-    );
-    assert_eq!(first.channels, 2, "the input is stereo");
-    assert_eq!(
-        lines.len(),
-        first.chunks * first.channels,
-        "one line per chunk per channel: {stderr}"
-    );
-    for channel in 1..=first.channels {
-        let seen: Vec<usize> = lines
-            .iter()
-            .map(|line| parse_progress(line))
-            .filter(|progress| progress.channel == channel)
-            .map(|progress| progress.chunk)
-            .collect();
-        assert_eq!(
-            seen,
-            (1..=first.chunks).collect::<Vec<_>>(),
-            "channel {channel} must report each chunk once, in order"
+        let result = run_restore(&input, &output, "flac");
+        assert_success(&result);
+        assert!(
+            result.stdout.is_empty(),
+            "progress goes to stderr, so stdout stays empty: {:?}",
+            String::from_utf8_lossy(&result.stdout)
         );
+
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        let lines: Vec<&str> = stderr
+            .lines()
+            .filter(|line| line.starts_with("chunk "))
+            .collect();
+        assert!(
+            !lines.is_empty(),
+            "the restore must report progress: {stderr}"
+        );
+
+        // The chosen chunk, from the budget line, and the expected chunk count.
+        let budget = stderr
+            .lines()
+            .find(|line| line.contains("chunk budget"))
+            .unwrap_or_default();
+        let chunk_seconds =
+            number_after(budget, "chunk budget: chunk ").expect("the budget line names the chunk");
+        let decoded = decode_file(&input).expect("decode the input");
+        let chunk = (chunk_seconds as f64 * f64::from(SAMPLE_RATE)).round_ties_even() as usize;
+        let overlap = SAMPLE_RATE as usize;
+        let expected = chunk_starts(decoded.frames(), chunk, overlap).len();
+        assert!(
+            expected > 1,
+            "the fixture must take more than one chunk: {channels} channels"
+        );
+
+        assert_eq!(
+            lines.len(),
+            expected,
+            "one line per temporal chunk for {channels} channels: {stderr}"
+        );
+        let indices: Vec<usize> = lines.iter().map(|line| parse_progress(line).0).collect();
+        assert_eq!(
+            indices,
+            (1..=expected).collect::<Vec<_>>(),
+            "the chunk index must run 1..=m in order for {channels} channels: {stderr}"
+        );
+        for line in &lines {
+            assert_eq!(parse_progress(line).1, expected, "{line}");
+        }
     }
 }
 
@@ -385,7 +384,7 @@ fn e2e_restore_four_minutes_on_cpu() {
     require_lfs(&model_path());
     let _engine = engine_lock();
     let dir = TempDir::new("melomae-cli-four-minute");
-    let input = build_tiled_input(&dir, 40, "input_240s.wav");
+    let input = build_tiled_input(&dir, 40, 2, "input_240s.wav");
     let output = dir.join("restored.flac");
 
     let mut command = Command::new(cli());
@@ -454,5 +453,54 @@ fn e2e_restore_four_minutes_on_cpu() {
         decoded.frames().abs_diff(expected) <= (SAMPLE_RATE as usize / 1000) * 10,
         "the four-minute output length {} is off {expected}",
         decoded.frames()
+    );
+}
+
+/// Fix round 1, B4: SRS §7.4 requires the job to report how many samples it clamped. An over-range
+/// input restores with samples outside +/-1.0, so the FLAC run must print the actual count on
+/// stderr. The WAV output carries the restored floats exactly, so its count is the reference for
+/// the FLAC count; neither format writes to stdout.
+#[test]
+fn e2e_restore_reports_the_flac_clamp_count() {
+    require_lfs(&model_path());
+    let _engine = engine_lock();
+    let dir = TempDir::new("melomae-cli-clamp");
+    // A finite tone at amplitude 3.0, so the model output exceeds +/-1.0 after restoration.
+    let frames = SAMPLE_RATE as usize;
+    let input = dir.join("loud.wav");
+    write_wav_f32(
+        &input,
+        SAMPLE_RATE,
+        &[sine(SAMPLE_RATE, 220.0, 3.0, frames)],
+    );
+
+    // The WAV output keeps the floats, so count the restored samples outside +/-1.0.
+    let wav = dir.join("restored.wav");
+    let wav_result = run_restore(&input, &wav, "wav");
+    assert_success(&wav_result);
+    assert!(wav_result.stdout.is_empty(), "stdout stays empty");
+    let restored = decode_file(&wav).expect("decode the restored WAV");
+    let outside = restored
+        .channels()
+        .iter()
+        .flat_map(|channel| channel.iter())
+        .filter(|sample| !(-1.0..=1.0).contains(&**sample))
+        .count();
+    assert!(
+        outside > 0,
+        "the loud fixture must restore samples outside +/-1.0"
+    );
+
+    // The FLAC run reports the same count.
+    let flac = dir.join("restored.flac");
+    let flac_result = run_restore(&input, &flac, "flac");
+    assert_success(&flac_result);
+    assert!(flac_result.stdout.is_empty(), "stdout stays empty");
+    let stderr = String::from_utf8_lossy(&flac_result.stderr);
+    let reported = number_after(&stderr, "clamped ")
+        .unwrap_or_else(|| panic!("the FLAC run must report the clamped sample count: {stderr}"));
+    assert_eq!(
+        reported as usize, outside,
+        "the FLAC clamp count must be the actual count: {stderr}"
     );
 }
