@@ -2915,3 +2915,128 @@ fn the_write_check_reports_a_value_the_wav_writer_drops() {
         "the write check must name the movement field, got {report:?}"
     );
 }
+
+// --- Fix round 6: distinct custom descriptions must not merge ---------------------------------
+
+/// The values a native reader reports for one custom description. A WAV `TXXX` frame is keyed by
+/// `TXXX:<description>`; a Vorbis comment keeps the description as its key.
+fn custom_values(path: &Path, kind: NativeKind, description: &str) -> Vec<String> {
+    let id3_key = format!("TXXX:{description}");
+    let native_key = if matches!(kind, NativeKind::Wav | NativeKind::Mp3) {
+        id3_key.as_str()
+    } else {
+        description
+    };
+    native_field_values(path, kind, description, native_key)
+}
+
+/// Fix round 6, finding 1: four custom descriptions that differ only by case, underscore, hyphen, or
+/// space stay four distinct fields. The writer grouped `TXXX` values with a comparison that ignored
+/// case and punctuation, so a WAV output merged all four into one `TXXX:MY_FIELD` frame and the
+/// other three identities disappeared. Each output must keep every description with its exact single
+/// value. An independent native WAV control proves the target can hold all four.
+#[test]
+fn distinct_custom_descriptions_remain_distinct() {
+    let fields = [
+        ("MY_FIELD", "underscore"),
+        ("MYFIELD", "plain"),
+        ("MY-FIELD", "hyphen"),
+        ("MY FIELD", "space"),
+    ];
+    let fixtures = TagFixtures::build();
+    let source = fixtures.path(Source::Flac);
+    for (name, value) in fields {
+        append_vorbis(&source, name, value);
+    }
+    for (name, value) in fields {
+        assert_eq!(
+            custom_values(&source, NativeKind::Flac, name),
+            vec![value.to_string()],
+            "the source must hold {name}={value:?} exactly once"
+        );
+    }
+
+    let tags = read_tags(&source).expect("read the source tags");
+    let audio = decode_file(&source).expect("decode the source");
+    let outputs = setup::TempDir::new("melomae-distinct-custom");
+
+    let mut failures = Vec::new();
+    for (format, kind, extension) in OUTPUTS {
+        let target = outputs.join(&format!("out.{extension}"));
+        let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags))
+            .unwrap_or_else(|error| panic!("-> {extension}: {error}"));
+        for (name, value) in fields {
+            let got = custom_values(&target, kind, name);
+            if got != vec![value.to_string()] {
+                failures.push(format!(
+                    "{format:?}: {name} want=[{value:?}] got={got:?} report={report:?}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+
+    // The target can hold the four descriptions: write them into a WAV with a native writer.
+    let control = outputs.join("control.wav");
+    encode(&audio, &control, OutputFormat::Wav).expect("encode the control WAV");
+    let mut id3 = Id3v2Tag::new();
+    for (name, value) in fields {
+        id3.insert_user_text(name.to_string(), value.to_string());
+    }
+    id3.save_to_path(&control, WriteOptions::default())
+        .expect("write the control tag");
+    for (name, value) in fields {
+        assert_eq!(
+            custom_values(&control, NativeKind::Wav, name),
+            vec![value.to_string()],
+            "the WAV target must hold {name}={value:?} on its own"
+        );
+    }
+}
+
+/// Fix round 6, finding 1: ordinary custom names that differ only by case stay distinct, and a
+/// custom name the target cannot hold is named. `MixedName` and `mixedname` must survive as two
+/// `TXXX` descriptions in a WAV output, and the invalid Vorbis keys `BAD=KEY` and `café` must be
+/// reported for a Vorbis target.
+#[test]
+fn case_and_invalid_custom_names_are_kept_or_reported() {
+    let dir = setup::TempDir::new("melomae-custom-case");
+    let source = dir.join("s.mp3");
+    write_id3(&source, |tag| {
+        for (name, value) in [
+            ("MixedName", "one"),
+            ("mixedname", "two"),
+            ("BAD=KEY", "three"),
+            ("café", "four"),
+        ] {
+            tag.insert_user_text(name.to_string(), value.to_string());
+        }
+    });
+
+    let tags = read_tags(&source).expect("read the source tags");
+    let audio = decode_file(&source).expect("decode the source");
+    let outputs = setup::TempDir::new("melomae-custom-case-out");
+    for (format, kind, extension) in OUTPUTS {
+        let target = outputs.join(&format!("out.{extension}"));
+        let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags))
+            .unwrap_or_else(|error| panic!("-> {extension}: {error}"));
+        assert_eq!(
+            custom_values(&target, kind, "MixedName"),
+            vec!["one".to_string()],
+            "{extension}: MixedName must keep its own value"
+        );
+        assert_eq!(
+            custom_values(&target, kind, "mixedname"),
+            vec!["two".to_string()],
+            "{extension}: mixedname must keep its own value"
+        );
+        if format == OutputFormat::Wav {
+            assert!(report.is_empty(), "WAV: got {report:?}");
+        } else {
+            assert!(
+                report.contains(&"BAD=KEY".to_string()) && report.contains(&"café".to_string()),
+                "{extension}: the invalid Vorbis keys must be named, got {report:?}"
+            );
+        }
+    }
+}
