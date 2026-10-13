@@ -209,5 +209,10 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 | B-034 | [Verify a cached cargo-deny binary again](backlog/B-034-verify-a-cached-cargo-deny-binary-again.md) | TODO | 26 |
 | B-035 | [Tie the nested-notice exclusions to the resolved features](backlog/B-035-tie-the-nested-notice-exclusions-to-the-resolved-features.md) | TODO | 26 |
 | B-036 | [Label GPL license files by their real version](backlog/B-036-label-gpl-license-files-by-their-real-version.md) | TODO | 26 |
+| B-037 | [Cover every cancel stage in the restore tests](backlog/B-037-cover-every-cancel-stage-in-the-restore-tests.md) | TODO | 07 |
+| B-038 | [Cover awkward names, multichannel input, and Opus output in the CLI tests](backlog/B-038-cover-awkward-names-multichannel-input-and-opus-output-in-the-cli-tests.md) | TODO | 07 |
+| B-039 | [Compare the restore against the golden at the reference settings](backlog/B-039-compare-the-restore-against-the-golden-at-the-reference-settings.md) | TODO | 07 |
+| B-040 | [Publish the restore output exclusively](backlog/B-040-publish-the-restore-output-exclusively.md) | TODO | 07 |
+| B-041 | [Report a failed temporary file removal](backlog/B-041-report-a-failed-temporary-file-removal.md) | TODO | 06 |
 
 Each backlog record states why it does not block the MVP. Each record also states its promotion condition.
