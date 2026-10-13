@@ -1,6 +1,6 @@
 # 08 — Add GPU execution with CPU fallback
 
-**Status:** TODO
+**Status:** DONE
 **Phase:** 1 — Restoration engine
 **Depends on:** 07
 **SRS:** §6
@@ -23,7 +23,8 @@ channel), peak device VRAM **5124 MiB**; Rust CPU RTF **2.621** (6 s stereo, 1.3
 channel-second); WSL2 CUDA (Python, `onnxruntime-gpu` 1.28.0) RTF **0.9836**. Parity within SRS
 §12.1: GPU vs CPU max abs ≤ 6.81e-4 / RMSE ≤ 6.30e-5; GPU vs golden max abs ≤ 7.23e-4 / RMSE ≤
 6.76e-5. The NVIDIA wheels are proprietary; the license review is a separate MVP task. Gate
-`pnpm verify`: TBD.
+`pnpm verify` at `ffc90ee`: exit 0 — board 77 records, tasks unittest 9 passed, Vitest 1 passed,
+cargo test 244 passed / 5 ignored (36 suites), pytest 45 passed, in 23m15s.
 
 ## Goal
 
@@ -64,7 +65,7 @@ Run the tests. They fail because the fallback does not exist.
 - [x] The Windows GPU path is measured and within parity.
 - [x] The CPU fallback is proven by the injected-failure test.
 - [x] The new tests failed first for the expected reason.
-- [ ] `pnpm verify` passes.
+- [x] `pnpm verify` passes.
 
 ## Verify
 
