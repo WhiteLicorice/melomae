@@ -46,10 +46,10 @@ fn restore_help_lists_the_options() {
     assert!(text.contains("flac"), "flac is the default format: {text}");
 }
 
-/// `--device gpu` is task 08. Until then it is a clap usage error, exit code 2.
+/// An unknown device is a clap usage error, exit code 2.
 #[test]
 fn restore_rejects_an_unknown_device_with_a_usage_error() {
-    let output = run(&["restore", "in.wav", "out.flac", "--device", "gpu"]);
+    let output = run(&["restore", "in.wav", "out.flac", "--device", "tpu"]);
     assert_eq!(
         output.status.code(),
         Some(2),
@@ -57,8 +57,25 @@ fn restore_rejects_an_unknown_device_with_a_usage_error() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("gpu"),
+        stderr.contains("tpu"),
         "the error must name the value: {stderr}"
+    );
+}
+
+/// Task 08 makes `gpu` a valid device, so it is not a clap usage error. The run then
+/// exits 1 for the missing model, which is past parsing.
+#[test]
+fn restore_accepts_the_gpu_device() {
+    let output = run(&["restore", "in.wav", "out.flac", "--device", "gpu"]);
+    assert_ne!(
+        output.status.code(),
+        Some(2),
+        "gpu must not be a clap usage error"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("invalid value"),
+        "gpu must be accepted: {stderr}"
     );
 }
 
