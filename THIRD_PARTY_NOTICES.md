@@ -254,6 +254,7 @@ full, below.
 | ndk | 0.9.0 | MIT OR Apache-2.0 |
 | ndk-sys | 0.6.0+11769913 | MIT OR Apache-2.0 |
 | new_debug_unreachable | 1.0.6 | MIT |
+| ntapi | 0.4.3 | Apache-2.0 OR MIT |
 | num-complex | 0.4.6 | MIT OR Apache-2.0 |
 | num-conv | 0.2.2 | MIT OR Apache-2.0 |
 | num-integer | 0.1.47 | MIT OR Apache-2.0 |
@@ -272,6 +273,7 @@ full, below.
 | objc2-encode | 4.1.0 | MIT |
 | objc2-exception-helper | 0.1.1 | Zlib OR Apache-2.0 OR MIT |
 | objc2-foundation | 0.3.2 | MIT |
+| objc2-io-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | objc2-io-surface | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | objc2-quartz-core | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | objc2-ui-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
@@ -399,6 +401,7 @@ full, below.
 | syn | 3.0.6 | MIT OR Apache-2.0 |
 | sync_wrapper | 1.0.2 | Apache-2.0 |
 | synstructure | 0.14.0 | MIT |
+| sysinfo | 0.39.6 | MIT |
 | system-deps | 6.2.2 | MIT OR Apache-2.0 |
 | tao | 0.35.3 | Apache-2.0 |
 | tao-macros | 0.1.4 | MIT OR Apache-2.0 |
@@ -491,15 +494,19 @@ full, below.
 | window-vibrancy | 0.6.0 | Apache-2.0 OR MIT |
 | windowfunctions | 0.1.1 | MIT |
 | windows | 0.61.3 | MIT OR Apache-2.0 |
+| windows | 0.62.2 | MIT OR Apache-2.0 |
 | windows-collections | 0.2.0 | MIT OR Apache-2.0 |
+| windows-collections | 0.3.2 | MIT OR Apache-2.0 |
 | windows-core | 0.61.2 | MIT OR Apache-2.0 |
 | windows-core | 0.62.2 | MIT OR Apache-2.0 |
 | windows-future | 0.2.1 | MIT OR Apache-2.0 |
+| windows-future | 0.3.2 | MIT OR Apache-2.0 |
 | windows-implement | 0.60.2 | MIT OR Apache-2.0 |
 | windows-interface | 0.59.3 | MIT OR Apache-2.0 |
 | windows-link | 0.1.3 | MIT OR Apache-2.0 |
 | windows-link | 0.2.1 | MIT OR Apache-2.0 |
 | windows-numerics | 0.2.0 | MIT OR Apache-2.0 |
+| windows-numerics | 0.3.1 | MIT OR Apache-2.0 |
 | windows-result | 0.3.4 | MIT OR Apache-2.0 |
 | windows-result | 0.4.1 | MIT OR Apache-2.0 |
 | windows-strings | 0.4.2 | MIT OR Apache-2.0 |
@@ -510,6 +517,7 @@ full, below.
 | windows-targets | 0.42.2 | MIT OR Apache-2.0 |
 | windows-targets | 0.52.6 | MIT OR Apache-2.0 |
 | windows-threading | 0.1.0 | MIT OR Apache-2.0 |
+| windows-threading | 0.2.1 | MIT OR Apache-2.0 |
 | windows-version | 0.1.7 | MIT OR Apache-2.0 |
 | windows_aarch64_gnullvm | 0.42.2 | MIT OR Apache-2.0 |
 | windows_aarch64_gnullvm | 0.52.6 | MIT OR Apache-2.0 |
@@ -8772,15 +8780,19 @@ Apache License
 Components covered by this text:
 
 - windows 0.61.3 (`license-apache-2.0`)
+- windows 0.62.2 (`license-apache-2.0`)
 - windows-collections 0.2.0 (`license-apache-2.0`)
+- windows-collections 0.3.2 (`license-apache-2.0`)
 - windows-core 0.61.2 (`license-apache-2.0`)
 - windows-core 0.62.2 (`license-apache-2.0`)
 - windows-future 0.2.1 (`license-apache-2.0`)
+- windows-future 0.3.2 (`license-apache-2.0`)
 - windows-implement 0.60.2 (`license-apache-2.0`)
 - windows-interface 0.59.3 (`license-apache-2.0`)
 - windows-link 0.1.3 (`license-apache-2.0`)
 - windows-link 0.2.1 (`license-apache-2.0`)
 - windows-numerics 0.2.0 (`license-apache-2.0`)
+- windows-numerics 0.3.1 (`license-apache-2.0`)
 - windows-result 0.3.4 (`license-apache-2.0`)
 - windows-result 0.4.1 (`license-apache-2.0`)
 - windows-strings 0.4.2 (`license-apache-2.0`)
@@ -8791,6 +8803,7 @@ Components covered by this text:
 - windows-targets 0.42.2 (`license-apache-2.0`)
 - windows-targets 0.52.6 (`license-apache-2.0`)
 - windows-threading 0.1.0 (`license-apache-2.0`)
+- windows-threading 0.2.1 (`license-apache-2.0`)
 - windows-version 0.1.7 (`license-apache-2.0`)
 - windows_aarch64_gnullvm 0.42.2 (`license-apache-2.0`)
 - windows_aarch64_gnullvm 0.52.6 (`license-apache-2.0`)
@@ -9651,6 +9664,7 @@ Components covered by this text:
 - audioadapter-sample 5.2.0 (`LICENSE-APACHE`)
 - embed_plist 1.2.2 (`LICENSE-APACHE`)
 - flacenc 0.5.1 (`LICENSE`)
+- ntapi 0.4.3 (`LICENSE-APACHE`)
 - ort 2.0.0-rc.13 (`LICENSE-APACHE`)
 - ort-sys 2.0.0-rc.13 (`LICENSE-APACHE`)
 - serialize-to-javascript 0.1.2 (`LICENSE-APACHE`)
@@ -18821,15 +18835,19 @@ DEALINGS IN THE SOFTWARE.
 Components covered by this text:
 
 - windows 0.61.3 (`license-mit`)
+- windows 0.62.2 (`license-mit`)
 - windows-collections 0.2.0 (`license-mit`)
+- windows-collections 0.3.2 (`license-mit`)
 - windows-core 0.61.2 (`license-mit`)
 - windows-core 0.62.2 (`license-mit`)
 - windows-future 0.2.1 (`license-mit`)
+- windows-future 0.3.2 (`license-mit`)
 - windows-implement 0.60.2 (`license-mit`)
 - windows-interface 0.59.3 (`license-mit`)
 - windows-link 0.1.3 (`license-mit`)
 - windows-link 0.2.1 (`license-mit`)
 - windows-numerics 0.2.0 (`license-mit`)
+- windows-numerics 0.3.1 (`license-mit`)
 - windows-result 0.3.4 (`license-mit`)
 - windows-result 0.4.1 (`license-mit`)
 - windows-strings 0.4.2 (`license-mit`)
@@ -18840,6 +18858,7 @@ Components covered by this text:
 - windows-targets 0.42.2 (`license-mit`)
 - windows-targets 0.52.6 (`license-mit`)
 - windows-threading 0.1.0 (`license-mit`)
+- windows-threading 0.2.1 (`license-mit`)
 - windows-version 0.1.7 (`license-mit`)
 - windows_aarch64_gnullvm 0.42.2 (`license-mit`)
 - windows_aarch64_gnullvm 0.52.6 (`license-mit`)
@@ -19822,6 +19841,7 @@ Components that ship no license file, covered by the standard text:
 - objc2-encode 4.1.0
 - objc2-exception-helper 0.1.1
 - objc2-foundation 0.3.2
+- objc2-io-kit 0.3.2
 - objc2-io-surface 0.3.2
 - objc2-quartz-core 0.3.2
 - objc2-ui-kit 0.3.2
@@ -20272,6 +20292,32 @@ SOFTWARE.
 
 Components covered by this text:
 
+- ntapi 0.4.3 (`LICENSE-MIT`)
+
+```
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"),to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE 
+SOFTWARE.
+```
+
+### MIT
+
+Components covered by this text:
+
 - ctor 0.8.0 (`LICENSE-MIT`)
 - ctor-proc-macro 0.0.7 (`LICENSE-MIT`)
 - dtor 0.3.0 (`LICENSE-MIT`)
@@ -20552,6 +20598,36 @@ The MIT License (MIT)
 Copyright (c) 2015 Danny Guo
 Copyright (c) 2016 Titus Wormer <tituswormer@gmail.com>
 Copyright (c) 2018 Akash Kurdekar
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### MIT
+
+Components covered by this text:
+
+- sysinfo 0.39.6 (`LICENSE`)
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2015 Guillaume Gomez
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
