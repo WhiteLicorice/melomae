@@ -198,25 +198,19 @@ fn wait_for_line(
     panic!("the expected stderr line never arrived");
 }
 
-/// Wait for the encoder's temporary file for the output to appear, and return its name.
-fn wait_for_temporary(dir: &Path, prefix: &str, timeout: Duration) -> String {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        let found = fs::read_dir(dir).ok().and_then(|entries| {
-            entries.flatten().find_map(|entry| {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                (name.starts_with(prefix) && name.ends_with(".tmp")).then_some(name)
-            })
-        });
-        if let Some(name) = found {
-            return name;
-        }
-        thread::sleep(Duration::from_millis(5));
-    }
-    panic!(
-        "the encoder temporary file never appeared in {}",
-        dir.display()
-    );
+/// The encoder's temporary file for `prefix`, when it exists.
+fn find_temporary(dir: &Path, prefix: &str) -> Option<String> {
+    fs::read_dir(dir).ok().and_then(|entries| {
+        entries.flatten().find_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            (name.starts_with(prefix) && name.ends_with(".tmp")).then_some(name)
+        })
+    })
+}
+
+/// Every stderr line received so far.
+fn received_lines(receiver: &mpsc::Receiver<String>) -> Vec<String> {
+    receiver.try_iter().collect()
 }
 
 /// The file names in `dir` other than the input.
@@ -331,10 +325,16 @@ fn e2e_restore_early_cancel_exits_130_and_leaves_no_output() {
     send_interrupt(&child);
     send_interrupt_quietly(&child);
 
-    let status = wait_with_timeout(&mut child, Duration::from_secs(120))
-        .expect("the CLI must exit after the interrupt");
+    let status = wait_with_timeout(&mut child, Duration::from_secs(120));
+    let stderr = received_lines(&receiver);
+    let status = status
+        .unwrap_or_else(|| panic!("the CLI must exit after the interrupt; stderr: {stderr:?}"));
 
-    assert_eq!(status.code(), Some(130), "a cancelled restore exits 130");
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "a cancelled restore exits 130; stderr: {stderr:?}"
+    );
     assert!(
         !output.exists(),
         "a cancelled restore leaves no output file"
@@ -358,14 +358,24 @@ fn e2e_restore_encode_cancel_exits_130_and_leaves_no_output() {
     let output = dir.join("restored.flac");
 
     let mut child = spawn_restore(&input, &output);
-    let _receiver = drain_stderr(&mut child);
+    let receiver = drain_stderr(&mut child);
 
     // Wait until the encoder has created its temporary file, so the interrupt lands mid-encode.
-    let temporary = wait_for_temporary(
-        dir.path(),
-        ".restored.flac.melomae-",
-        Duration::from_secs(300),
-    );
+    // Stop early if the child exits first, so a failure reports the exit and its stderr.
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let mut temporary = None;
+    while Instant::now() < deadline {
+        if let Some(status) = child.try_wait().expect("the CLI") {
+            let stderr = received_lines(&receiver);
+            panic!("the CLI exited with {status} before the encode began; stderr: {stderr:?}");
+        }
+        if let Some(name) = find_temporary(dir.path(), ".restored.flac.melomae-") {
+            temporary = Some(name);
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    let temporary = temporary.expect("the encoder temporary file must appear during the encode");
     assert!(
         temporary.starts_with(".restored.flac.melomae-"),
         "the temporary file is the encoder's: {temporary}"
@@ -374,10 +384,16 @@ fn e2e_restore_encode_cancel_exits_130_and_leaves_no_output() {
     send_interrupt(&child);
     send_interrupt_quietly(&child);
 
-    let status = wait_with_timeout(&mut child, Duration::from_secs(120))
-        .expect("the CLI must exit after the interrupt");
+    let status = wait_with_timeout(&mut child, Duration::from_secs(120));
+    let stderr = received_lines(&receiver);
+    let status = status
+        .unwrap_or_else(|| panic!("the CLI must exit after the interrupt; stderr: {stderr:?}"));
 
-    assert_eq!(status.code(), Some(130), "a cancelled restore exits 130");
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "a cancelled restore exits 130; stderr: {stderr:?}"
+    );
     assert!(
         !output.exists(),
         "a cancelled encode must not publish the output"
