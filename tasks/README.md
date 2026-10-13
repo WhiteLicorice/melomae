@@ -102,7 +102,7 @@ The validator rejects any other status value.
 | 05 | [Size chunks from free memory](mvp/05-size-chunks-from-free-memory.md) | DONE | 04 |
 | 06 | [Encode FLAC, WAV, and Opus output](mvp/06-encode-flac-wav-and-opus-output.md) | DONE | 03 |
 | 07 | [Add the restore command-line entry](mvp/07-add-the-restore-command-line-entry.md) | DONE | 04, 05, 06, 33 |
-| 08 | [Add GPU execution with CPU fallback](mvp/08-add-gpu-execution-with-cpu-fallback.md) | TODO | 07 |
+| 08 | [Add GPU execution with CPU fallback](mvp/08-add-gpu-execution-with-cpu-fallback.md) | DONE | 07 |
 | 36 | [Fix the restore output when a chunk is shorter than the input](mvp/36-fix-the-restore-output-when-a-chunk-is-shorter-than-the-input.md) | TODO | 04, 05, 07 |
 | 37 | [Download the CUDA runtime on demand](mvp/37-download-the-cuda-runtime-on-demand.md) | TODO | 08, 38 |
 | 33 | [Load ONNX Runtime dynamically for the glibc 2.35 baseline](mvp/33-load-onnx-runtime-dynamically-on-linux.md) | DONE | 04 |
