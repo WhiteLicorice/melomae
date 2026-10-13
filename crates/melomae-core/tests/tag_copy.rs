@@ -1579,6 +1579,10 @@ const FOREIGN_UFID_OWNER: &str = "http://example.com";
 const WEBSITE_URL: &str = "https://example.com/artist";
 /// A license URL.
 const LICENSE_URL: &str = "https://example.com/license";
+/// The first license URL of a multi-value license field.
+const LICENSE_URL_A: &str = "https://example.com/license-a";
+/// The second license URL of a multi-value license field.
+const LICENSE_URL_B: &str = "https://example.com/license-b";
 /// A license value that is not a URL.
 const LICENSE_TEXT: &str = "All rights reserved";
 /// The value the Group A/B frames carry.
@@ -1624,6 +1628,57 @@ fn has_url(tag: &Id3v2Tag, id: &str, content: &str) -> bool {
     tag.iter().any(
         |frame| matches!(frame, Frame::Url(url) if url.id().as_str() == id && url.url() == content),
     )
+}
+
+/// The license values a native reader reports, one per value. A Vorbis `LICENSE` comment is one
+/// value each. An ID3v2.4 `TXXX:LICENSE` frame carries several values null-separated in one frame,
+/// so it is split here; a single URL is the `WCOP` URL frame, which is read directly.
+fn native_license_values(path: &Path, kind: NativeKind) -> Vec<String> {
+    let mut values = Vec::new();
+    for (key, value) in native_pairs(path, kind) {
+        if key.eq_ignore_ascii_case("LICENSE") || key.eq_ignore_ascii_case("TXXX:LICENSE") {
+            values.extend(value.split('\0').map(str::to_string));
+        }
+    }
+    if kind == NativeKind::Wav {
+        for frame in wav_id3(path).iter() {
+            if let Frame::Url(url) = frame {
+                if url.id().as_str() == "WCOP" {
+                    values.push(url.url().to_string());
+                }
+            }
+        }
+    }
+    values
+}
+
+/// Copy one source into all three outputs and check that the license row keeps exactly `expected`
+/// values in every output, read back with a native reader. The source's own native values are
+/// checked first, so the test does not check the copier against itself.
+fn assert_license_round_trip(source: &Path, kind: NativeKind, expected: &[&str], dir: &str) {
+    let mut want: Vec<String> = expected.iter().map(|value| (*value).to_string()).collect();
+    want.sort();
+    let mut found = native_license_values(source, kind);
+    found.sort();
+    assert_eq!(
+        found, want,
+        "the source must hold the literal license values, got {found:?}"
+    );
+
+    let tags = read_tags(source).expect("read the license source");
+    let audio = decode_file(source).expect("decode the license source");
+    let outputs = setup::TempDir::new(dir);
+    for (format, out_kind, extension) in OUTPUTS {
+        let target = outputs.join(&format!("license.{extension}"));
+        let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags))
+            .unwrap_or_else(|error| panic!("-> {extension}: {error}"));
+        let mut got = native_license_values(&target, out_kind);
+        got.sort();
+        assert_eq!(
+            got, want,
+            "-> {extension}: every license value must survive, report={report:?}"
+        );
+    }
 }
 
 /// Ruling on the 10 unclear rows, Group A1: the MusicBrainz `UFID` maps to the Vorbis
@@ -1823,6 +1878,42 @@ fn picard_license_maps_wcop_and_txxx() {
             .contains(&("TXXX:LICENSE".to_string(), LICENSE_TEXT.to_string())),
         "a non-URL license must keep the TXXX:LICENSE description"
     );
+}
+
+/// Finding 1 of re-review 4: the license row keeps every value. A Vorbis source with two URL-only
+/// license values and with a URL plus a text value must copy all of them into FLAC, Opus, and WAV.
+/// Two or more values become one `TXXX:LICENSE` frame whose values are null-separated, so the native
+/// reader is checked for the exact values and their multiplicity.
+#[test]
+fn picard_license_keeps_every_value_from_vorbis() {
+    for values in [
+        [LICENSE_URL_A, LICENSE_URL_B],
+        [LICENSE_URL_A, LICENSE_TEXT],
+    ] {
+        let fixtures = TagFixtures::build();
+        let source = fixtures.path(Source::Flac);
+        for value in &values {
+            append_vorbis(&source, "LICENSE", value);
+        }
+        assert_license_round_trip(&source, NativeKind::Flac, &values, "melomae-license-vorbis");
+    }
+}
+
+/// Finding 1 of re-review 4: the same, from an MP3 source whose `TXXX:LICENSE` frame carries the
+/// values. The reader splits the frame, so both the values and the count must survive a copy.
+#[test]
+fn picard_license_keeps_every_value_from_id3() {
+    for values in [
+        [LICENSE_URL_A, LICENSE_URL_B],
+        [LICENSE_URL_A, LICENSE_TEXT],
+    ] {
+        let dir = setup::TempDir::new("melomae-license-id3");
+        let source = dir.join("license.mp3");
+        write_id3(&source, |tag| {
+            tag.insert_user_text("LICENSE".to_string(), values.join("\0"));
+        });
+        assert_license_round_trip(&source, NativeKind::Mp3, &values, "melomae-license-id3-out");
+    }
 }
 
 /// Group A4: `MVIN` holds `number` or `number/count`, becomes Vorbis `MOVEMENT` and
