@@ -3,3 +3,17 @@ name = "melomae-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+ctrlc = "3.5.2"
+melomae-core = { path = "../melomae-core" }
+
+[dev-dependencies]
+sha2 = "0.10.9"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2.189"
