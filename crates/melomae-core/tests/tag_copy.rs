@@ -16,7 +16,8 @@ use std::path::Path;
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::AudioFile;
 use lofty::id3::v2::{
-    BinaryFrame, Frame, FrameId, Id3v2Tag, TextInformationFrame, UnsynchronizedTextFrame,
+    BinaryFrame, CommentFrame, Frame, FrameId, Id3v2Tag, KeyValueFrame, PopularimeterFrame,
+    TextInformationFrame, UniqueFileIdentifierFrame, UnsynchronizedTextFrame, UrlLinkFrame,
 };
 use lofty::picture::PictureType;
 use lofty::prelude::TagExt;
@@ -1567,6 +1568,613 @@ fn picard_synchronized_lyrics_stay_separate() {
             report.contains(&"SYLT".to_string()),
             "{extension}: the synchronized-lyrics frame must be reported, got {report:?}"
         );
+    }
+}
+
+// --- Fix round 3, part 2: the Group A mappings and the Group B no-loss tests -------------------
+
+/// A `UFID` owner that is not MusicBrainz.
+const FOREIGN_UFID_OWNER: &str = "http://example.com";
+/// A website URL.
+const WEBSITE_URL: &str = "https://example.com/artist";
+/// A license URL.
+const LICENSE_URL: &str = "https://example.com/license";
+/// A license value that is not a URL.
+const LICENSE_TEXT: &str = "All rights reserved";
+/// The value the Group A/B frames carry.
+const FRAME_VALUE: &str = "Audit Value";
+
+/// Read the ID3v2 tag of an MP3 file.
+fn mp3_id3(path: &Path) -> Id3v2Tag {
+    let mut file = std::fs::File::open(path).expect("open the MP3");
+    lofty::mpeg::MpegFile::read_from(&mut file, ParseOptions::new())
+        .expect("read the MP3")
+        .id3v2()
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Read the ID3v2 tag of a WAV file.
+fn wav_id3(path: &Path) -> Id3v2Tag {
+    let mut file = std::fs::File::open(path).expect("open the WAV");
+    lofty::iff::wav::WavFile::read_from(&mut file, ParseOptions::new())
+        .expect("read the WAV")
+        .id3v2()
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// The `(owner, identifier)` of the first `UFID` frame in a tag.
+fn ufid_of(tag: &Id3v2Tag) -> Option<(String, Vec<u8>)> {
+    tag.iter().find_map(|frame| match frame {
+        Frame::UniqueFileIdentifier(ufid) => {
+            Some((ufid.owner.to_string(), ufid.identifier.to_vec()))
+        }
+        _ => None,
+    })
+}
+
+/// The IDs of every frame in a tag.
+fn frame_ids(tag: &Id3v2Tag) -> Vec<String> {
+    tag.iter().map(|frame| frame.id_str().to_string()).collect()
+}
+
+/// Whether a tag holds a URL frame with the given id and content.
+fn has_url(tag: &Id3v2Tag, id: &str, content: &str) -> bool {
+    tag.iter().any(
+        |frame| matches!(frame, Frame::Url(url) if url.id().as_str() == id && url.url() == content),
+    )
+}
+
+/// Ruling on the 10 unclear rows, Group A1: the MusicBrainz `UFID` maps to the Vorbis
+/// `MUSICBRAINZ_TRACKID` key and back. A `UFID` with any other owner is preserved in WAV and named
+/// for a Vorbis target, so it is never silently dropped or renamed.
+#[test]
+fn picard_recording_id_maps_the_musicbrainz_ufid() {
+    let dir = setup::TempDir::new("melomae-picard-ufid");
+
+    let musicbrainz = dir.join("mb.mp3");
+    write_id3(&musicbrainz, |tag| {
+        tag.insert(Frame::UniqueFileIdentifier(UniqueFileIdentifierFrame::new(
+            "http://musicbrainz.org",
+            b"audit-recording-id".to_vec(),
+        )));
+    });
+    assert!(
+        ufid_of(&mp3_id3(&musicbrainz)).is_some_and(|(owner, id)| owner
+            == "http://musicbrainz.org"
+            && id == b"audit-recording-id"),
+        "the fixture must hold the MusicBrainz UFID"
+    );
+    let tags = read_tags(&musicbrainz).expect("read the source tags");
+    let audio = decode_file(&musicbrainz).expect("decode the source");
+    for (format, kind, extension) in [
+        (OutputFormat::Flac, NativeKind::Flac, "flac"),
+        (OutputFormat::Opus, NativeKind::Opus, "opus"),
+    ] {
+        let target = dir.join(&format!("mb.{extension}"));
+        encode_with_tags(&audio, &target, format, Some(&tags)).expect("encode");
+        assert!(
+            native_pairs(&target, kind).contains(&(
+                "MUSICBRAINZ_TRACKID".to_string(),
+                "audit-recording-id".to_string()
+            )),
+            "{extension}: the recording ID must become MUSICBRAINZ_TRACKID"
+        );
+    }
+    let target = dir.join("mb.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        ufid_of(&wav_id3(&target)).is_some_and(
+            |(owner, id)| owner == "http://musicbrainz.org" && id == b"audit-recording-id"
+        ),
+        "the WAV output must keep the MusicBrainz UFID"
+    );
+
+    let foreign = dir.join("foreign.mp3");
+    write_id3(&foreign, |tag| {
+        tag.insert(Frame::UniqueFileIdentifier(UniqueFileIdentifierFrame::new(
+            FOREIGN_UFID_OWNER,
+            b"audit-owner-id".to_vec(),
+        )));
+    });
+    let tags = read_tags(&foreign).expect("read the foreign tags");
+    let audio = decode_file(&foreign).expect("decode the source");
+    for (format, kind, extension) in [
+        (OutputFormat::Flac, NativeKind::Flac, "flac"),
+        (OutputFormat::Opus, NativeKind::Opus, "opus"),
+    ] {
+        let target = dir.join(&format!("foreign.{extension}"));
+        let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags)).expect("encode");
+        assert!(
+            report.contains(&"UFID".to_string()),
+            "{extension}: a foreign UFID must be named, got {report:?}"
+        );
+        assert!(
+            !native_pairs(&target, kind)
+                .iter()
+                .any(|(key, _)| key == "MUSICBRAINZ_TRACKID"),
+            "{extension}: a foreign UFID must not become MUSICBRAINZ_TRACKID"
+        );
+    }
+    let target = dir.join("foreign.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        ufid_of(&wav_id3(&target))
+            .is_some_and(|(owner, id)| owner == FOREIGN_UFID_OWNER && id == b"audit-owner-id"),
+        "the WAV output must keep the foreign UFID unchanged"
+    );
+}
+
+/// Group A2: an ID3 `WOAR` frame maps to Vorbis `WEBSITE` and back, and the WAV output keeps the
+/// `WOAR` frame.
+#[test]
+fn picard_website_maps_the_woar_frame() {
+    let fixtures = TagFixtures::build();
+    let dir = setup::TempDir::new("melomae-picard-website");
+    let path = fixtures.path(Source::Mp3);
+    append_id3(&path, |tag| {
+        tag.insert(Frame::Url(UrlLinkFrame::new(
+            FrameId::Valid("WOAR".into()),
+            WEBSITE_URL,
+        )));
+    });
+    let tags = read_tags(&path).expect("read the source tags");
+    let audio = decode_file(&path).expect("decode the source");
+    for (format, kind, extension) in [
+        (OutputFormat::Flac, NativeKind::Flac, "flac"),
+        (OutputFormat::Opus, NativeKind::Opus, "opus"),
+    ] {
+        let target = dir.join(&format!("website.{extension}"));
+        encode_with_tags(&audio, &target, format, Some(&tags)).expect("encode");
+        assert!(
+            native_pairs(&target, kind).contains(&("WEBSITE".to_string(), WEBSITE_URL.to_string())),
+            "{extension}: WOAR must become the Vorbis WEBSITE key"
+        );
+    }
+    let target = dir.join("website.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        has_url(&wav_id3(&target), "WOAR", WEBSITE_URL),
+        "the WAV output must keep the WOAR frame"
+    );
+
+    // And back: a Vorbis WEBSITE source writes the WOAR frame.
+    let flac = fixtures.path(Source::Flac);
+    append_vorbis(&flac, "WEBSITE", WEBSITE_URL);
+    let tags = read_tags(&flac).expect("read the FLAC tags");
+    let audio = decode_file(&flac).expect("decode the FLAC");
+    let target = dir.join("website-from-vorbis.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        has_url(&wav_id3(&target), "WOAR", WEBSITE_URL),
+        "a Vorbis WEBSITE must write the ID3 WOAR frame"
+    );
+}
+
+/// Group A3: an ID3 `WCOP` frame and an ID3 `TXXX:LICENSE` frame both map to Vorbis `LICENSE`; a
+/// URL license writes `WCOP` in WAV, and a non-URL license keeps the `TXXX:LICENSE` description.
+#[test]
+fn picard_license_maps_wcop_and_txxx() {
+    let fixtures = TagFixtures::build();
+    let dir = setup::TempDir::new("melomae-picard-license");
+
+    let wcop = dir.join("wcop.mp3");
+    write_id3(&wcop, |tag| {
+        tag.insert(Frame::Url(UrlLinkFrame::new(
+            FrameId::Valid("WCOP".into()),
+            LICENSE_URL,
+        )));
+    });
+    let tags = read_tags(&wcop).expect("read the source tags");
+    let audio = decode_file(&wcop).expect("decode the source");
+    for (format, kind, extension) in [
+        (OutputFormat::Flac, NativeKind::Flac, "flac"),
+        (OutputFormat::Opus, NativeKind::Opus, "opus"),
+    ] {
+        let target = dir.join(&format!("wcop.{extension}"));
+        encode_with_tags(&audio, &target, format, Some(&tags)).expect("encode");
+        assert!(
+            native_pairs(&target, kind).contains(&("LICENSE".to_string(), LICENSE_URL.to_string())),
+            "{extension}: WCOP must become the Vorbis LICENSE key"
+        );
+    }
+    let target = dir.join("wcop.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        has_url(&wav_id3(&target), "WCOP", LICENSE_URL),
+        "the WAV output must keep the WCOP frame"
+    );
+
+    // A TXXX:LICENSE source maps to Vorbis LICENSE, and a URL writes WCOP in WAV.
+    let txxx = dir.join("txxx.mp3");
+    write_id3(&txxx, |tag| {
+        tag.insert_user_text("LICENSE".to_string(), LICENSE_URL.to_string());
+    });
+    let tags = read_tags(&txxx).expect("read the TXXX tags");
+    let audio = decode_file(&txxx).expect("decode");
+    for (format, kind, extension) in [
+        (OutputFormat::Flac, NativeKind::Flac, "flac"),
+        (OutputFormat::Opus, NativeKind::Opus, "opus"),
+    ] {
+        let target = dir.join(&format!("txxx.{extension}"));
+        encode_with_tags(&audio, &target, format, Some(&tags)).expect("encode");
+        assert!(
+            native_pairs(&target, kind).contains(&("LICENSE".to_string(), LICENSE_URL.to_string())),
+            "{extension}: TXXX:LICENSE must become the Vorbis LICENSE key"
+        );
+    }
+    let target = dir.join("txxx.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        has_url(&wav_id3(&target), "WCOP", LICENSE_URL),
+        "a URL license must write the WCOP frame in WAV"
+    );
+
+    // A non-URL Vorbis LICENSE keeps the TXXX:LICENSE description.
+    let flac = fixtures.path(Source::Flac);
+    append_vorbis(&flac, "LICENSE", LICENSE_TEXT);
+    let tags = read_tags(&flac).expect("read the FLAC tags");
+    let audio = decode_file(&flac).expect("decode the FLAC");
+    let target = dir.join("text.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        native_pairs(&target, NativeKind::Wav)
+            .contains(&("TXXX:LICENSE".to_string(), LICENSE_TEXT.to_string())),
+        "a non-URL license must keep the TXXX:LICENSE description"
+    );
+}
+
+/// Group A4: `MVIN` holds `number` or `number/count`, becomes Vorbis `MOVEMENT` and
+/// `MOVEMENTTOTAL`, joins back into one `MVIN` in WAV, and a malformed value is reported.
+#[test]
+fn picard_movement_maps_mvin() {
+    let fixtures = TagFixtures::build();
+    let dir = setup::TempDir::new("melomae-picard-movement");
+
+    // `number/count`.
+    let path = fixtures.path(Source::Mp3);
+    append_id3(&path, |tag| {
+        tag.insert(text_frame("MVIN", "2/5"));
+    });
+    let tags = read_tags(&path).expect("read the source tags");
+    let audio = decode_file(&path).expect("decode the source");
+    for (format, kind, extension) in [
+        (OutputFormat::Flac, NativeKind::Flac, "flac"),
+        (OutputFormat::Opus, NativeKind::Opus, "opus"),
+    ] {
+        let target = dir.join(&format!("pair.{extension}"));
+        let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags)).expect("encode");
+        let pairs = native_pairs(&target, kind);
+        assert!(
+            pairs.contains(&("MOVEMENT".to_string(), "2".to_string()))
+                && pairs.contains(&("MOVEMENTTOTAL".to_string(), "5".to_string())),
+            "{extension}: 2/5 must become MOVEMENT=2 and MOVEMENTTOTAL=5, got {pairs:?} report={report:?}"
+        );
+    }
+    let target = dir.join("pair.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        native_pairs(&target, NativeKind::Wav).contains(&("MVIN".to_string(), "2/5".to_string())),
+        "the WAV output must join the movement back into one MVIN=2/5"
+    );
+
+    // A bare number.
+    let bare = dir.join("bare.mp3");
+    write_id3(&bare, |tag| {
+        tag.insert(text_frame("MVIN", "7"));
+    });
+    let tags = read_tags(&bare).expect("read the bare tags");
+    let audio = decode_file(&bare).expect("decode");
+    let target = dir.join("bare.flac");
+    encode_with_tags(&audio, &target, OutputFormat::Flac, Some(&tags)).expect("encode");
+    assert!(native_pairs(&target, NativeKind::Flac)
+        .contains(&("MOVEMENT".to_string(), "7".to_string())));
+    let target = dir.join("bare.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        native_pairs(&target, NativeKind::Wav).contains(&("MVIN".to_string(), "7".to_string())),
+        "a bare movement must stay one MVIN=7"
+    );
+
+    // A malformed value is reported, not guessed.
+    let bad = dir.join("bad.mp3");
+    write_id3(&bad, |tag| {
+        tag.insert(text_frame("MVIN", "not-a-number"));
+    });
+    let tags = read_tags(&bad).expect("read the bad tags");
+    let audio = decode_file(&bad).expect("decode");
+    for (format, kind, extension) in [
+        (OutputFormat::Flac, NativeKind::Flac, "flac"),
+        (OutputFormat::Opus, NativeKind::Opus, "opus"),
+    ] {
+        let target = dir.join(&format!("bad.{extension}"));
+        let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags)).expect("encode");
+        assert!(
+            report.contains(&"MVIN".to_string()),
+            "{extension}: a malformed MVIN must be reported, got {report:?}"
+        );
+        assert!(
+            native_pairs(&target, kind).is_empty(),
+            "{extension}: a malformed MVIN must not be guessed into a Vorbis key"
+        );
+    }
+    let target = dir.join("bad.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        native_pairs(&target, NativeKind::Wav)
+            .contains(&("MVIN".to_string(), "not-a-number".to_string())),
+        "the WAV output must keep the malformed MVIN unchanged"
+    );
+
+    // The reverse: Vorbis MOVEMENT and MOVEMENTTOTAL join back into one MVIN.
+    let flac = fixtures.path(Source::Flac);
+    append_vorbis(&flac, "MOVEMENT", "3");
+    append_vorbis(&flac, "MOVEMENTTOTAL", "9");
+    let tags = read_tags(&flac).expect("read the FLAC tags");
+    let audio = decode_file(&flac).expect("decode the FLAC");
+    let target = dir.join("from-vorbis.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        native_pairs(&target, NativeKind::Wav).contains(&("MVIN".to_string(), "3/9".to_string())),
+        "Vorbis MOVEMENT/MOVEMENTTOTAL must join into one MVIN=3/9"
+    );
+}
+
+/// Group A5: a `COMM` with an empty description maps to Vorbis `COMMENT`; a `COMM` with a
+/// description is preserved in WAV and named for a Vorbis target, never merged into `COMMENT`.
+#[test]
+fn picard_comment_keeps_the_description() {
+    let fixtures = TagFixtures::build();
+    let dir = setup::TempDir::new("melomae-picard-comment");
+
+    let path = fixtures.path(Source::Mp3);
+    append_id3(&path, |tag| {
+        tag.insert(Frame::Comment(CommentFrame::new(
+            TextEncoding::UTF8,
+            *b"eng",
+            "",
+            "Audit comment",
+        )));
+    });
+    let tags = read_tags(&path).expect("read the source tags");
+    let audio = decode_file(&path).expect("decode the source");
+    for (format, kind, extension) in [
+        (OutputFormat::Flac, NativeKind::Flac, "flac"),
+        (OutputFormat::Opus, NativeKind::Opus, "opus"),
+    ] {
+        let target = dir.join(&format!("plain.{extension}"));
+        encode_with_tags(&audio, &target, format, Some(&tags)).expect("encode");
+        assert!(
+            native_pairs(&target, kind)
+                .contains(&("COMMENT".to_string(), "Audit comment".to_string())),
+            "{extension}: an empty-description COMM must become COMMENT"
+        );
+    }
+    let target = dir.join("plain.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        wav_id3(&target)
+            .iter()
+            .any(|frame| matches!(frame, Frame::Comment(comment)
+            if comment.description.is_empty() && comment.content == "Audit comment")),
+        "the WAV output must keep the empty-description COMM"
+    );
+
+    // A described COMM must not merge into COMMENT.
+    let described = dir.join("described.mp3");
+    write_id3(&described, |tag| {
+        tag.insert(Frame::Comment(CommentFrame::new(
+            TextEncoding::UTF8,
+            *b"eng",
+            "Audit",
+            "Audit described comment",
+        )));
+    });
+    let tags = read_tags(&described).expect("read the described tags");
+    let audio = decode_file(&described).expect("decode");
+    for (format, kind, extension) in [
+        (OutputFormat::Flac, NativeKind::Flac, "flac"),
+        (OutputFormat::Opus, NativeKind::Opus, "opus"),
+    ] {
+        let target = dir.join(&format!("described.{extension}"));
+        let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags)).expect("encode");
+        assert!(
+            report.contains(&"COMM:Audit".to_string()),
+            "{extension}: a described COMM must be named, got {report:?}"
+        );
+        assert!(
+            !native_pairs(&target, kind)
+                .iter()
+                .any(|(key, _)| key == "COMMENT"),
+            "{extension}: a described COMM must not merge into COMMENT"
+        );
+    }
+    let target = dir.join("described.wav");
+    encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+    assert!(
+        wav_id3(&target)
+            .iter()
+            .any(|frame| matches!(frame, Frame::Comment(comment)
+            if comment.description == "Audit" && comment.content == "Audit described comment")),
+        "the WAV output must keep the described COMM unchanged"
+    );
+}
+
+/// The Group B rows, each with the ID3 frame that carries it, the Picard Vorbis key it maps to (or
+/// `None` when the Vorbis key is parameterized), and the name the copier reports when it cannot
+/// write the field.
+struct GroupBRow {
+    label: &'static str,
+    frame_id: &'static str,
+    vorbis: Option<&'static str>,
+    reported_as: &'static str,
+    value: &'static str,
+}
+
+/// The Group B rows of the ruling: the involved-people roles, the performer credits, the rating,
+/// and the fingerprint.
+const GROUP_B_ROWS: &[GroupBRow] = &[
+    GroupBRow {
+        label: "Producer",
+        frame_id: "TIPL",
+        vorbis: Some("PRODUCER"),
+        reported_as: "PRODUCER",
+        value: "Audit Producer",
+    },
+    GroupBRow {
+        label: "Arranger",
+        frame_id: "TIPL",
+        vorbis: Some("ARRANGER"),
+        reported_as: "ARRANGER",
+        value: "Audit Arranger",
+    },
+    GroupBRow {
+        label: "Engineer",
+        frame_id: "TIPL",
+        vorbis: Some("ENGINEER"),
+        reported_as: "ENGINEER",
+        value: "Audit Engineer",
+    },
+    GroupBRow {
+        label: "Mix-DJ",
+        frame_id: "TIPL",
+        vorbis: Some("DJMIXER"),
+        reported_as: "DJMIXER",
+        value: "Audit Djmixer",
+    },
+    GroupBRow {
+        label: "Mixer",
+        frame_id: "TIPL",
+        vorbis: Some("MIXER"),
+        reported_as: "MIXER",
+        value: "Audit Mixer",
+    },
+    GroupBRow {
+        label: "Performer",
+        frame_id: "TMCL",
+        vorbis: None,
+        reported_as: "TMCL",
+        value: "Audit Performer",
+    },
+    GroupBRow {
+        label: "Rating",
+        frame_id: "POPM",
+        vorbis: None,
+        reported_as: "POPM",
+        value: "Audit Rating",
+    },
+    GroupBRow {
+        label: "Fingerprint",
+        frame_id: "TXXX",
+        vorbis: None,
+        reported_as: "MusicMagic Fingerprint",
+        value: "Audit Fingerprint",
+    },
+];
+
+/// The role each `TIPL` frame carries for the Group B rows.
+fn group_b_frame(row: &GroupBRow) -> Frame<'static> {
+    match row.label {
+        "Producer" | "Arranger" | "Engineer" | "Mix-DJ" | "Mixer" => {
+            let role = match row.label {
+                "Producer" => "producer",
+                "Arranger" => "arranger",
+                "Engineer" => "engineer",
+                "Mix-DJ" => "DJ-mix",
+                _ => "mix",
+            };
+            Frame::KeyValue(KeyValueFrame::new(
+                FrameId::Valid("TIPL".into()),
+                TextEncoding::UTF8,
+                vec![(
+                    std::borrow::Cow::Borrowed(role),
+                    std::borrow::Cow::Owned(row.value.to_string()),
+                )],
+            ))
+        }
+        "Performer" => Frame::KeyValue(KeyValueFrame::new(
+            FrameId::Valid("TMCL".into()),
+            TextEncoding::UTF8,
+            vec![(
+                std::borrow::Cow::Borrowed("instrument"),
+                std::borrow::Cow::Owned(row.value.to_string()),
+            )],
+        )),
+        "Rating" => Frame::Popularimeter(PopularimeterFrame::new("user@example.com", 196, 0)),
+        _ => Frame::UserText(lofty::id3::v2::ExtendedTextFrame::new(
+            TextEncoding::UTF8,
+            "MusicMagic Fingerprint".to_string(),
+            FRAME_VALUE.to_string(),
+        )),
+    }
+}
+
+/// Group B, ruling 1-3: for each role, performer, rating, and fingerprint row, the field is either
+/// preserved exactly under its Picard key in a Vorbis target, or named in the returned list, and a
+/// same-format WAV copy keeps the native frame unchanged.
+#[test]
+fn picard_group_b_rows_are_preserved_or_reported() {
+    for row in GROUP_B_ROWS {
+        let dir = setup::TempDir::new("melomae-picard-groupb");
+        let source = dir.join("s.mp3");
+        let frame = group_b_frame(row);
+        let native_id = frame.id_str().to_string();
+        assert_eq!(native_id, row.frame_id, "{}: the fixture frame", row.label);
+        write_id3(&source, |tag| {
+            tag.insert(frame);
+        });
+        let tags = read_tags(&source).expect("read the source tags");
+        let audio = decode_file(&source).expect("decode the source");
+
+        for (format, kind, extension) in [
+            (OutputFormat::Flac, NativeKind::Flac, "flac"),
+            (OutputFormat::Opus, NativeKind::Opus, "opus"),
+        ] {
+            let target = dir.join(&format!("{}.{extension}", row.label));
+            let (_, report) =
+                encode_with_tags(&audio, &target, format, Some(&tags)).expect("encode");
+            let pairs = native_pairs(&target, kind);
+            let preserved = row
+                .vorbis
+                .is_some_and(|key| pairs.contains(&(key.to_string(), row.value.to_string())));
+            // A reported field must not appear under any other key, so an identity change is never
+            // silent.
+            let reported = report.iter().any(|name| name == row.reported_as);
+            assert!(
+                preserved || reported,
+                "{} -> {extension}: the field must be preserved under its Picard key or named, got pairs={pairs:?} report={report:?}",
+                row.label
+            );
+            if !preserved {
+                assert!(
+                    pairs.iter().all(|(key, _)| {
+                        !key.eq_ignore_ascii_case(row.vorbis.unwrap_or(""))
+                    }),
+                    "{} -> {extension}: a reported field must not appear under another key, got {pairs:?}",
+                    row.label
+                );
+            }
+        }
+
+        let target = dir.join(&format!("{}.wav", row.label));
+        encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode WAV");
+        if native_id == "TXXX" {
+            assert!(
+                wav_id3(&target).iter().any(|frame| matches!(frame, Frame::UserText(text)
+                    if text.description == "MusicMagic Fingerprint" && text.content == FRAME_VALUE)),
+                "{}: the WAV output must keep the native frame unchanged",
+                row.label
+            );
+        } else {
+            assert!(
+                frame_ids(&wav_id3(&target))
+                    .iter()
+                    .any(|id| id == &native_id),
+                "{}: the WAV output must keep the {native_id} frame unchanged",
+                row.label
+            );
+        }
     }
 }
 
