@@ -22,8 +22,9 @@ use melomae_core::inference::chunk_budget::{
     choose_chunk_for_machine, choose_gpu_chunk, FileShape,
 };
 use melomae_core::inference::{
-    load_onnx_backend, restore_on_device, BackendOpener, Device as CoreDevice, Fallback,
-    InferenceError, RestoreBackend, RestoreOutcome, RestoreProgress, RestoreSettings,
+    gpu_provider_available, load_onnx_backend, load_onnx_backend_on_device, restore_on_device,
+    BackendOpener, Device as CoreDevice, Fallback, InferenceError, RestoreBackend, RestoreOutcome,
+    RestoreProgress, RestoreSettings,
 };
 
 /// The output format of a restore (SRS §7).
@@ -92,11 +93,13 @@ impl Device {
     }
 }
 
-/// Opens the CPU restore backend, and the GPU one when a provider is available.
+/// Opens the CPU restore backend, and the CUDA one when a provider is available.
 ///
 /// Both devices load `apollo.onnx` through the caller-given ONNX Runtime library. The GPU path
-/// appends the Windows execution provider chosen in task 08; until it exists, a GPU request has
-/// no provider and reports [`InferenceError::ProviderStart`], so the caller falls back to the CPU.
+/// registers the CUDA execution provider (task 08). It needs the CUDA and cuDNN libraries, which
+/// the GPU ONNX Runtime build keeps beside itself, so the folder of the library is the folder the
+/// engine preloads. When the provider is not there, or fails to start, `open` reports
+/// [`InferenceError::ProviderStart`], so the caller falls back to the CPU (SRS §6.3).
 struct OnnxBackends {
     /// The ONNX Runtime shared library.
     runtime: PathBuf,
@@ -104,9 +107,22 @@ struct OnnxBackends {
     model: PathBuf,
 }
 
+impl OnnxBackends {
+    /// The folder that holds the CUDA and cuDNN libraries, or `None` when the library has no
+    /// parent directory.
+    ///
+    /// The GPU ONNX Runtime build keeps `onnxruntime_providers_cuda.dll` beside `onnxruntime.dll`,
+    /// and `tools/fetch_cuda.py` (and, later, the app's own download) puts the CUDA and cuDNN
+    /// libraries in the same folder. So the parent of the runtime library is the folder to preload.
+    fn cuda_folder(&self) -> Option<&Path> {
+        self.runtime.parent()
+    }
+}
+
 impl BackendOpener for OnnxBackends {
     fn gpu_available(&self) -> bool {
-        false
+        self.cuda_folder()
+            .is_some_and(|folder| gpu_provider_available(&self.runtime, folder))
     }
 
     fn open(&self, device: CoreDevice) -> Result<Box<dyn RestoreBackend>, InferenceError> {
@@ -114,10 +130,24 @@ impl BackendOpener for OnnxBackends {
             CoreDevice::Cpu | CoreDevice::Auto => {
                 Ok(Box::new(load_onnx_backend(&self.runtime, &self.model)?))
             }
-            CoreDevice::Gpu => Err(InferenceError::ProviderStart(
-                "no GPU execution provider is configured; the ONNX Runtime library is the CPU build"
-                    .to_string(),
-            )),
+            CoreDevice::Gpu => {
+                let available = self
+                    .cuda_folder()
+                    .is_some_and(|folder| gpu_provider_available(&self.runtime, folder));
+                if !available {
+                    return Err(InferenceError::ProviderStart(format!(
+                        "the CUDA execution provider is not available from the ONNX Runtime \
+                         library `{}`",
+                        self.runtime.display()
+                    )));
+                }
+                Ok(Box::new(load_onnx_backend_on_device(
+                    &self.runtime,
+                    &self.model,
+                    CoreDevice::Gpu,
+                    self.cuda_folder(),
+                )?))
+            }
         }
     }
 }
@@ -480,8 +510,8 @@ mod tests {
 
     #[test]
     fn the_opener_reports_no_gpu_and_a_gpu_request_fails_to_start() {
-        // Task 08 wires the Windows GPU provider. Until it lands, the opener has no GPU path, so
-        // `auto` runs the CPU and `gpu` must be a fallback, not a panic.
+        // The crate directory holds no CUDA libraries, so the provider is not available: `auto`
+        // runs the CPU and `gpu` must be a fallback, not a panic (SRS §6.3).
         let opener = OnnxBackends {
             runtime: crate_directory().join("Cargo.toml"),
             model: crate_directory().join("Cargo.toml"),

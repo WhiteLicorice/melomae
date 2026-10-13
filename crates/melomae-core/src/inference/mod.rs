@@ -643,6 +643,50 @@ pub fn load_onnx_backend_with_options(
     )?))
 }
 
+/// Whether a CUDA session can start from this runtime and CUDA folder (task 08).
+///
+/// The check preloads the CUDA and cuDNN libraries from `cuda_folder`, loads ONNX
+/// Runtime from `runtime_library`, and asks the runtime whether it carries the CUDA
+/// execution provider. `runtime_library` must be the GPU build: the CPU build does
+/// not advertise CUDA. A `false` result means the cheap checks failed, so
+/// [`Device::Auto`] runs on the CPU. A `true` result means `Auto` may try the GPU;
+/// [`load_onnx_backend_on_device`] then decides for real, and the CPU fallback stays
+/// behind it (SRS §6.3).
+pub fn gpu_provider_available(runtime_library: &Path, cuda_folder: &Path) -> bool {
+    use ort::ep::ExecutionProvider;
+    if onnx::preload_cuda_dylibs(cuda_folder).is_err() {
+        return false;
+    }
+    if init_runtime(runtime_library).is_err() {
+        return false;
+    }
+    ort::ep::CUDA::default().is_available().unwrap_or(false)
+}
+
+/// Load the Apollo ONNX model on a device from a caller-given runtime library.
+///
+/// [`Device::Gpu`] needs `cuda_folder`: the folder that holds the CUDA and cuDNN
+/// libraries, and the GPU ONNX Runtime build whose `onnxruntime_providers_cuda.dll`
+/// uses them. [`Device::Cpu`] and [`Device::Auto`] ignore `cuda_folder`. For the GPU
+/// device the function registers the CUDA execution provider; when it cannot start
+/// it returns [`InferenceError::ProviderStart`], and the caller runs the job again
+/// on the CPU (SRS §6.3). [`init_runtime`] runs first, so the process loads ONNX
+/// Runtime once.
+pub fn load_onnx_backend_on_device(
+    runtime_library: &Path,
+    model: &Path,
+    device: Device,
+    cuda_folder: Option<&Path>,
+) -> Result<OnnxBackend, InferenceError> {
+    init_runtime(runtime_library)?;
+    Ok(ChunkedInference::new(onnx::OnnxModel::load_on_device(
+        model,
+        OnnxOptions::default(),
+        device,
+        cuda_folder,
+    )?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
