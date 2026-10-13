@@ -138,9 +138,86 @@ pub fn predicted_peak_bytes(chunk_seconds: u64) -> u64 {
 ///
 /// Returns `None` when even [`MIN_CHUNK_SECONDS`] does not fit.
 pub fn largest_chunk_within(budget_bytes: u64, reserve_bytes: u64) -> Option<u64> {
+    largest_chunk_within_peak(budget_bytes, reserve_bytes, predicted_peak_bytes)
+}
+
+/// The largest allowed chunk whose reserve and predicted peak fit the budget.
+fn largest_chunk_within_peak(
+    budget_bytes: u64,
+    reserve_bytes: u64,
+    peak_bytes: impl Fn(u64) -> u64,
+) -> Option<u64> {
     (MIN_CHUNK_SECONDS..=MAX_CHUNK_SECONDS)
         .rev()
-        .find(|chunk| reserve_bytes + predicted_peak_bytes(*chunk) <= budget_bytes)
+        .find(|chunk| reserve_bytes + peak_bytes(*chunk) <= budget_bytes)
+}
+
+/// The GPU peak baseline, in bytes (task 08 scope 5).
+///
+/// Fitted on the shipping GPU path measured in `SCRATCH/evidence-08/`. The
+/// measurement loads `apollo.onnx` through the execution provider and measures
+/// the peak VRAM of one padded chunk.
+pub const GPU_PEAK_BASE_BYTES: u64 = 268_435_456;
+
+/// The GPU peak growth per padded channel-second, in bytes (task 08 scope 5).
+///
+/// Fitted on the shipping GPU path measured in `SCRATCH/evidence-08/`.
+pub const GPU_PEAK_BYTES_PER_CHANNEL_SECOND: u64 = 402_653_184;
+
+/// The chunk used when the VRAM cannot be queried (task 08 scope 5).
+///
+/// A caller that cannot read the VRAM budget uses this fixed, conservative
+/// chunk instead of sizing from the free VRAM.
+pub const GPU_FALLBACK_CHUNK_SECONDS: u64 = 6;
+
+/// The predicted peak VRAM of one padded chunk, in bytes.
+///
+/// The model is the same baseline plus a fixed cost per padded channel-second as
+/// the CPU line (task 08 scope 5), fitted on the measured GPU path.
+pub fn predicted_gpu_peak_bytes(chunk_seconds: u64) -> u64 {
+    GPU_PEAK_BASE_BYTES + GPU_PEAK_BYTES_PER_CHANNEL_SECOND * (chunk_seconds + 2 * PAD_SECONDS)
+}
+
+/// Choose a GPU chunk from the VRAM the caller could read.
+///
+/// `vram_bytes` is the free VRAM of the execution device, or `None` when the app
+/// cannot query it (task 08 scope 5). When it is `Some`, the chooser picks the
+/// largest chunk whose whole-file reserve plus predicted GPU peak fits half the
+/// VRAM, the same [`BUDGET_DIVISOR`] the CPU chooser uses. When it is `None`, the
+/// chooser returns the fixed [`GPU_FALLBACK_CHUNK_SECONDS`] chunk, and the result
+/// carries a zero `available_bytes` and `budget_bytes` to mark the unknown VRAM.
+pub fn choose_gpu_chunk(
+    vram_bytes: Option<u64>,
+    shape: FileShape,
+) -> Result<ChunkBudget, InferenceError> {
+    let reserve_bytes = file_reserve_bytes(shape);
+    let Some(vram) = vram_bytes else {
+        let chunk_seconds = GPU_FALLBACK_CHUNK_SECONDS.clamp(MIN_CHUNK_SECONDS, MAX_CHUNK_SECONDS);
+        return Ok(ChunkBudget {
+            chunk_seconds,
+            reserve_bytes,
+            predicted_peak_bytes: predicted_gpu_peak_bytes(chunk_seconds),
+            budget_bytes: 0,
+            available_bytes: 0,
+        });
+    };
+    let budget_bytes = vram / BUDGET_DIVISOR;
+    let Some(chunk_seconds) =
+        largest_chunk_within_peak(budget_bytes, reserve_bytes, predicted_gpu_peak_bytes)
+    else {
+        return Err(InferenceError::InsufficientMemory {
+            needed: reserve_bytes + predicted_gpu_peak_bytes(MIN_CHUNK_SECONDS),
+            budget: budget_bytes,
+            available: vram,
+        });
+    };
+    Ok(ChunkBudget {
+        chunk_seconds,
+        reserve_bytes,
+        predicted_peak_bytes: predicted_gpu_peak_bytes(chunk_seconds),
+        budget_bytes,
+        available_bytes: vram,
+    })
 }
 
 /// Choose a chunk from the memory available at job start.
@@ -407,5 +484,86 @@ mod tests {
                 "chunk {chunk}s: predicted {predicted} against measured {peak} is {error:.4}"
             );
         }
+    }
+
+    /// One mebibyte, as a binary multiple.
+    const MIB: u64 = 1024 * 1024;
+
+    #[test]
+    fn gpu_peak_grows_per_padded_channel_second() {
+        assert_eq!(
+            predicted_gpu_peak_bytes(10) - predicted_gpu_peak_bytes(9),
+            GPU_PEAK_BYTES_PER_CHANNEL_SECOND
+        );
+        assert!(predicted_gpu_peak_bytes(MIN_CHUNK_SECONDS) >= GPU_PEAK_BASE_BYTES);
+    }
+
+    #[test]
+    fn gpu_chunk_is_the_largest_that_fits_the_vram_budget() {
+        let short = shape(60, 2);
+        let vram = 6 * GIB;
+        let budget = choose_gpu_chunk(Some(vram), short).expect("the VRAM must fit a chunk");
+        assert_eq!(budget.available_bytes, vram);
+        assert_eq!(budget.budget_bytes, vram / BUDGET_DIVISOR);
+        assert_eq!(budget.reserve_bytes, file_reserve_bytes(short));
+        assert_eq!(
+            budget.predicted_peak_bytes,
+            predicted_gpu_peak_bytes(budget.chunk_seconds)
+        );
+        assert!(budget.total_bytes() <= budget.budget_bytes);
+        // The next chunk up, when there is one, must not fit.
+        if budget.chunk_seconds < MAX_CHUNK_SECONDS {
+            assert!(
+                budget.reserve_bytes + predicted_gpu_peak_bytes(budget.chunk_seconds + 1)
+                    > budget.budget_bytes,
+                "chunk {} must not fit",
+                budget.chunk_seconds + 1
+            );
+        }
+    }
+
+    #[test]
+    fn gpu_chunk_is_a_fixed_conservative_chunk_when_vram_is_unknown() {
+        let budget =
+            choose_gpu_chunk(None, shape(600, 2)).expect("the fixed fallback must be picked");
+        assert_eq!(budget.chunk_seconds, GPU_FALLBACK_CHUNK_SECONDS);
+        assert_eq!(
+            budget.available_bytes, 0,
+            "zero means the VRAM was not queryable"
+        );
+        assert_eq!(budget.budget_bytes, 0);
+        assert_eq!(
+            budget.predicted_peak_bytes,
+            predicted_gpu_peak_bytes(GPU_FALLBACK_CHUNK_SECONDS)
+        );
+    }
+
+    #[test]
+    fn gpu_chunk_reports_insufficient_vram_below_the_floor() {
+        let short = shape(60, 2);
+        let vram = 256 * MIB;
+        let error = choose_gpu_chunk(Some(vram), short).expect_err("the VRAM must be too small");
+        let message = error.to_string();
+        let needed = file_reserve_bytes(short) + predicted_gpu_peak_bytes(MIN_CHUNK_SECONDS);
+        assert!(
+            message.contains(&needed.to_string()),
+            "the message must name {needed}: {message}"
+        );
+        assert!(
+            message.contains(&vram.to_string()),
+            "the message must name the VRAM {vram}: {message}"
+        );
+    }
+
+    #[test]
+    fn gpu_chunk_never_grows_as_the_vram_shrinks() {
+        let short = shape(60, 2);
+        let big = choose_gpu_chunk(Some(24 * GIB), short)
+            .expect("the big VRAM must fit")
+            .chunk_seconds;
+        let small = choose_gpu_chunk(Some(12 * GIB), short)
+            .expect("the small VRAM must fit")
+            .chunk_seconds;
+        assert!(small <= big, "less VRAM must not allow a larger chunk");
     }
 }

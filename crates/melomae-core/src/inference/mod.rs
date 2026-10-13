@@ -26,12 +26,14 @@
 //! the runtime is up.
 
 pub mod chunk_budget;
+mod device;
 mod onnx;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+pub use device::{restore_on_device, BackendOpener, Device, DeviceReport, Fallback};
 pub use onnx::{runtime_version, OnnxModel, OnnxOptions};
 
 /// The production restore backend: the chunked engine over the ONNX model.
@@ -152,6 +154,10 @@ pub enum InferenceError {
     Io(String),
     /// The ONNX Runtime shared library failed to load.
     Runtime(String),
+    /// The requested execution provider is not present or failed to start.
+    ProviderStart(String),
+    /// The execution provider ran out of memory.
+    OutOfMemory(String),
 }
 
 impl std::fmt::Display for InferenceError {
@@ -184,11 +190,28 @@ impl std::fmt::Display for InferenceError {
             Self::Runtime(reason) => {
                 write!(f, "the ONNX Runtime library failed to load: {reason}")
             }
+            Self::ProviderStart(reason) => {
+                write!(f, "the GPU execution provider failed to start: {reason}")
+            }
+            Self::OutOfMemory(reason) => {
+                write!(f, "the GPU execution provider ran out of memory: {reason}")
+            }
         }
     }
 }
 
 impl std::error::Error for InferenceError {}
+
+impl InferenceError {
+    /// Whether a repeated run can recover on the CPU (SRS §6.3).
+    ///
+    /// A provider that fails to start and a provider that runs out of memory
+    /// are the two failures that [`restore_on_device`] retries on the CPU. Every
+    /// other error is returned unchanged.
+    pub fn falls_back_to_cpu(&self) -> bool {
+        matches!(self, Self::ProviderStart(_) | Self::OutOfMemory(_))
+    }
+}
 
 /// A model that restores one channel of samples.
 ///
