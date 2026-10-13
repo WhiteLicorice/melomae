@@ -138,11 +138,6 @@ impl TagFixtures {
         fixtures
     }
 
-    /// The fixture directory.
-    pub fn dir(&self) -> &Path {
-        self.dir.path()
-    }
-
     /// The path of one fixture source.
     pub fn path(&self, source: Source) -> PathBuf {
         self.dir.join(match source {
