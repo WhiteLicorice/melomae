@@ -1,6 +1,6 @@
 # Third-party notices
 
-Melomae is licensed under the GNU General Public License, version 3 or later
+Melomae is licensed under the GNU General Public License, version 3 only
 (see `LICENSE`). This file lists each third-party component that Melomae
 distributes or links, with the license of the component and the license and
 notice texts that the component ships.
@@ -1311,6 +1311,57 @@ option.
 
 Components covered by this text:
 
+- utf8_iter 1.0.4 (`COPYRIGHT`)
+
+```
+Copyright Mozilla Foundation
+
+Licensed under the Apache License (Version 2.0), or the MIT license,
+(the "Licenses") at your option. You may not use this file except in
+compliance with one of the Licenses. You may obtain copies of the
+Licenses at:
+
+   https://www.apache.org/licenses/LICENSE-2.0
+   https://opensource.org/licenses/MIT
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the Licenses is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the Licenses for the specific language governing permissions and
+limitations under the Licenses.
+
+--
+
+Test code is dedicated to the Public Domain when so designated (see
+the individual files for PD/CC0-dedicated sections).
+
+--
+
+The implementation for Utf8CharIndices was adapted from the
+CharIndices implementation of the Rust standard library at revision
+ab32548539ec38a939c1b58599249f3b54130026
+(https://github.com/rust-lang/rust/blob/ab32548539ec38a939c1b58599249f3b54130026/library/core/src/str/iter.rs).
+
+Excerpt from https://github.com/rust-lang/rust/blob/ab32548539ec38a939c1b58599249f3b54130026/COPYRIGHT ,
+which refers to
+https://github.com/rust-lang/rust/blob/ab32548539ec38a939c1b58599249f3b54130026/LICENSE-APACHE
+and
+https://github.com/rust-lang/rust/blob/ab32548539ec38a939c1b58599249f3b54130026/LICENSE-MIT
+:
+
+For full authorship information, see the version control history or
+https://thanks.rust-lang.org
+
+Except as otherwise noted (below and/or in individual files), Rust is
+licensed under the Apache License, Version 2.0 <LICENSE-APACHE> or
+<http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+<LICENSE-MIT> or <http://opensource.org/licenses/MIT>, at your option.
+```
+
+### License text
+
+Components covered by this text:
+
 - dunce 1.0.5 (`LICENSE`)
 
 ```
@@ -1450,6 +1501,36 @@ Timothy Terriberry (tterribe@xiph.org)
 Karsten Vandborg Sorensen (karsten.vandborg.sorensen@skype.net)
 Soren Skak Jensen (ssjensen@gn.com)
 Gregory Maxwell (greg@xiph.org)
+```
+
+### License text
+
+Components covered by this text:
+
+- unicode-segmentation 1.13.3 (`COPYRIGHT`)
+
+```
+Licensed under the Apache License, Version 2.0
+<LICENSE-APACHE or
+http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+license <LICENSE-MIT or http://opensource.org/licenses/MIT>,
+at your option. All files in the project carrying such
+notice may not be copied, modified, or distributed except
+according to those terms.
+```
+
+### License text
+
+Components covered by this text:
+
+- core-graphics 0.25.0 (`COPYRIGHT`)
+
+```
+Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+<LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+option. All files in the project carrying such notice may not be
+copied, modified, or distributed except according to those terms.
 ```
 
 ### License text
@@ -1974,6 +2055,513 @@ version 3.53.2) carries this blessing in place of a legal notice:
         May you share freely, never taking more than you give.
 
 Source: the bundled amalgamation and https://www.sqlite.org/copyright.html
+```
+
+### License text
+
+Components covered by this text:
+
+- cesu8 1.1.0 (`COPYRIGHT-RUST.txt`)
+
+```
+Short version for non-lawyers:
+
+The Rust Project is dual-licensed under Apache 2.0 and MIT
+terms.
+
+
+Longer version:
+
+The Rust Project is copyright 2014, The Rust Project
+Developers (given in the file AUTHORS.txt).
+
+Licensed under the Apache License, Version 2.0
+<LICENSE-APACHE or
+http://www.apache.org/licenses/LICENSE-2.0> or the MIT
+license <LICENSE-MIT or http://opensource.org/licenses/MIT>,
+at your option. All files in the project carrying such
+notice may not be copied, modified, or distributed except
+according to those terms.
+
+
+The Rust Project includes packages written by third parties.
+The following third party packages are included, and carry
+their own copyright notices and license terms:
+
+* Two header files that are part of the Valgrind
+  package. These files are found at src/rt/vg/valgrind.h and
+  src/rt/vg/memcheck.h, within this distribution. These files
+  are redistributed under the following terms, as noted in
+  them:
+
+  for src/rt/vg/valgrind.h:
+
+    This file is part of Valgrind, a dynamic binary
+    instrumentation framework.
+
+    Copyright (C) 2000-2010 Julian Seward.  All rights
+    reserved.
+
+    Redistribution and use in source and binary forms, with
+    or without modification, are permitted provided that the
+    following conditions are met:
+
+    1. Redistributions of source code must retain the above
+       copyright notice, this list of conditions and the
+       following disclaimer.
+
+    2. The origin of this software must not be
+       misrepresented; you must not claim that you wrote the
+       original software.  If you use this software in a
+       product, an acknowledgment in the product
+       documentation would be appreciated but is not
+       required.
+
+    3. Altered source versions must be plainly marked as
+       such, and must not be misrepresented as being the
+       original software.
+
+    4. The name of the author may not be used to endorse or
+       promote products derived from this software without
+       specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND
+    ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+    AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  IN
+    NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
+    INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+    CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+    USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+    CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+    CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+    USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+    OF SUCH DAMAGE.
+
+  for src/rt/vg/memcheck.h:
+
+    This file is part of MemCheck, a heavyweight Valgrind
+    tool for detecting memory errors.
+
+    Copyright (C) 2000-2010 Julian Seward.  All rights
+    reserved.
+
+    Redistribution and use in source and binary forms, with
+    or without modification, are permitted provided that the
+    following conditions are met:
+
+    1. Redistributions of source code must retain the above
+       copyright notice, this list of conditions and the
+       following disclaimer.
+
+    2. The origin of this software must not be
+       misrepresented; you must not claim that you wrote the
+       original software.  If you use this software in a
+       product, an acknowledgment in the product
+       documentation would be appreciated but is not
+       required.
+
+    3. Altered source versions must be plainly marked as
+       such, and must not be misrepresented as being the
+       original software.
+
+    4. The name of the author may not be used to endorse or
+       promote products derived from this software without
+       specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND
+    ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+    AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  IN
+    NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
+    INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+    CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+    USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+    CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+    CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+    USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+    OF SUCH DAMAGE.
+
+* The auxiliary file src/etc/pkg/modpath.iss contains a
+  library routine compiled, by Inno Setup, into the Windows
+  installer binary. This file is licensed under the LGPL,
+  version 3, but, in our legal interpretation, this does not
+  affect the aggregate "collected work" license of the Rust
+  distribution (MIT/ASL2) nor any other components of it. We
+  believe that the terms governing distribution of the
+  binary Windows installer built from modpath.iss are
+  therefore LGPL, but not the terms governing distribution
+  of any of the files installed by such an installer (such
+  as the Rust compiler or runtime libraries themselves).
+
+* The src/rt/miniz.c file, carrying an implementation of
+  RFC1950/RFC1951 DEFLATE, by Rich Geldreich
+  <richgel99@gmail.com>. All uses of this file are
+  permitted by the embedded "unlicense" notice
+  (effectively: public domain with warranty disclaimer).
+
+* LLVM. Code for this package is found in src/llvm.
+
+    Copyright (c) 2003-2013 University of Illinois at
+    Urbana-Champaign.  All rights reserved.
+
+    Developed by:
+
+        LLVM Team
+
+        University of Illinois at Urbana-Champaign
+
+        http://llvm.org
+
+    Permission is hereby granted, free of charge, to any
+    person obtaining a copy of this software and associated
+    documentation files (the "Software"), to deal with the
+    Software without restriction, including without
+    limitation the rights to use, copy, modify, merge,
+    publish, distribute, sublicense, and/or sell copies of
+    the Software, and to permit persons to whom the Software
+    is furnished to do so, subject to the following
+    conditions:
+
+        * Redistributions of source code must retain the
+          above copyright notice, this list of conditions
+          and the following disclaimers.
+
+        * Redistributions in binary form must reproduce the
+          above copyright notice, this list of conditions
+          and the following disclaimers in the documentation
+          and/or other materials provided with the
+          distribution.
+
+        * Neither the names of the LLVM Team, University of
+          Illinois at Urbana-Champaign, nor the names of its
+          contributors may be used to endorse or promote
+          products derived from this Software without
+          specific prior written permission.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+    ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+    TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+    PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT
+    SHALL THE CONTRIBUTORS OR COPYRIGHT HOLDERS BE LIABLE
+    FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+    ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+    OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+    OTHER DEALINGS WITH THE SOFTWARE.
+
+* Additional libraries included in LLVM carry separate
+  BSD-compatible licenses. See src/llvm/LICENSE.txt for
+  details.
+
+* compiler-rt, in src/compiler-rt is dual licensed under
+  LLVM's license and MIT:
+
+    Copyright (c) 2009-2014 by the contributors listed in
+    CREDITS.TXT
+
+    All rights reserved.
+
+    Developed by:
+
+        LLVM Team
+
+        University of Illinois at Urbana-Champaign
+
+        http://llvm.org
+
+    Permission is hereby granted, free of charge, to any
+    person obtaining a copy of this software and associated
+    documentation files (the "Software"), to deal with the
+    Software without restriction, including without
+    limitation the rights to use, copy, modify, merge,
+    publish, distribute, sublicense, and/or sell copies of
+    the Software, and to permit persons to whom the Software
+    is furnished to do so, subject to the following
+    conditions:
+
+        * Redistributions of source code must retain the
+          above copyright notice, this list of conditions
+          and the following disclaimers.
+
+        * Redistributions in binary form must reproduce the
+          above copyright notice, this list of conditions
+          and the following disclaimers in the documentation
+          and/or other materials provided with the
+          distribution.
+
+        * Neither the names of the LLVM Team, University of
+          Illinois at Urbana-Champaign, nor the names of its
+          contributors may be used to endorse or promote
+          products derived from this Software without
+          specific prior written permission.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+    ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+    TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+    PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT
+    SHALL THE CONTRIBUTORS OR COPYRIGHT HOLDERS BE LIABLE
+    FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+    ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+    OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+    OTHER DEALINGS WITH THE SOFTWARE.
+
+    ========================================================
+
+    Copyright (c) 2009-2014 by the contributors listed in
+    CREDITS.TXT
+
+    Permission is hereby granted, free of charge, to any
+    person obtaining a copy of this software and associated
+    documentation files (the "Software"), to deal in the
+    Software without restriction, including without
+    limitation the rights to use, copy, modify, merge,
+    publish, distribute, sublicense, and/or sell copies of
+    the Software, and to permit persons to whom the Software
+    is furnished to do so, subject to the following
+    conditions:
+
+    The above copyright notice and this permission notice
+    shall be included in all copies or substantial portions
+    of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+    ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+    TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+    PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+    SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+    OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+    IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+
+* Portions of the FFI code for interacting with the native ABI
+  is derived from the Clay programming language, which carries
+  the following license.
+
+    Copyright (C) 2008-2010 Tachyon Technologies.
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with
+    or without modification, are permitted provided that the
+    following conditions are met:
+
+    1. Redistributions of source code must retain the above
+       copyright notice, this list of conditions and the
+       following disclaimer.
+
+    2. Redistributions in binary form must reproduce the
+       above copyright notice, this list of conditions and
+       the following disclaimer in the documentation and/or
+       other materials provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESS OR
+    IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+    PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+    DEVELOPERS AND CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+    INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+    CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+    USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+    CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+    CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+    USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+    OF SUCH DAMAGE.
+
+* Hoedown, the markdown parser, under src/rt/hoedown, is
+  licensed as follows.
+
+    Copyright (c) 2008, Natacha Porté
+    Copyright (c) 2011, Vicent Martí
+    Copyright (c) 2013, Devin Torres and the Hoedown authors
+
+    Permission to use, copy, modify, and distribute this
+    software for any purpose with or without fee is hereby
+    granted, provided that the above copyright notice and
+    this permission notice appear in all copies.
+
+    THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR
+    DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE
+    INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+    FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+    SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR
+    ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA
+    OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
+    OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+    CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+* libbacktrace, under src/libbacktrace:
+
+    Copyright (C) 2012-2014 Free Software Foundation, Inc.
+    Written by Ian Lance Taylor, Google.
+
+    Redistribution and use in source and binary forms, with
+    or without modification, are permitted provided that the
+    following conditions are met:
+
+        (1) Redistributions of source code must retain the
+        above copyright notice, this list of conditions and
+        the following disclaimer.
+
+        (2) Redistributions in binary form must reproduce
+        the above copyright notice, this list of conditions
+        and the following disclaimer in the documentation
+        and/or other materials provided with the
+        distribution.
+
+        (3) The name of the author may not be used to
+        endorse or promote products derived from this
+        software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND
+    ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+    AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN
+    NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
+    INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+    CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+    USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+    CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+    CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+    USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+    OF SUCH DAMAGE.  */
+
+* jemalloc, under src/jemalloc:
+
+    Copyright (C) 2002-2014 Jason Evans
+    <jasone@canonware.com>. All rights reserved.
+    Copyright (C) 2007-2012 Mozilla Foundation.
+    All rights reserved.
+    Copyright (C) 2009-2014 Facebook, Inc.
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are met:
+    1. Redistributions of source code must retain the above copyright notice(s),
+       this list of conditions and the following disclaimer.
+    2. Redistributions in binary form must reproduce the above copyright notice(s),
+       this list of conditions and the following disclaimer in the documentation
+       and/or other materials provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER(S)
+    ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES,
+    INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+    MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+    DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT HOLDER(S)
+    BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+    EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+    LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+    HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+    IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+    USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+    OF SUCH DAMAGE.
+
+* Additional copyright may be retained by contributors other
+  than Mozilla, the Rust Project Developers, or the parties
+  enumerated in this file. Such copyright can be determined
+  on a case-by-case basis by examining the author of each
+  portion of a file in the revision-control commit records
+  of the project, or by consulting representative comments
+  claiming copyright ownership for a file.
+
+  For example, the text:
+
+      "Copyright (c) 2011 Google Inc."
+
+  appears in some files, and these files thereby denote
+  that their author and copyright-holder is Google Inc.
+
+  In all such cases, the absence of explicit licensing text
+  indicates that the contributor chose to license their work
+  for distribution under identical terms to those Mozilla
+  has chosen for the collective work, enumerated at the top
+  of this file. The only difference is the retention of
+  copyright itself, held by the contributor.
+```
+
+### License text
+
+Components covered by this text:
+
+- linux-raw-sys 0.12.1 (`COPYRIGHT`)
+
+```
+Short version for non-lawyers:
+
+`linux-raw-sys` is triple-licensed under Apache 2.0 with the LLVM Exception,
+Apache 2.0, and MIT terms.
+
+
+Longer version:
+
+Copyrights in the `linux-raw-sys` project are retained by their contributors.
+No copyright assignment is required to contribute to the `linux-raw-sys`
+project.
+
+Some files include code derived from Rust's `libstd`; see the comments in
+the code for details.
+
+Except as otherwise noted (below and/or in individual files), `linux-raw-sys`
+is licensed under:
+
+ - the Apache License, Version 2.0, with the LLVM Exception
+   <LICENSE-Apache-2.0_WITH_LLVM-exception> or
+   <http://llvm.org/foundation/relicensing/LICENSE.txt>
+ - the Apache License, Version 2.0
+   <LICENSE-APACHE> or
+   <http://www.apache.org/licenses/LICENSE-2.0>,
+ - or the MIT license
+   <LICENSE-MIT> or
+   <http://opensource.org/licenses/MIT>,
+
+at your option.
+```
+
+### License text
+
+Components covered by this text:
+
+- rustix 1.1.5 (`COPYRIGHT`)
+
+```
+Short version for non-lawyers:
+
+`rustix` is triple-licensed under Apache 2.0 with the LLVM Exception,
+Apache 2.0, and MIT terms.
+
+
+Longer version:
+
+Copyrights in the `rustix` project are retained by their contributors.
+No copyright assignment is required to contribute to the `rustix`
+project.
+
+Some files include code derived from Rust's `libstd`; see the comments in
+the code for details.
+
+Except as otherwise noted (below and/or in individual files), `rustix`
+is licensed under:
+
+ - the Apache License, Version 2.0, with the LLVM Exception
+   <LICENSE-Apache-2.0_WITH_LLVM-exception> or
+   <http://llvm.org/foundation/relicensing/LICENSE.txt>
+ - the Apache License, Version 2.0
+   <LICENSE-APACHE> or
+   <http://www.apache.org/licenses/LICENSE-2.0>,
+ - or the MIT license
+   <LICENSE-MIT> or
+   <http://opensource.org/licenses/MIT>,
+
+at your option.
 ```
 
 ### License text
@@ -19819,7 +20407,6 @@ SOFTWARE.
 Components that ship no license file, covered by the standard text:
 
 - block2 0.6.2
-- cesu8 1.1.0
 - crc-catalog 2.5.0
 - defmt-parser 1.0.0
 - dispatch2 0.3.1
@@ -21117,6 +21704,39 @@ FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
 COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+### MIT
+
+Components covered by this text:
+
+- atk 0.18.2 (`COPYRIGHT`)
+- cairo-rs 0.18.5 (`COPYRIGHT`)
+- gdk 0.18.2 (`COPYRIGHT`)
+- gdk-pixbuf 0.18.5 (`COPYRIGHT`)
+- gdkx11 0.18.2 (`COPYRIGHT`)
+- gio 0.18.4 (`COPYRIGHT`)
+- glib 0.18.5 (`COPYRIGHT`)
+- glib-macros 0.18.5 (`COPYRIGHT`)
+- gtk 0.18.2 (`COPYRIGHT`)
+- gtk3-macros 0.18.2 (`COPYRIGHT`)
+- pango 0.18.3 (`COPYRIGHT`)
+
+```
+The gtk-rs Project is licensed under the MIT license, see the LICENSE file or
+<http://opensource.org/licenses/MIT>.
+
+Copyrights in the gtk-rs Project project are retained by their contributors.
+No copyright assignment is required to contribute to the gtk-rs Project
+project.
+
+For full authorship information, see the version control history.
+
+This project provides interoperability with various GNOME libraries but
+doesn't distribute any parts of them. Distributing compiled libraries and
+executables that link to those libraries may be subject to terms of the GNU
+LGPL or other licenses. For more information check the license of each GNOME
+library.
 ```
 
 ### MIT
@@ -22464,6 +23084,72 @@ SPDX-License-Identifier: Unicode-3.0
 
 Portions of ICU4X may have been adapted from ICU4C and/or ICU4J.
 ICU 1.8.1 to ICU 57.1 © 1995-2016 International Business Machines Corporation and others.
+```
+
+### Unicode-3.0
+
+Components covered by this text:
+
+- regex-syntax 0.8.11 (`src/unicode_tables/LICENSE-UNICODE`)
+
+```
+UNICODE, INC. LICENSE AGREEMENT - DATA FILES AND SOFTWARE
+
+Unicode Data Files include all data files under the directories
+http://www.unicode.org/Public/, http://www.unicode.org/reports/,
+http://www.unicode.org/cldr/data/, http://source.icu-project.org/repos/icu/, and
+http://www.unicode.org/utility/trac/browser/.
+
+Unicode Data Files do not include PDF online code charts under the
+directory http://www.unicode.org/Public/.
+
+Software includes any source code published in the Unicode Standard
+or under the directories
+http://www.unicode.org/Public/, http://www.unicode.org/reports/,
+http://www.unicode.org/cldr/data/, http://source.icu-project.org/repos/icu/, and
+http://www.unicode.org/utility/trac/browser/.
+
+NOTICE TO USER: Carefully read the following legal agreement.
+BY DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING UNICODE INC.'S
+DATA FILES ("DATA FILES"), AND/OR SOFTWARE ("SOFTWARE"),
+YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+TERMS AND CONDITIONS OF THIS AGREEMENT.
+IF YOU DO NOT AGREE, DO NOT DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE
+THE DATA FILES OR SOFTWARE.
+
+COPYRIGHT AND PERMISSION NOTICE
+
+Copyright © 1991-2018 Unicode, Inc. All rights reserved.
+Distributed under the Terms of Use in http://www.unicode.org/copyright.html.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Unicode data files and any associated documentation
+(the "Data Files") or Unicode software and any associated documentation
+(the "Software") to deal in the Data Files or Software
+without restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, and/or sell copies of
+the Data Files or Software, and to permit persons to whom the Data Files
+or Software are furnished to do so, provided that either
+(a) this copyright and permission notice appear with all copies
+of the Data Files or Software, or
+(b) this copyright and permission notice appear in associated
+Documentation.
+
+THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT OF THIRD PARTY RIGHTS.
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS
+NOTICE BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL
+DAMAGES, OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE,
+DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THE DATA FILES OR SOFTWARE.
+
+Except as contained in this notice, the name of a copyright holder
+shall not be used in advertising or otherwise to promote the sale,
+use or other dealings in these Data Files or Software without prior
+written authorization of the copyright holder.
 ```
 
 ### Unlicense
