@@ -2,7 +2,7 @@
 # (Stack section I, task 26).
 #
 # The allow list holds each license that the dependency tree uses and that is
-# compatible with the GPL-3.0-or-later distribution of Melomae. Each entry names
+# compatible with the GPL-3.0-only distribution of Melomae. Each entry names
 # its source. No entry has unclear compatibility.
 #
 # The list is not legal advice. The Free Software Foundation (FSF) license list
@@ -47,10 +47,8 @@ allow = [
     # Unicode License v3. FSF: "compatible with all versions of the GNU GPL."
     # https://www.gnu.org/licenses/license-list.html#Unicodev3
     "Unicode-3.0",
-    # The Melomae license. The tree uses it in the workspace crates, which are
-    # private, and it is compatible with itself. Task 35 relicenses the
-    # workspace to GPL-3.0-only; both forms are allowed until it merges.
-    "GPL-3.0-or-later",
+    # The Melomae license. The workspace crates declare it (workspace
+    # `Cargo.toml`); they are private and compatible with themselves.
     "GPL-3.0-only",
 ]
 # Per-crate exceptions. A license that only one crate uses stays here instead of
