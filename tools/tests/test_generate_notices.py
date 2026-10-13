@@ -303,5 +303,130 @@ def test_the_committed_notice_keeps_the_component_copyrights() -> None:
         "Xiph.Org",
         "Microsoft",
         "protocolbuffers/protobuf",
+        "gtk-rs Project",
+        "1991-2018 Unicode",
     ):
         assert expected in text, expected
+
+
+def make_nested_file(directory: Path, relative: str, text: str) -> Path:
+    """A license document in a component subdirectory."""
+    path = directory / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_a_separate_copyright_file_is_kept_with_its_component(tmp_path, monkeypatch) -> None:
+    module = load_module()
+    license_text = MIT_BODY.format(year="2022", holder="Copy Right Authors")
+    copyright_text = "Copyright (c) 2022 Copy Right Authors. All rights reserved."
+    components = [
+        make_component(
+            tmp_path / "zeta",
+            "zeta",
+            "1.0.0",
+            "MIT",
+            {"LICENSE": license_text, "COPYRIGHT": copyright_text},
+        ),
+    ]
+    patch_sources(monkeypatch, module, components, make_runtime(tmp_path / "runtime"))
+
+    output = module.build_notices()
+
+    assert license_text in output
+    assert copyright_text in output
+    assert "zeta 1.0.0" in section_with(output, copyright_text)
+
+
+def test_a_nested_unicode_table_license_is_kept_with_its_component(tmp_path, monkeypatch) -> None:
+    module = load_module()
+    unicode_text = (
+        "UNICODE, INC. LICENSE AGREEMENT - DATA FILES AND SOFTWARE\n\n"
+        "Copyright \u00a9 1991-2018 Unicode, Inc. All rights reserved."
+    )
+    directory = tmp_path / "regexlike"
+    make_component(
+        directory,
+        "regexlike",
+        "0.8.11",
+        "MIT OR Apache-2.0",
+        {"LICENSE-MIT": MIT_BODY.format(year="2014", holder="Rust Project Developers")},
+    )
+    make_nested_file(directory, "src/unicode_tables/LICENSE-UNICODE", unicode_text)
+    components = [
+        {
+            "name": "regexlike",
+            "version": "0.8.11",
+            "license": "MIT OR Apache-2.0",
+            "directory": directory,
+        },
+    ]
+    patch_sources(monkeypatch, module, components, make_runtime(tmp_path / "runtime"))
+
+    output = module.build_notices()
+
+    assert unicode_text in output
+    section = section_with(output, "1991-2018 Unicode")
+    assert "regexlike 0.8.11" in section
+    assert "src/unicode_tables/LICENSE-UNICODE" in section
+
+
+def test_a_copyright_only_component_is_not_called_license_less(tmp_path, monkeypatch) -> None:
+    module = load_module()
+    rust_text = (
+        "The Rust Project is dual-licensed under Apache 2.0 and MIT terms.\n"
+        "Copyright 2014 The Rust Project Developers."
+    )
+    components = [
+        make_component(
+            tmp_path / "cesu",
+            "cesu",
+            "1.1.0",
+            "MIT OR Apache-2.0",
+            {"COPYRIGHT-RUST.txt": rust_text},
+        ),
+    ]
+    patch_sources(monkeypatch, module, components, make_runtime(tmp_path / "runtime"))
+
+    output = module.build_notices()
+
+    assert rust_text in output
+    assert "cesu 1.1.0" in section_with(output, "The Rust Project is dual-licensed")
+    assert "ship no license file" not in output
+
+
+def test_a_nested_license_is_kept_but_test_and_bench_folders_are_excluded(tmp_path, monkeypatch) -> None:
+    module = load_module()
+    components = [
+        make_component(
+            tmp_path / "packed",
+            "packed",
+            "1.0.0",
+            "MIT",
+            {"LICENSE": MIT_BODY.format(year="2020", holder="Packed Authors")},
+        ),
+    ]
+    directory = components[0]["directory"]
+    make_nested_file(directory, "src/vendored/COPYRIGHT", "VENDORED COMMON COPYRIGHT\n")
+    make_nested_file(directory, "tests/LICENSE-FIXTURE", "FIXTURE ONLY NOTICE\n")
+    make_nested_file(directory, "benches/COPYING", "BENCH ONLY COPYING\n")
+    make_nested_file(directory, "examples/LICENSE", "EXAMPLE ONLY LICENSE\n")
+    patch_sources(monkeypatch, module, components, make_runtime(tmp_path / "runtime"))
+
+    output = module.build_notices()
+
+    assert "Packed Authors" in output
+    assert "VENDORED COMMON COPYRIGHT" in output
+    assert "packed 1.0.0" in section_with(output, "VENDORED COMMON COPYRIGHT")
+    assert "src/vendored/COPYRIGHT" in section_with(output, "VENDORED COMMON COPYRIGHT")
+    assert "FIXTURE ONLY NOTICE" not in output
+    assert "BENCH ONLY COPYING" not in output
+    assert "EXAMPLE ONLY LICENSE" not in output
+
+
+def test_the_generated_app_declaration_offers_version_3_only() -> None:
+    module = load_module()
+    text = module.build_notices(rust=[], scripts=[], runtime=[])
+    assert "version 3 only" in text
+    assert "version 3 or later" not in text
