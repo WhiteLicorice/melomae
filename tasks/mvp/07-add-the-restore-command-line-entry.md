@@ -1,12 +1,12 @@
 # 07 — Add the restore command-line entry
 
-**Status:** TODO
+**Status:** IN PROGRESS
 **Phase:** 1 — Restoration engine
 **Depends on:** 04, 05, 06, 33
 **SRS:** §6, §7, §12
 **Stack:** §B
 **Assigned to:** Agent
-**Started:** —
+**Started:** 2026-10-13 — Base commit e429cd4, clean tree, `git lfs pull` in the worktree. Baseline gate at e429cd4 (recorded by the orchestrator): board 69 records, tasks unittest 9 passed, Vitest 1 passed, cargo test 193 passed and 3 ignored, pytest 19 passed. The branch rebased onto `cf899ea` (task 26 merged) before the gate.
 **Outcome:** —
 
 ## Goal
