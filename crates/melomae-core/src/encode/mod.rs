@@ -17,6 +17,7 @@ use std::fmt;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::decode::AudioBuffer;
@@ -54,6 +55,16 @@ pub struct EncodeOutcome {
     /// The number of samples clamped to the +/-1.0 range. WAV and Opus clamp no sample, so this is
     /// zero for those formats.
     pub clamped: usize,
+}
+
+/// The result of an encode that a caller can cancel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncodeResult {
+    /// The stream completed and was renamed into place.
+    Complete(EncodeOutcome),
+    /// The caller cancelled before the final rename. Nothing was published and no temporary file
+    /// remains.
+    Cancelled,
 }
 
 /// An error from encoding an output file.
@@ -99,6 +110,8 @@ impl std::error::Error for EncodeError {}
 enum EncodeFailure {
     /// The output file could not be written.
     Io(std::io::Error),
+    /// The caller cancelled while the stream was being written.
+    Cancelled,
     /// The encoder rejected the input or a parameter.
     Message(String),
 }
@@ -107,6 +120,7 @@ impl fmt::Display for EncodeFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => write!(f, "{error}"),
+            Self::Cancelled => f.write_str("the caller cancelled the encode"),
             Self::Message(reason) => f.write_str(reason),
         }
     }
@@ -114,7 +128,13 @@ impl fmt::Display for EncodeFailure {
 
 impl From<std::io::Error> for EncodeFailure {
     fn from(error: std::io::Error) -> Self {
-        Self::Io(error)
+        // The cancellable writer reports a cancel as a broken pipe. `write_all` retries an
+        // interrupted write, so the cancel must not use `ErrorKind::Interrupted`.
+        if error.kind() == std::io::ErrorKind::BrokenPipe {
+            Self::Cancelled
+        } else {
+            Self::Io(error)
+        }
     }
 }
 
@@ -130,6 +150,9 @@ type WriteResult = Result<EncodeOutcome, EncodeFailure>;
 /// The one sample rate the output formats are defined at. Every input is checked against it.
 pub const INPUT_SAMPLE_RATE: u32 = 44_100;
 
+/// A flag that is never set, for callers that cannot cancel.
+static NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
+
 /// Encode `source` to `target` in the given format.
 ///
 /// The input must hold at least one frame and one channel, must be at [`INPUT_SAMPLE_RATE`], and
@@ -144,6 +167,25 @@ pub fn encode(
     target: &Path,
     format: OutputFormat,
 ) -> Result<EncodeOutcome, EncodeError> {
+    match encode_with_cancel(source, target, format, &NEVER_CANCELLED)? {
+        EncodeResult::Complete(outcome) => Ok(outcome),
+        EncodeResult::Cancelled => unreachable!("the never-cancelled flag cannot be set"),
+    }
+}
+
+/// Encode `source` to `target`, checking `cancel` while the stream is written and once more before
+/// the final rename.
+///
+/// The final rename is the completion boundary. A cancel before it returns
+/// [`EncodeResult::Cancelled`], removes the temporary file, and leaves `target` untouched. A cancel
+/// after it is ignored, so a completed encode can report success. `target` is never written
+/// directly, so an existing file at `target` is only replaced by a completed encode.
+pub fn encode_with_cancel(
+    source: &AudioBuffer,
+    target: &Path,
+    format: OutputFormat,
+    cancel: &AtomicBool,
+) -> Result<EncodeResult, EncodeError> {
     validate(source).map_err(|reason| EncodeError::new(target, reason))?;
 
     if let Some(parent) = target.parent() {
@@ -154,14 +196,27 @@ pub fn encode(
         }
     }
 
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(EncodeResult::Cancelled);
+    }
+
     let temporary = temporary_path(target);
-    let outcome = match write_stream(&temporary, source, format) {
+    let outcome = match write_stream(&temporary, source, format, cancel) {
         Ok(outcome) => outcome,
+        Err(EncodeFailure::Cancelled) => {
+            let _ = fs::remove_file(&temporary);
+            return Ok(EncodeResult::Cancelled);
+        }
         Err(reason) => {
             let _ = fs::remove_file(&temporary);
             return Err(EncodeError::new(target, reason.to_string()));
         }
     };
+
+    if cancel.load(Ordering::Relaxed) {
+        let _ = fs::remove_file(&temporary);
+        return Ok(EncodeResult::Cancelled);
+    }
 
     if let Err(error) = fs::rename(&temporary, target) {
         let _ = fs::remove_file(&temporary);
@@ -170,7 +225,7 @@ pub fn encode(
             format!("rename the completed file into place: {error}"),
         ));
     }
-    Ok(outcome)
+    Ok(EncodeResult::Complete(outcome))
 }
 
 /// Check the input against the output contract, and return the reason for the first problem.
@@ -203,9 +258,17 @@ fn validate(source: &AudioBuffer) -> Result<(), String> {
 }
 
 /// Write one encoded stream to `path`, which must be a temporary file.
-fn write_stream(path: &Path, source: &AudioBuffer, format: OutputFormat) -> WriteResult {
+///
+/// The stream is written through a [`CancellableWriter`], so a cancel is reported at every write
+/// and at the final flush, before the caller renames the file into place.
+fn write_stream(
+    path: &Path,
+    source: &AudioBuffer,
+    format: OutputFormat,
+    cancel: &AtomicBool,
+) -> WriteResult {
     let file = fs::File::create(path)?;
-    let mut writer = BufWriter::new(file);
+    let mut writer = BufWriter::new(CancellableWriter::new(file, cancel));
     let outcome = match format {
         OutputFormat::Flac => flac::write(&mut writer, source),
         OutputFormat::Wav => wav::write(&mut writer, source),
@@ -213,6 +276,48 @@ fn write_stream(path: &Path, source: &AudioBuffer, format: OutputFormat) -> Writ
     }?;
     writer.flush()?;
     Ok(outcome)
+}
+
+/// A writer that reports a broken pipe once the caller cancels.
+///
+/// Every encoder writes through a `dyn Write`, so wrapping the file here checks the cancel flag at
+/// each write and at the flush, without changing the writers.
+struct CancellableWriter<'a, W: Write> {
+    inner: W,
+    cancel: &'a AtomicBool,
+}
+
+impl<'a, W: Write> CancellableWriter<'a, W> {
+    fn new(inner: W, cancel: &'a AtomicBool) -> Self {
+        Self { inner, cancel }
+    }
+
+    /// Return the cancellation error when the caller has set the flag.
+    ///
+    /// The kind is [`std::io::ErrorKind::BrokenPipe`], not `Interrupted`: `write_all` retries an
+    /// interrupted write and would spin forever.
+    fn check(&self) -> std::io::Result<()> {
+        if self.cancel.load(Ordering::Relaxed) {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "the caller cancelled the encode",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl<W: Write> Write for CancellableWriter<'_, W> {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.check()?;
+        self.inner.write(buffer)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.check()?;
+        self.inner.flush()
+    }
 }
 
 /// A hidden temporary path in the target's directory, so the rename stays on one file system.
