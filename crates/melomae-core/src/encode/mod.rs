@@ -259,7 +259,25 @@ fn encode_transaction(
             let _ = fs::remove_file(&temporary);
             return Err(EncodeError::new(target, format!("write the tags: {error}")));
         }
+        // Read the tags back from the temporary file, so a value the writer dropped is named in the
+        // returned list instead of lost in silence. A read failure is a tag-write error, so the
+        // output never reaches the final path.
+        let written = match crate::tag_copy::read_written_tags(&temporary, format) {
+            Ok(written) => written,
+            Err(error) => {
+                let _ = fs::remove_file(&temporary);
+                return Err(EncodeError::new(
+                    target,
+                    format!("read the written tags: {error}"),
+                ));
+            }
+        };
         unsupported = tags.unsupported_for(format);
+        for name in crate::tag_copy::write_losses(tags, &written) {
+            if !unsupported.contains(&name) {
+                unsupported.push(name);
+            }
+        }
     }
 
     if cancel.load(Ordering::Relaxed) {
