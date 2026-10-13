@@ -25,7 +25,7 @@ use lofty::tag::TagType;
 use lofty::TextEncoding;
 
 use melomae_core::decode::decode_file;
-use melomae_core::encode::{encode_with_tags, OutputFormat};
+use melomae_core::encode::{encode, encode_with_tags, OutputFormat};
 use melomae_core::tag_copy::{read_tags, TagSet};
 
 use setup::tag_fixtures::{
@@ -2396,4 +2396,430 @@ fn text_frame(id: &str, value: &str) -> Frame<'static> {
         TextEncoding::UTF8,
         value.to_string(),
     ))
+}
+
+// --- Fix round 5: the reviewer's seven probes over repeated values ----------------------------
+
+/// The values a native reader reports for one field, one string per value.
+///
+/// A Vorbis target is read by its documented key. An ID3 target (`MP3` or `WAV`) is read by the
+/// native frame id: a `TXXX` frame by `TXXX:<description>`, any other frame by its id. A URL frame
+/// holds no text pair, so the `WCOP` and `WOAR` frames are read back directly. ID3v2.4 stores a
+/// multi-value text frame null-separated in one frame, so the value is split here.
+fn native_field_values(path: &Path, kind: NativeKind, key: &str, id3_key: &str) -> Vec<String> {
+    let native = if kind == NativeKind::Wav || kind == NativeKind::Mp3 {
+        id3_key
+    } else {
+        key
+    };
+    let mut values: Vec<String> = native_pairs(path, kind)
+        .into_iter()
+        .filter(|(candidate, _)| candidate.eq_ignore_ascii_case(native))
+        .flat_map(|(_, value)| value.split('\0').map(str::to_string).collect::<Vec<_>>())
+        .collect();
+    if (kind == NativeKind::Wav || kind == NativeKind::Mp3)
+        && (id3_key == "WCOP" || id3_key == "WOAR")
+    {
+        let tag = if kind == NativeKind::Wav {
+            wav_id3(path)
+        } else {
+            mp3_id3(path)
+        };
+        values.extend(tag.iter().filter_map(|frame| match frame {
+            Frame::Url(url) if url.id().as_str() == id3_key => Some(url.url().to_string()),
+            _ => None,
+        }));
+    }
+    values.sort();
+    values
+}
+
+/// The license values a native reader reports, from both the `TXXX:LICENSE` text frame and, for an
+/// ID3 target, the `WCOP` URL frame.
+fn native_license_values_of(path: &Path, kind: NativeKind) -> Vec<String> {
+    let mut values = native_field_values(path, kind, "LICENSE", "TXXX:LICENSE");
+    if kind == NativeKind::Mp3 || kind == NativeKind::Wav {
+        values.extend(native_field_values(path, kind, "LICENSE", "WCOP"));
+    }
+    values.sort();
+    values
+}
+
+/// The `(key, wav-frame)` rows the reviewer's probes use, with the exact values each holds.
+///
+/// Finding 1: the standard override fields Picard stores in a `TXXX` frame. Finding 2: the record
+/// label. Finding 5: the scalar text lists that share the same generic conversion.
+const OVERRIDE_TEXT_ROWS: [(&str, &str); 3] = [
+    ("ARTISTS", "TXXX:Artists"),
+    ("WRITER", "TXXX:Writer"),
+    ("WORK", "TXXX:WORK"),
+];
+
+/// Finding 1 (blocking): every override text value survives in all three outputs. A native FLAC
+/// source holds two values for `ARTISTS`, `WRITER`, and `WORK`; each Vorbis output keeps both, and
+/// the WAV `TXXX` frame is checked for both values too.
+#[test]
+fn override_text_values_all_survive_in_every_output() {
+    let fixtures = TagFixtures::build();
+    let source = fixtures.path(Source::Flac);
+    for (key, _) in OVERRIDE_TEXT_ROWS {
+        for value in ["Alice", "Bob"] {
+            append_vorbis(&source, key, value);
+        }
+    }
+    let tags = read_tags(&source).expect("read the source tags");
+    let audio = decode_file(&source).expect("decode the source");
+    let outputs = setup::TempDir::new("melomae-override-text");
+
+    let mut failures = Vec::new();
+    for (format, kind, extension) in OUTPUTS {
+        let target = outputs.join(&format!("override.{extension}"));
+        let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags))
+            .unwrap_or_else(|error| panic!("-> {extension}: {error}"));
+        for (key, id3_key) in OVERRIDE_TEXT_ROWS {
+            let want = native_field_values(&source, NativeKind::Flac, key, id3_key);
+            let got = native_field_values(&target, kind, key, id3_key);
+            for value in &want {
+                if !got.contains(value) {
+                    failures.push(format!(
+                        "{key} -> {format:?}: lost {value:?}, got {got:?} report={report:?}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Findings 2 and 5: the record label (blocking) and the scalar text lists. Every value of the
+/// label must survive in every output. A scalar text list must either survive in full or be named
+/// in the returned list, so no value is dropped in silence.
+#[test]
+fn generic_text_values_survive_or_are_reported() {
+    let fixtures = TagFixtures::build();
+    let source = fixtures.path(Source::Flac);
+    let rows = [
+        ("LABEL", "TPUB"),
+        ("ARTISTSORT", "TSOP"),
+        ("ALBUMARTISTSORT", "TSO2"),
+        ("COMPOSERSORT", "TSOC"),
+        ("ENCODERSETTINGS", "TSSE"),
+    ];
+    for (key, _) in rows {
+        for value in ["First", "Second"] {
+            append_vorbis(&source, key, value);
+        }
+    }
+    let tags = read_tags(&source).expect("read the source tags");
+    let audio = decode_file(&source).expect("decode the source");
+    let outputs = setup::TempDir::new("melomae-generic-text");
+
+    let mut failures = Vec::new();
+    for (format, kind, extension) in OUTPUTS {
+        let target = outputs.join(&format!("generic.{extension}"));
+        let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags))
+            .unwrap_or_else(|error| panic!("-> {extension}: {error}"));
+        for (key, id3_key) in rows {
+            let want = native_field_values(&source, NativeKind::Flac, key, id3_key);
+            let got = native_field_values(&target, kind, key, id3_key);
+            if key == "LABEL" {
+                for value in &want {
+                    if !got.contains(value) {
+                        failures.push(format!(
+                            "{key} -> {format:?}: lost {value:?}, got {got:?} report={report:?}"
+                        ));
+                    }
+                }
+            } else if !report.iter().any(|name| name == key) && want != got {
+                failures.push(format!(
+                    "{key} -> {format:?}: want={want:?} got={got:?} report={report:?}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Finding 3 (blocking): every WEBSITE URL survives in all three outputs. A native FLAC source
+/// holds two websites; each Vorbis output keeps both, and the WAV output keeps one `WOAR` frame per
+/// URL.
+#[test]
+fn website_values_all_survive_in_every_output() {
+    let fixtures = TagFixtures::build();
+    let source = fixtures.path(Source::Flac);
+    let want = ["https://example.com/a", "https://example.com/b"];
+    for value in want {
+        append_vorbis(&source, "WEBSITE", value);
+    }
+    let mut expected: Vec<String> = want.iter().map(|value| (*value).to_string()).collect();
+    expected.sort();
+    assert_eq!(
+        native_field_values(&source, NativeKind::Flac, "WEBSITE", "WOAR"),
+        expected,
+        "the source must hold both websites"
+    );
+
+    let tags = read_tags(&source).expect("read the source tags");
+    let audio = decode_file(&source).expect("decode the source");
+    let outputs = setup::TempDir::new("melomae-website");
+
+    let mut failures = Vec::new();
+    for (format, kind, extension) in OUTPUTS {
+        let target = outputs.join(&format!("website.{extension}"));
+        let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags))
+            .unwrap_or_else(|error| panic!("-> {extension}: {error}"));
+        let got = native_field_values(&target, kind, "WEBSITE", "WOAR");
+        if got != expected {
+            failures.push(format!("{format:?}: got={got:?} report={report:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Finding 3, second path: lofty's reader collapses two `WOAR` frames in an MP3 source into one, so
+/// the loss happens before the write. `WEBSITE` must be named in the returned list, or both URLs
+/// must survive.
+#[test]
+fn an_mp3_two_woar_frames_are_reported_or_survive() {
+    let dir = setup::TempDir::new("melomae-mp3-woar");
+    let source = dir.join("s.mp3");
+    write_id3(&source, |_| {});
+
+    // Replace the tag with a raw ID3v2.4 tag that holds two `WOAR` frames. Lofty's reader keeps
+    // only the last, so a small independent frame walk is needed to see both.
+    let original = std::fs::read(&source).expect("read the MP3");
+    let skip = if original.starts_with(b"ID3") {
+        10 + original[6..10]
+            .iter()
+            .fold(0usize, |n, b| (n << 7) | (*b as usize & 0x7f))
+    } else {
+        0
+    };
+    let want = ["https://example.com/a", "https://example.com/b"];
+    let mut frames = Vec::new();
+    for value in want {
+        frames.extend_from_slice(b"WOAR");
+        frames.extend_from_slice(&[0, 0, 0, value.len() as u8, 0, 0]);
+        frames.extend_from_slice(value.as_bytes());
+    }
+    let len = frames.len();
+    let mut bytes = b"ID3\x04\0\0".to_vec();
+    bytes.extend_from_slice(&[
+        ((len >> 21) & 127) as u8,
+        ((len >> 14) & 127) as u8,
+        ((len >> 7) & 127) as u8,
+        (len & 127) as u8,
+    ]);
+    bytes.extend(frames);
+    bytes.extend_from_slice(&original[skip..]);
+    std::fs::write(&source, bytes).expect("write the raw MP3");
+
+    let tags = read_tags(&source).expect("read the source tags");
+    let audio = decode_file(&source).expect("decode the source");
+    let outputs = setup::TempDir::new("melomae-mp3-woar-out");
+
+    let mut expected: Vec<String> = want.iter().map(|value| (*value).to_string()).collect();
+    expected.sort();
+
+    let mut failures = Vec::new();
+    for (format, kind, extension) in OUTPUTS {
+        let target = outputs.join(&format!("woar.{extension}"));
+        let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags))
+            .unwrap_or_else(|error| panic!("-> {extension}: {error}"));
+        let got = native_field_values(&target, kind, "WEBSITE", "WOAR");
+        let reported = report.iter().any(|name| name == "WEBSITE");
+        if got != expected && !reported {
+            failures.push(format!(
+                "{format:?}: want={expected:?} got={got:?} report={report:?}"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Finding 4 (hardening): repeated movement numbers and totals. A Vorbis target keeps every value.
+/// The WAV `MVIN` frame can express only one pair, so either both pairs survive or the movement
+/// field is named in the returned list.
+#[test]
+fn movement_values_survive_or_are_reported() {
+    let fixtures = TagFixtures::build();
+    let source = fixtures.path(Source::Flac);
+    for value in ["1", "2"] {
+        append_vorbis(&source, "MOVEMENT", value);
+    }
+    for value in ["3", "4"] {
+        append_vorbis(&source, "MOVEMENTTOTAL", value);
+    }
+    let tags = read_tags(&source).expect("read the source tags");
+    let audio = decode_file(&source).expect("decode the source");
+    let outputs = setup::TempDir::new("melomae-movement");
+
+    let mut failures = Vec::new();
+    for (format, kind, extension) in OUTPUTS {
+        let target = outputs.join(&format!("movement.{extension}"));
+        let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags))
+            .unwrap_or_else(|error| panic!("-> {extension}: {error}"));
+        let pairs = native_pairs(&target, kind);
+        if format == OutputFormat::Wav {
+            let both = pairs.contains(&("MVIN".to_string(), "1/3".to_string()))
+                && pairs.contains(&("MVIN".to_string(), "2/4".to_string()));
+            let reported = report
+                .iter()
+                .any(|name| name == "MOVEMENT" || name == "MOVEMENTTOTAL");
+            if !both && !reported {
+                failures.push(format!("WAV: got {pairs:?} report={report:?}"));
+            }
+        } else {
+            for (key, values) in [("MOVEMENT", ["1", "2"]), ("MOVEMENTTOTAL", ["3", "4"])] {
+                for value in values {
+                    if !pairs.contains(&(key.to_string(), value.to_string())) {
+                        failures.push(format!(
+                            "{extension}: {key}={value:?} was lost, got {pairs:?}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Control: the license row from a rear view. Three source families hold the same license values;
+/// each value survives in all three outputs, and the WAV frame is `WCOP` for a single URL and one
+/// `TXXX:LICENSE` frame otherwise.
+#[test]
+fn license_matrix_keeps_every_value() {
+    let mut failures = Vec::new();
+    for values in [
+        vec!["https://example.com/a", "https://example.com/b"],
+        vec!["https://example.com/a", "All rights reserved"],
+        vec!["https://example.com/a"],
+        vec!["All rights reserved"],
+        vec!["https://example.com/a", "https://example.com/a"],
+    ] {
+        let fixtures = TagFixtures::build();
+        let dir = setup::TempDir::new("melomae-license-matrix");
+        let flac = fixtures.path(Source::Flac);
+        for value in &values {
+            append_vorbis(&flac, "LICENSE", value);
+        }
+        let mp3 = dir.join("s.mp3");
+        write_id3(&mp3, |tag| {
+            tag.insert_user_text("LICENSE".to_string(), values.join("\0"));
+        });
+        let wav = dir.join("s.wav");
+        let audio = decode_file(&mp3).expect("decode the MP3");
+        encode(&audio, &wav, OutputFormat::Wav).expect("encode the WAV");
+        let mut tag = Id3v2Tag::new();
+        tag.insert_user_text("LICENSE".to_string(), values.join("\0"));
+        tag.save_to_path(&wav, WriteOptions::default())
+            .expect("write the WAV tag");
+
+        let mut want: Vec<String> = values.iter().map(|value| (*value).to_string()).collect();
+        want.sort();
+
+        for (source, kind) in [
+            (&flac, NativeKind::Flac),
+            (&mp3, NativeKind::Mp3),
+            (&wav, NativeKind::Wav),
+        ] {
+            let found = native_license_values_of(source, kind);
+            assert_eq!(
+                found, want,
+                "source {kind:?} must hold the literal license values"
+            );
+
+            let tags = read_tags(source).expect("read the license source");
+            let audio = decode_file(source).expect("decode the license source");
+            for (format, out_kind, extension) in OUTPUTS {
+                let target = dir.join(&format!("{kind:?}.{extension}"));
+                let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags))
+                    .unwrap_or_else(|error| panic!("-> {extension}: {error}"));
+                let got = native_license_values_of(&target, out_kind);
+                if got != want {
+                    failures.push(format!(
+                        "{kind:?} -> {format:?}: want={want:?} got={got:?} report={report:?}"
+                    ));
+                }
+                if format == OutputFormat::Wav {
+                    let native = wav_id3(&target);
+                    if values.len() == 1 && values[0].starts_with("https://") {
+                        assert!(has_url(&native, "WCOP", values[0]));
+                    } else {
+                        assert!(native
+                            .iter()
+                            .any(|frame| matches!(frame, Frame::UserText(text)
+                            if text.description == "LICENSE"
+                                && text.content == values.join("\0"))));
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Control: a WAV source that holds both a `WCOP` frame and a two-value `TXXX:LICENSE` frame keeps
+/// all three values in every output.
+#[test]
+fn wav_mixed_license_frames_keep_every_value() {
+    let dir = setup::TempDir::new("melomae-mixed-license");
+    let mp3 = dir.join("s.mp3");
+    write_id3(&mp3, |_| {});
+    let wav = dir.join("s.wav");
+    let audio = decode_file(&mp3).expect("decode the MP3");
+    encode(&audio, &wav, OutputFormat::Wav).expect("encode the WAV");
+    let mut native = Id3v2Tag::new();
+    native.insert(Frame::Url(UrlLinkFrame::new(
+        FrameId::Valid("WCOP".into()),
+        "https://example.com/a".to_string(),
+    )));
+    native.insert_user_text(
+        "LICENSE".to_string(),
+        "https://example.com/b\0All rights reserved".to_string(),
+    );
+    native
+        .save_to_path(&wav, WriteOptions::default())
+        .expect("write the WAV tag");
+
+    let want = vec![
+        "All rights reserved".to_string(),
+        "https://example.com/a".to_string(),
+        "https://example.com/b".to_string(),
+    ];
+    assert_eq!(native_license_values_of(&wav, NativeKind::Wav), want);
+
+    let tags = read_tags(&wav).expect("read the WAV tags");
+    for (format, kind, extension) in OUTPUTS {
+        let target = dir.join(&format!("out.{extension}"));
+        let (_, report) = encode_with_tags(&audio, &target, format, Some(&tags))
+            .unwrap_or_else(|error| panic!("-> {extension}: {error}"));
+        assert_eq!(
+            native_license_values_of(&target, kind),
+            want,
+            "{format:?} report={report:?}"
+        );
+    }
+}
+
+/// The write check itself: a source whose WAV writer can hold only one movement value must name
+/// `MOVEMENT` in the returned list. This is the field the check must catch, even though no
+/// dedicated rule covers repeated movement.
+#[test]
+fn the_write_check_reports_a_value_the_wav_writer_drops() {
+    let fixtures = TagFixtures::build();
+    let source = fixtures.path(Source::Flac);
+    append_vorbis(&source, "MOVEMENT", "1");
+    append_vorbis(&source, "MOVEMENT", "2");
+
+    let tags = read_tags(&source).expect("read the source tags");
+    let audio = decode_file(&source).expect("decode the source");
+    let outputs = setup::TempDir::new("melomae-write-check");
+    let target = outputs.join("movement.wav");
+    let (_, report) =
+        encode_with_tags(&audio, &target, OutputFormat::Wav, Some(&tags)).expect("encode the WAV");
+    assert!(
+        report.contains(&"MOVEMENT".to_string()),
+        "the write check must name the movement field, got {report:?}"
+    );
 }
