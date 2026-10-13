@@ -9,9 +9,10 @@ mod setup;
 
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::AtomicBool;
 
 use melomae_core::decode::{decode_file, AudioBuffer, TARGET_SAMPLE_RATE};
-use melomae_core::encode::{encode, EncodeOutcome, OutputFormat};
+use melomae_core::encode::{encode, encode_with_cancel, EncodeOutcome, EncodeResult, OutputFormat};
 
 use common::{log_sweep, read_f32le, sine};
 use setup::TempDir;
@@ -403,5 +404,77 @@ fn e2e_encode_rejects_an_empty_buffer() {
     assert!(
         directory_entries(dir.path()).is_empty(),
         "no file may remain"
+    );
+}
+
+/// Fix round 1, B2: a cancelled encode publishes nothing and removes its temporary file, for every
+/// format.
+#[test]
+fn e2e_encode_cancel_publishes_nothing_for_every_format() {
+    let dir = TempDir::new("melomae-encode-cancel");
+    let source = AudioBuffer::new(44_100, stereo_tone(44_100, 44_100));
+    let cancel = AtomicBool::new(true);
+    for (format, name) in [
+        (OutputFormat::Flac, "cancelled.flac"),
+        (OutputFormat::Wav, "cancelled.wav"),
+        (OutputFormat::Opus, "cancelled.opus"),
+    ] {
+        let target = dir.join(name);
+        let result = encode_with_cancel(&source, &target, format, &cancel)
+            .unwrap_or_else(|error| panic!("encode {name}: {error}"));
+        assert_eq!(result, EncodeResult::Cancelled, "{name}");
+        assert!(
+            !target.exists(),
+            "{name}: a cancelled encode publishes no target"
+        );
+    }
+    assert!(
+        directory_entries(dir.path()).is_empty(),
+        "a cancelled encode leaves no temporary file"
+    );
+}
+
+/// Fix round 1, B2: a cancelled encode must not delete or replace an older target.
+#[test]
+fn e2e_encode_cancel_keeps_an_older_target() {
+    let dir = TempDir::new("melomae-encode-cancel-older");
+    let target = dir.join("restored.flac");
+    let older = b"an older restored file".to_vec();
+    std::fs::write(&target, &older).expect("write the older target");
+
+    let source = AudioBuffer::new(44_100, stereo_tone(44_100, 44_100));
+    let cancel = AtomicBool::new(true);
+    let result = encode_with_cancel(&source, &target, OutputFormat::Flac, &cancel)
+        .expect("a cancelled encode is not an error");
+
+    assert_eq!(result, EncodeResult::Cancelled);
+    assert_eq!(
+        std::fs::read(&target).expect("read the older target"),
+        older,
+        "the older target must stay byte-identical"
+    );
+    assert_eq!(
+        directory_entries(dir.path()),
+        vec!["restored.flac".to_string()],
+        "no temporary file may remain"
+    );
+}
+
+/// Fix round 1, B2: an uncancelled encode still completes and publishes the target.
+#[test]
+fn e2e_encode_without_cancel_publishes_the_target() {
+    let dir = TempDir::new("melomae-encode-no-cancel");
+    let source = AudioBuffer::new(44_100, stereo_tone(44_100, 4_096));
+    let target = dir.join("restored.wav");
+    let cancel = AtomicBool::new(false);
+
+    let result =
+        encode_with_cancel(&source, &target, OutputFormat::Wav, &cancel).expect("encode WAV");
+
+    assert!(matches!(result, EncodeResult::Complete(_)), "{result:?}");
+    assert!(target.exists(), "a completed encode publishes the target");
+    assert_eq!(
+        directory_entries(dir.path()),
+        vec!["restored.wav".to_string()]
     );
 }
