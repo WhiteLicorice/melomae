@@ -371,6 +371,56 @@ fn e2e_restore_reports_one_progress_line_per_chunk() {
     }
 }
 
+/// Task 08: `--device gpu` with no working GPU provider is the CPU fallback, not a usage error.
+///
+/// The run is given the pinned CPU-only ONNX Runtime, so no GPU execution provider can start on
+/// any machine, and the run is deterministic. It must exit 0, print the fallback and the device
+/// that ran on stderr, and write an output that decodes.
+#[test]
+fn e2e_restore_device_gpu_falls_back_to_cpu() {
+    require_lfs(&model_path());
+    let _engine = engine_lock();
+    let dir = TempDir::new("melomae-cli-gpu-fallback");
+    let frames = SAMPLE_RATE as usize;
+    let input = dir.join("tone.wav");
+    write_wav_f32(
+        &input,
+        SAMPLE_RATE,
+        &[sine(SAMPLE_RATE, 220.0, 0.4, frames)],
+    );
+    let output = dir.join("restored.flac");
+
+    let result = Command::new(cli())
+        .arg("restore")
+        .arg(&input)
+        .arg(&output)
+        .args(["--format", "flac", "--device", "gpu"])
+        .arg("--model")
+        .arg(model_path())
+        .arg("--onnxruntime")
+        .arg(setup::ort_library())
+        .output()
+        .expect("run the CLI");
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        result.status.success(),
+        "a `--device gpu` run without a working GPU must exit 0, got {}\n{stderr}",
+        result.status
+    );
+    assert!(
+        stderr.contains("falling back to the CPU"),
+        "the fallback must be reported on stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("ran on device cpu"),
+        "the device that ran must be reported on stderr: {stderr}"
+    );
+    let decoded = decode_file(&output).expect("decode the restored output");
+    assert_eq!(decoded.sample_rate(), SAMPLE_RATE);
+    assert_eq!(decoded.channel_count(), 1);
+    assert!(decoded.frames() > 0, "the output must hold audio");
+}
+
 /// Acceptance item 1: a four-minute input restores on the CPU.
 ///
 /// It runs the real model for minutes and uses several GB, so it is ignored by default.

@@ -91,17 +91,29 @@ mod tests {
     }
 
     #[test]
-    fn gpu_is_not_a_device_value() {
-        // Task 08 adds the GPU path. Until then `gpu` is a clap usage error.
-        let error = Cli::try_parse_from([
+    fn gpu_is_a_device_value() {
+        let args = restore_args(&[
             "melomae-cli",
             "restore",
             "in.flac",
             "out.flac",
             "--device",
             "gpu",
+        ]);
+        assert_eq!(args.device, Device::Gpu);
+    }
+
+    #[test]
+    fn an_unknown_device_is_a_usage_error() {
+        let error = Cli::try_parse_from([
+            "melomae-cli",
+            "restore",
+            "in.flac",
+            "out.flac",
+            "--device",
+            "tpu",
         ])
-        .expect_err("gpu must be rejected");
+        .expect_err("tpu must be rejected");
         assert_eq!(error.kind(), ErrorKind::InvalidValue);
     }
 

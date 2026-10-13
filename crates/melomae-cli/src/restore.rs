@@ -18,9 +18,12 @@ use std::time::Instant;
 use clap::{Args, ValueEnum};
 use melomae_core::decode::{decode_file, AudioBuffer};
 use melomae_core::encode::{encode_with_cancel, EncodeResult, OutputFormat as EncodeFormat};
-use melomae_core::inference::chunk_budget::{choose_chunk_for_machine, FileShape};
+use melomae_core::inference::chunk_budget::{
+    choose_chunk_for_machine, choose_gpu_chunk, FileShape,
+};
 use melomae_core::inference::{
-    load_onnx_backend, RestoreBackend, RestoreOutcome, RestoreProgress, RestoreSettings,
+    load_onnx_backend, restore_on_device, BackendOpener, Device as CoreDevice, Fallback,
+    InferenceError, RestoreBackend, RestoreOutcome, RestoreProgress, RestoreSettings,
 };
 
 /// The output format of a restore (SRS §7).
@@ -56,14 +59,17 @@ impl Format {
 
 /// The execution device (SRS §6.9).
 ///
-/// `auto` and `cpu` both run on the CPU in this task. `gpu` arrives with task 08, so any
-/// other value is a clap usage error, which exits 2.
+/// `auto` chooses the GPU when a GPU execution provider can start, and the CPU otherwise. `gpu`
+/// requests the GPU and falls back to the CPU, with a message, when the GPU path fails to start
+/// or runs out of memory (SRS §6.3). `cpu` never opens the GPU.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Device {
-    /// Choose the device automatically. This task always chooses the CPU.
+    /// Choose the device automatically.
     Auto,
     /// Run on the CPU.
     Cpu,
+    /// Run on the GPU, or fall back to the CPU.
+    Gpu,
 }
 
 impl Device {
@@ -72,8 +78,56 @@ impl Device {
         match self {
             Self::Auto => "auto",
             Self::Cpu => "cpu",
+            Self::Gpu => "gpu",
         }
     }
+
+    /// The core device value.
+    fn as_core(self) -> CoreDevice {
+        match self {
+            Self::Auto => CoreDevice::Auto,
+            Self::Cpu => CoreDevice::Cpu,
+            Self::Gpu => CoreDevice::Gpu,
+        }
+    }
+}
+
+/// Opens the CPU restore backend, and the GPU one when a provider is available.
+///
+/// Both devices load `apollo.onnx` through the caller-given ONNX Runtime library. The GPU path
+/// appends the Windows execution provider chosen in task 08; until it exists, a GPU request has
+/// no provider and reports [`InferenceError::ProviderStart`], so the caller falls back to the CPU.
+struct OnnxBackends {
+    /// The ONNX Runtime shared library.
+    runtime: PathBuf,
+    /// The Apollo ONNX model.
+    model: PathBuf,
+}
+
+impl BackendOpener for OnnxBackends {
+    fn gpu_available(&self) -> bool {
+        false
+    }
+
+    fn open(&self, device: CoreDevice) -> Result<Box<dyn RestoreBackend>, InferenceError> {
+        match device {
+            CoreDevice::Cpu | CoreDevice::Auto => {
+                Ok(Box::new(load_onnx_backend(&self.runtime, &self.model)?))
+            }
+            CoreDevice::Gpu => Err(InferenceError::ProviderStart(
+                "no GPU execution provider is configured; the ONNX Runtime library is the CPU build"
+                    .to_string(),
+            )),
+        }
+    }
+}
+
+/// The free VRAM of the execution device, in bytes, or `None` when it cannot be read.
+///
+/// The VRAM query arrives with the GPU execution provider (task 08). Until then the chooser uses
+/// the fixed conservative chunk of `choose_gpu_chunk(None, ..)`.
+fn vram_bytes() -> Option<u64> {
+    None
 }
 
 /// The `restore` subcommand arguments.
@@ -170,29 +224,31 @@ fn execute(args: &RestoreArgs) -> Result<(), Failure> {
         frames: audio.frames() as u64,
         channels: audio.channel_count() as u64,
     };
-    let budget =
-        choose_chunk_for_machine(shape).map_err(|error| Failure::Message(error.to_string()))?;
 
     eprintln!(
-        "melomae-cli: {} -> {} (format {}, device {}, {}s chunks)",
+        "melomae-cli: {} -> {} (format {}, device {})",
         args.input.display(),
         args.output.display(),
         args.format.label(),
-        args.device.label(),
-        budget.chunk_seconds
+        args.device.label()
     );
-    eprintln!("melomae-cli: chunk budget: {budget}");
 
-    // The chosen chunk, with the fixed overlap and pad of task 05.
-    let settings = RestoreSettings {
-        chunk_seconds: Some(budget.chunk_seconds as f64),
-        overlap_seconds: OVERLAP_SECONDS,
-        chunk_pad_seconds: CHUNK_PAD_SECONDS,
+    // The chunk depends on the device that runs, because a GPU run sizes from the VRAM (task 08
+    // scope 5) and a CPU run sizes from the free system memory (task 05). The chooser prints its
+    // numbers when a device is opened, and a fallback chooses the CPU numbers for its own run.
+    let opener = OnnxBackends { runtime, model };
+    let settings_for = |device: CoreDevice| -> Result<RestoreSettings, InferenceError> {
+        let budget = match device {
+            CoreDevice::Gpu => choose_gpu_chunk(vram_bytes(), shape)?,
+            _ => choose_chunk_for_machine(shape)?,
+        };
+        eprintln!("melomae-cli: chunk budget: {budget}");
+        Ok(RestoreSettings {
+            chunk_seconds: Some(budget.chunk_seconds as f64),
+            overlap_seconds: OVERLAP_SECONDS,
+            chunk_pad_seconds: CHUNK_PAD_SECONDS,
+        })
     };
-
-    let backend =
-        load_onnx_backend(&runtime, &model).map_err(|error| stage_error(error.to_string()))?;
-    check_cancelled()?;
 
     let channels = audio.channel_count();
     let started = Instant::now();
@@ -208,15 +264,32 @@ fn execute(args: &RestoreArgs) -> Result<(), Failure> {
             );
         }
     };
+    // SRS §6.3: tell the user when the GPU path is abandoned. This runs before the CPU run, so
+    // the message precedes the CPU progress lines.
+    let mut on_fallback = |fallback: &Fallback| {
+        eprintln!(
+            "melomae-cli: GPU restore failed: {}; falling back to the CPU",
+            fallback.reason
+        );
+    };
 
-    let outcome = backend
-        .restore(audio.channels(), &settings, &mut progress, &CANCELLED)
-        .map_err(|error| Failure::Message(error.to_string()))?;
+    let report = restore_on_device(
+        &opener,
+        args.device.as_core(),
+        audio.channels(),
+        &settings_for,
+        &mut progress,
+        &mut on_fallback,
+        &CANCELLED,
+    )
+    .map_err(|error| Failure::Message(error.to_string()))?;
     check_cancelled()?;
+
+    eprintln!("melomae-cli: ran on device {}", report.device.label());
 
     // A cancel writes no output file. The encoder only runs on a complete restore, and it is
     // cancel-aware, so a cancel during the encode leaves no target and no temporary file either.
-    let restored = match outcome {
+    let restored = match report.outcome {
         RestoreOutcome::Cancelled => return Err(Failure::Cancelled),
         RestoreOutcome::Complete(restored) => AudioBuffer::new(audio.sample_rate(), restored),
     };
@@ -399,6 +472,30 @@ mod tests {
         assert_eq!(Format::Opus.label(), "opus");
         assert_eq!(Device::Auto.label(), "auto");
         assert_eq!(Device::Cpu.label(), "cpu");
+        assert_eq!(Device::Gpu.label(), "gpu");
+        assert_eq!(Device::Auto.as_core(), CoreDevice::Auto);
+        assert_eq!(Device::Cpu.as_core(), CoreDevice::Cpu);
+        assert_eq!(Device::Gpu.as_core(), CoreDevice::Gpu);
+    }
+
+    #[test]
+    fn the_opener_reports_no_gpu_and_a_gpu_request_fails_to_start() {
+        // Task 08 wires the Windows GPU provider. Until it lands, the opener has no GPU path, so
+        // `auto` runs the CPU and `gpu` must be a fallback, not a panic.
+        let opener = OnnxBackends {
+            runtime: crate_directory().join("Cargo.toml"),
+            model: crate_directory().join("Cargo.toml"),
+        };
+        assert!(!opener.gpu_available());
+        let error = match opener.open(CoreDevice::Gpu) {
+            Ok(_) => panic!("a GPU request must fail to start"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, InferenceError::ProviderStart(_)), "{error}");
+        assert!(
+            error.falls_back_to_cpu(),
+            "a provider-start failure must trigger the CPU fallback"
+        );
     }
 
     #[test]
