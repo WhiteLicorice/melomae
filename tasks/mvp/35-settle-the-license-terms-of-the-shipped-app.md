@@ -17,6 +17,7 @@
 - Record correction: the executor rewrote acceptance criterion 2 to drop `deny.toml` and `models/NOTICE.md` and ticked it. The orchestrator restored the criterion as two boxes and set the status to IN PROGRESS until task 26 merges.
 - Gate on the task branch at `b91c34f`: `pnpm verify` exit 0, board 66, tasks unittest 9, Vitest 1, cargo test 181, pytest 19. Integration: the five commits cherry-picked onto `master` `6783d50` (task 05 merged) without conflicts. The orchestrator ran the gate on the merged tree: `pnpm verify` exit 0, board 69, tasks unittest 9, Vitest 1, cargo test 193 passed and 3 ignored, pytest 19.
 - The cure in SRS §11.11 (attribution and the GPL-3.0-only Adapter's License) is on `master` from this merge, before the 2026-11-10 deadline.
+- Closed on 2026-10-13 by the task 26 merge (`ddde4af`), which carries decisions steps 2 and 3 (`deny.toml` and `models/NOTICE.md`) and the author's ruling on the `src-tauri/Cargo.toml` description and authors. Review 3 of task 26 passed and confirmed that `deny.toml` rejects `GPL-3.0-or-later` and any other crate under `Apache-2.0 WITH LLVM-exception`.
 
 ## Goal
 

@@ -206,5 +206,8 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 | B-031 | [Measure chunk timing medians and output parity](backlog/B-031-measure-chunk-timing-medians-and-output-parity.md) | TODO | 05 |
 | B-032 | [Check the chunk budget arithmetic for overflow](backlog/B-032-check-the-chunk-budget-arithmetic-for-overflow.md) | TODO | 05 |
 | B-033 | [Correct the chunk budget record anchors](backlog/B-033-correct-the-chunk-budget-record-anchors.md) | TODO | 05 |
+| B-034 | [Verify a cached cargo-deny binary again](backlog/B-034-verify-a-cached-cargo-deny-binary-again.md) | TODO | 26 |
+| B-035 | [Tie the nested-notice exclusions to the resolved features](backlog/B-035-tie-the-nested-notice-exclusions-to-the-resolved-features.md) | TODO | 26 |
+| B-036 | [Label GPL license files by their real version](backlog/B-036-label-gpl-license-files-by-their-real-version.md) | TODO | 26 |
 
 Each backlog record states why it does not block the MVP. Each record also states its promotion condition.
