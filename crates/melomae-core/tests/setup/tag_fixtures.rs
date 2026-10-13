@@ -18,7 +18,7 @@ use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::prelude::TagExt;
 use lofty::tag::{ItemKey, ItemValue, Tag, TagItem, TagType};
 
-use super::{ffmpeg, TempDir};
+use crate::setup::{ffmpeg, TempDir};
 
 /// The fixture's field values. Every value is made up.
 pub const TITLE: &str = "Fixture Title";

@@ -1,6 +1,6 @@
 //! Copy every tag and picture from a source file into each output format.
 //!
-//! The three source fixtures are built in `setup::tag_fixtures` with the pinned ffmpeg and lofty.
+//! The three source fixtures are built in `tag_fixtures` with the pinned ffmpeg and lofty.
 //! Each source copies to FLAC, WAV, and Opus. Every source field and the front cover must survive,
 //! or appear in the returned list of fields the target cannot hold.
 //!
@@ -10,6 +10,9 @@
 
 mod common;
 mod setup;
+
+#[path = "setup/tag_fixtures.rs"]
+mod tag_fixtures;
 
 use std::path::Path;
 
@@ -28,7 +31,7 @@ use melomae_core::decode::decode_file;
 use melomae_core::encode::{encode, encode_with_tags, OutputFormat};
 use melomae_core::tag_copy::{read_tags, TagSet};
 
-use setup::tag_fixtures::{
+use crate::tag_fixtures::{
     expected_manifest, native_keys, native_manifest, native_pairs, source_kind, NativeKind, Source,
     TagFixtures, ALBUM_ARTIST, ALBUM_ARTIST_SORT, COMPOSERS, CUSTOM_NAME, CUSTOM_VALUE,
     ORIGINAL_DATE, ORIGINAL_YEAR, RELEASE_STATUS, RELEASE_STATUS_NATIVE, SCRIPT, TITLE,
@@ -233,7 +236,7 @@ fn e2e_tag_copy_maps_standard_fields_and_keeps_the_front_cover() {
                 );
                 assert_eq!(
                     output.pictures()[0].description(),
-                    Some(setup::tag_fixtures::COVER_DESCRIPTION),
+                    Some(tag_fixtures::COVER_DESCRIPTION),
                     "{family} -> {extension}: the cover description must survive"
                 );
             }
