@@ -1,6 +1,6 @@
 # Task board
 
-This board defines the build order for Melomae. The MVP task records live in `tasks/mvp`. Future-deferred work lives in `tasks/backlog`. One numbered file is one unit of work.
+This board defines the build order for Melomae. The MVP task records live in `tasks/mvp`. Future-deferred work lives in `tasks/backlog`. Refactor records live in `tasks/refactor`. Proposals for the interface live in `tasks/ux`. One numbered file is one unit of work.
 
 `docs/melomae-srs.md` defines product behavior. `docs/melomae-stack.md` defines implementation choices and records the measured baselines. If a task conflicts with either document, stop and correct the task before implementation.
 
@@ -130,12 +130,17 @@ Task numbers record creation order. The executor still selects the lowest eligib
 | # | Task | Status | Depends on |
 | --- | --- | --- | --- |
 | 18 | [Generate typed Tauri commands and progress events](mvp/18-generate-typed-tauri-commands-and-progress-events.md) | TODO | 17 |
-| 19 | [Build the app shell, theme, settings, and E2E harness](mvp/19-build-the-app-shell-theme-settings-and-e2e-harness.md) | TODO | 18 |
+| 19 | [Build the app shell, theme, settings, and E2E harness](mvp/19-build-the-app-shell-theme-settings-and-e2e-harness.md) | TODO | 18, 39 |
 | 21 | [Show the job queue with progress, ETA, and cancel](mvp/21-show-the-job-queue-with-progress-eta-and-cancel.md) | TODO | 19 |
 | 23 | [Compare before and after audio](mvp/23-compare-before-and-after-audio.md) | TODO | 21 |
 | 24 | [Add folders and review the triage](mvp/24-add-folders-and-review-the-triage.md) | TODO | 07, 16, 21 |
 | 25 | [Add the first-run setup and the attribution screen](mvp/25-add-the-first-run-setup-and-the-attribution-screen.md) | TODO | 08, 19 |
 | 32 | [Add a blind ABX mode to the compare player](mvp/32-add-a-blind-abx-mode-to-the-compare-player.md) | TODO | 23 |
+| 39 | [Record the product and design context](mvp/39-record-the-product-and-design-context.md) | TODO | — |
+| 40 | [Add an accessibility gate to the UI tests](mvp/40-add-an-accessibility-gate-to-the-ui-tests.md) | TODO | 19 |
+| 41 | [Validate the output folder in Settings](mvp/41-validate-the-output-folder-in-settings.md) | TODO | 19 |
+
+Tasks 39 to 41 come from the impeccable audit of 2026-11-11 at `master` `0220b19`. The same audit added scope, tests, and acceptance criteria to tasks 18, 19, 21, 23, 24, 25, and 32. The audit read the source and the records. It did not run the app. Task 39 waits for the owner decision on `tasks/ux/interface-proposal.md`.
 
 ## Phase 5 — Packaging and release
 
@@ -228,3 +233,19 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 | B-050 | [Write repeated WOAR frames in WAV](backlog/B-050-write-repeated-woar-frames-in-wav.md) | TODO | 15 |
 
 Each backlog record states why it does not block the MVP. Each record also states its promotion condition.
+
+## Refactor records
+
+Refactor records describe a structural change with no confirmed visible defect. They live in `tasks/refactor`. They use the backlog template and replace "Why this does not block MVP" with "Why this is a refactor". The executor does not select them. The owner promotes one to a numbered task first.
+
+| # | Task | Status | Depends on |
+| --- | --- | --- | --- |
+| R-001 | [Remove the Vite and Tauri starter leftovers](refactor/R-001-remove-the-vite-and-tauri-starter-leftovers.md) | TODO | — |
+
+## Proposals
+
+A proposal is a design document that is not yet work. Interface proposals live in `tasks/ux`. A proposal has no identifier and no board row, and the validator does not read it. When the owner accepts one, its work goes into numbered records that link back to it.
+
+| Proposal | Owner decision |
+| --- | --- |
+| [Interface proposal](ux/interface-proposal.md) | Not yet accepted |

@@ -27,6 +27,12 @@ Take a new user from install to a working app, and credit Apollo as its license 
 3. The copy never claims "lossless", "original quality", or "recovered".
 4. The copy never names or suggests a download tool or streaming service (SRS §1.5).
 5. The flow makes no network request (SRS §3.4).
+6. The benchmark shows its progress and the elapsed time. When it fails, the flow shows a plain message that names the missing model or runtime, with Retry and Continue. A failed benchmark does not block the first run (SRS §3.1).
+7. Do not add a Skip before a failure. SRS §3.3 says that the flow measures the speed. A Skip needs the owner decision in `tasks/ux/interface-proposal.md` section 11, item 8.
+8. Each step has a heading. A step change moves the focus to the new heading and announces it once.
+9. Use the output folder check from task 41 when that task is done.
+
+`tasks/ux/interface-proposal.md` section 3.1 proposes the layout and the copy. It is a proposal until the owner accepts it.
 
 ## Out of scope
 
@@ -36,12 +42,16 @@ Take a new user from install to a working app, and credit Apollo as its license 
 
 1. Component tests cover each first-run step.
 2. An E2E test with a fresh profile and no network completes the flow.
+3. A component test forces a benchmark failure and completes the flow.
+4. A copy test reads every string of the flow and the About screen. It fails on "lossless", "original quality", or "recovered" as a claim, and on the name of a download tool or a streaming service (scope items 3 and 4).
+5. A component test completes the flow from the keyboard and checks the focus after each step change.
 
 Run the tests. They fail because the flow does not exist.
 
 ## Acceptance criteria
 
 - [ ] A fresh profile completes the flow in the built app with the network turned off.
+- [ ] A forced benchmark failure still completes the first run.
 - [ ] The new tests failed first for the expected reason.
 - [ ] `pnpm verify` passes.
 

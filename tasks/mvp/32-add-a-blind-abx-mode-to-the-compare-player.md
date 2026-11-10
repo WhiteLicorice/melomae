@@ -16,10 +16,13 @@ Let the user test whether they can hear the restoration, without knowing which v
 ## Scope
 
 1. Add a blind mode to the task 23 player per SRS §10.6 and §10.7.
-2. Hide the labels and the gain offset during the trials.
+2. Hide the labels and the gain offset during the trials. Remove them from the page during a trial. A label that is only invisible still reaches a screen reader, and then the test is not blind.
 3. Choose X with a random source that the test can seed.
 4. After the user ends the session, show the correct count, the trial count, and the one-sided binomial p-value with p = 0.5.
 5. The A, B, and X switch keeps the playback position and takes 50 ms or less (SRS §12.5).
+6. A session that ends with zero trials shows "No trials completed" and no p-value.
+
+`tasks/ux/interface-proposal.md` section 3.4 proposes the trial strip and the result copy. It is a proposal until the owner accepts it.
 
 ## Out of scope
 
@@ -31,6 +34,8 @@ Let the user test whether they can hear the restoration, without knowing which v
 2. The p-value function matches known values: 9 of 10 gives about 0.0107, and 5 of 10 gives about 0.623.
 3. Volume matching stays on in blind mode, and the toggle is disabled.
 4. A component test runs three trials and checks the result screen.
+5. During a trial, a component test reads the accessible name of every element and finds no version identity and no gain offset.
+6. A component test ends a session at zero trials and finds no p-value.
 
 Run the tests. They fail because the mode does not exist.
 
