@@ -39,7 +39,7 @@ class TemporaryBoard:
         self.files = files
 
     def __enter__(self):
-        self._directory = tempfile.TemporaryDirectory(prefix="melomae-board-")
+        self._directory = tempfile.TemporaryDirectory(prefix="taskboard-")
         root = Path(self._directory.name)
         tasks = root / "tasks"
         (tasks / "mvp").mkdir(parents=True)
@@ -56,6 +56,10 @@ class TemporaryBoard:
 
 
 class ValidateBoardTest(unittest.TestCase):
+    @unittest.skipUnless(
+        SCRIPT.with_name("README.md").is_file(),
+        "no board next to the validator; copy both files into tasks/",
+    )
     def test_the_task_board_matches_its_task_records(self):
         result = run_validator()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -76,6 +80,42 @@ class ValidateBoardTest(unittest.TestCase):
             result = run_validator(str(root))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Task board valid: 3 records.", result.stdout)
+
+    def test_a_refactor_record_is_checked_like_any_other_record(self):
+        rows = [
+            "| 00 | [Example](mvp/00-example.md) | DONE | — |\n",
+            "| R-001 | [Tidy](refactor/R-001-tidy.md) | TODO | 00 |\n",
+        ]
+        files = {
+            "mvp/00-example.md": task("00", "Example"),
+            "refactor/R-001-tidy.md": task("R-001", "Tidy", "TODO", "00"),
+        }
+        with TemporaryBoard(rows, files) as root:
+            result = run_validator(str(root))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Task board valid: 2 records.", result.stdout)
+
+    def test_a_refactor_file_without_a_board_row_is_reported(self):
+        rows = ["| 00 | [Example](mvp/00-example.md) | DONE | — |\n"]
+        files = {
+            "mvp/00-example.md": task("00", "Example"),
+            "refactor/R-001-tidy.md": task("R-001", "Tidy", "TODO"),
+        }
+        with TemporaryBoard(rows, files) as root:
+            result = run_validator(str(root))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refactor/R-001-tidy.md", result.stderr)
+
+    def test_a_proposal_file_needs_no_board_row(self):
+        rows = ["| 00 | [Example](mvp/00-example.md) | DONE | — |\n"]
+        files = {
+            "mvp/00-example.md": task("00", "Example"),
+            "ux/interface-proposal.md": "# Interface proposal\n",
+        }
+        with TemporaryBoard(rows, files) as root:
+            result = run_validator(str(root))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Task board valid: 1 records.", result.stdout)
 
     def test_a_status_mismatch_is_rejected(self):
         rows = ["| 00 | [Example](mvp/00-example.md) | DONE | — |\n"]
@@ -135,7 +175,7 @@ class ValidateBoardTest(unittest.TestCase):
         self.assertIn("Duplicate board identifier: 00.", result.stderr)
 
     def test_a_missing_board_is_reported(self):
-        with tempfile.TemporaryDirectory(prefix="melomae-board-") as directory:
+        with tempfile.TemporaryDirectory(prefix="taskboard-") as directory:
             result = run_validator(directory)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Task board not found", result.stderr)

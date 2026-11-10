@@ -2,9 +2,16 @@
 
 Usage: python tasks/validate_board.py [root]
 
-Ported from tagpuan-app/tasks/validate-board.mjs. It adds one check: every
-status must be a value from the board's status legend. Uses only the standard
-library. Needs Python 3.10 or later.
+Copy this file and test_validate_board.py into the tasks/ directory of a
+project. With no argument, the root is the parent of that directory.
+
+A record is a file in a directory under tasks/ whose name starts with an
+identifier: two or three digits, B-NNN for the backlog, or R-NNN for a
+refactor. Each record needs one board row, and the row and the file must agree
+on the identifier, the title, the status, and the dependencies. A file with
+another name, such as a proposal, is not a record.
+
+Uses only the standard library. Needs Python 3.10 or later.
 """
 
 import re
@@ -12,13 +19,13 @@ import sys
 from pathlib import Path
 
 ROW_PATTERN = re.compile(
-    r"^\|\s*([0-9]{2,3}|B-[0-9]{3})\s*\|\s*\[([^\]]+)\]\(([^)]+)\)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|$",
+    r"^\|\s*([0-9]{2,3}|[BR]-[0-9]{3})\s*\|\s*\[([^\]]+)\]\(([^)]+)\)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|$",
     re.MULTILINE,
 )
-HEADING_PATTERN = re.compile(r"^#\s+([0-9]{2,3}|B-[0-9]{3})\s+—\s+(.+)$", re.MULTILINE)
+HEADING_PATTERN = re.compile(r"^#\s+([0-9]{2,3}|[BR]-[0-9]{3})\s+—\s+(.+)$", re.MULTILINE)
 STATUS_PATTERN = re.compile(r"^\*\*Status:\*\*\s+(.+)$", re.MULTILINE)
 DEPENDS_PATTERN = re.compile(r"^\*\*Depends on:\*\*\s+(.+)$", re.MULTILINE)
-TASK_FILENAME = re.compile(r"^(?:[0-9]{2,3}|B-[0-9]{3})-.*\.md$")
+TASK_FILENAME = re.compile(r"^(?:[0-9]{2,3}|[BR]-[0-9]{3})-.*\.md$")
 STATUSES = {"TODO", "IN PROGRESS", "BLOCKED", "CANCELLED", "DONE"}
 NO_DEPENDENCIES = "—"
 
