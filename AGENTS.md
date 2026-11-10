@@ -133,6 +133,19 @@ When your changes create orphans:
 
 Every changed line should trace directly to the user's request.
 
+**Clean as you go (CLAYGO).** Disk space runs out without warning. Delete each temporary item you made when its last user is done with it:
+
+- worktrees and project copies
+- test folders and temp roots
+- logs, scratch files, and build output
+
+Clean at the end of each step or item, not at the end of the session. Scratch builds up across sessions. One session's forgotten workspace copies held 107 GB.
+
+- Before you delete, confirm that nothing still uses the item. Check for a running process, an open review, a live branch, and a ticket or document that cites it.
+- Copy any evidence that a document cites to a kept location first. Check the copy before you delete the source.
+- Delete only what your own runs made. Leave other sessions' items unless the user asks.
+- Confirm that the item is gone. A teardown can fail silently. On Windows, `rmtree(..., ignore_errors=True)` leaves read-only files behind, so each run leaks one folder.
+
 **Commit only what the task touched.** Stage only the files you changed. Name-and-leave any concurrent work that isn't yours, because git can't split a mixed file and a blanket `git add <dir>` silently reverts another session's committed work. For an unrelated bug or a risky refactor, record a one-line follow-up and move on. When you rule something out, log why so it isn't re-litigated.
 
 **Write the commit message the way this repository already writes them.** Read the last twenty subjects with `git log --oneline` and follow that precedent. Where the repository uses Conventional Commits, use them. Where it doesn't, don't introduce them. Keep the subject short and in the imperative. Add a body only when the change needs a reason the diff can't carry.
@@ -232,6 +245,7 @@ Re-read once:
 - Did you ship a fix without reproducing the actual reported symptom, or without running the candidate fix against the cases it must not regress?
 - Did you claim "no regressions" without a recorded baseline to diff against, and are the pass/fail numbers read from the gate's final output, and the same everywhere you state them?
 - Did you change or commit anything the task didn't name?
+- Did you delete the worktrees, copies, and temp folders you made, and confirm they are gone?
 - Did you build something new the project already had an established way to do?
 - Did you take an outward or irreversible action without naming the rollback and stopping?
 - Did you hack around a broken environment instead of reporting the blocker?
