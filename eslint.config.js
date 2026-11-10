@@ -5,7 +5,19 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "node_modules", "target", "src-tauri", "coverage"] },
+  {
+    ignores: [
+      "dist",
+      "node_modules",
+      "target",
+      "src-tauri",
+      "coverage",
+      // Vendored agent skills and their installed copies.
+      ".vendored",
+      ".agents",
+      ".claude",
+    ],
+  },
   {
     files: ["**/*.{ts,tsx}"],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],

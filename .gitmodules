@@ -1,0 +1,8 @@
+[submodule ".vendored/ponytail"]
+	path = .vendored/ponytail
+	url = https://github.com/DietrichGebert/ponytail.git
+	shallow = true
+[submodule ".vendored/impeccable"]
+	path = .vendored/impeccable
+	url = https://github.com/pbakaus/impeccable.git
+	shallow = true

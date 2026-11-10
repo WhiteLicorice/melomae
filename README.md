@@ -58,6 +58,45 @@ pnpm install
 | `tools` | The uv Python project. |
 | `docs` | The product requirements and the stack. |
 | `tasks` | The task board. |
+| `.vendored` | The pinned agent skills and their sync scripts. |
+| `.agents/skills`, `.claude/skills` | The installed copies of those skills. |
+
+## Agent skills
+
+The repository pins two agent skills as shallow git submodules under `.vendored`:
+
+| Skill | Submodule | Upstream | Use |
+| --- | --- | --- | --- |
+| impeccable | `.vendored/impeccable` | <https://github.com/pbakaus/impeccable> | Design work and UI audits. |
+| ponytail | `.vendored/ponytail` | <https://github.com/DietrichGebert/ponytail> | The smallest change that solves the task, and code audits. |
+
+The installed copies are in `.agents/skills` and `.claude/skills`. Both are
+committed, so a clone without submodules still has the skills. Do not edit a
+copy by hand.
+
+Each skill has its own sync script next to its submodule. The script replaces
+that skill's folders in `.agents/skills` and `.claude/skills` with the pinned
+upstream files. Impeccable ships a separate Claude build, and the script copies
+that build to `.claude/skills`.
+
+Copy the pinned commit again:
+
+```powershell
+git submodule update --init --depth 1 .vendored/ponytail
+pwsh -File .vendored/ponytail-sync.ps1
+```
+
+Move the pin to the upstream tip and copy:
+
+```powershell
+pwsh -File .vendored/ponytail-sync.ps1 -Update
+```
+
+Use `impeccable` in place of `ponytail` for the other skill. On Linux or macOS,
+run `bash .vendored/ponytail-sync.sh`, with `--update` to move the pin. Read the
+diff, then commit the submodule pointer and both copies in one commit.
+
+Keep `--depth 1`. A full clone of impeccable downloads more than 850 MB.
 
 ## License
 
@@ -74,6 +113,8 @@ Files in this repository use these licenses:
 | `tools/export/vendor/` | CC BY-SA 4.0 |
 | `fixtures/ori_wav.wav` | CC BY-SA 4.0 |
 | `tools/parity/input_wav.wav` | CC BY-SA 4.0 |
+| `.vendored/impeccable` and the `impeccable` skill copies | Apache-2.0 |
+| `.vendored/ponytail` and the `ponytail*` skill copies | MIT |
 
 `crates/melomae-core/src/inference/mod.rs` and `tools/export/real_dsp.py` carry
 the Apollo attribution.

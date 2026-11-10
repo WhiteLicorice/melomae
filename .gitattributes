@@ -5,3 +5,6 @@
 /tools/parity/golden.wav filter=lfs diff=lfs merge=lfs -text
 /models/apollo.onnx filter=lfs diff=lfs merge=lfs -text
 /fixtures/ori_wav.wav filter=lfs diff=lfs merge=lfs -text
+
+# Bash runs the skill sync scripts. A CRLF checkout breaks them.
+/.vendored/*.sh text eol=lf
