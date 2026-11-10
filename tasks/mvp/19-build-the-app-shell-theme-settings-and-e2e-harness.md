@@ -26,7 +26,7 @@ The impeccable audit of 2026-11-11 at `master` `0220b19` read the starter styles
 
 The ratios are computed from the declared colors. Nobody measured a rendered pixel.
 
-`tasks/ux/interface-proposal.md` sections 2, 3.6, and 8 propose the frame, the Settings sections, and the keyboard contract. It is a proposal until the owner accepts it.
+`tasks/ux/interface-proposal.md` sections 2, 3.6, and 8 propose the frame, the Settings sections, and the keyboard contract. Read its MVP ruling first. The ruling wins over the section.
 
 ## Scope
 
@@ -38,9 +38,11 @@ The ratios are computed from the declared colors. Nobody measured a rendered pix
 6. Replace the starter stylesheet with the tokens from `DESIGN.md` (task 39). Remove the `outline: none` rule. Every control gets one `:focus-visible` ring.
 7. Every control edge, the focus ring, and the progress track reach 3:1 against the adjacent color. A status never uses color alone. It has a text label.
 8. Set `color-scheme: light dark` on `:root`, and set the window background color. Confirm at execution time that Linux WebKitGTK reports the OS theme. This behavior is inferred and not confirmed.
-9. Set `minWidth` and `minHeight` for the window. The shell works at the minimum size and at 200% zoom.
+9. Set the window to 1100 x 720 by default, with `minWidth` 800 and `minHeight` 600. The shell works at the minimum size and at 200% zoom. The sidebar has one fixed width and does not collapse.
 10. Follow the reduced-motion policy in `DESIGN.md`: no movement, and state changes still show.
 11. Put an error boundary around the app: a plain message, a Reload action, and a detail that the user can copy.
+12. Settings shows the device state and the model state.
+13. The theme follows the OS only. If the Linux check of item 8 fails, record it in `Outcome` and promote B-051.
 
 ## Out of scope
 

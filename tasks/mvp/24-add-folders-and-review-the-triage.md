@@ -26,11 +26,13 @@ Give the user the main screen: add files or folders, review the triage verdicts,
 5. Start sends the selected files to the queue (task 21).
 6. After the batch, the screen shows the batch report (SRS §9.5).
 7. Show these states: an empty screen with the two add actions, a running scan with a file count and a cancel, and an unreadable file with its reason on the row (SRS §4.3). The batch report has a row for each failed file (SRS §9.2).
-8. Show a plain label and a one-line explanation for each verdict. Do not show the internal names, such as `suspect-lossless`. Show the cutoff in kHz. A verdict has a text label and does not use color alone.
+8. Show a plain label and a one-line explanation for each verdict. Do not show the internal names, such as `suspect-lossless`. Use the five labels, shapes, and explanations from section 1 of the proposal. Show the cutoff in kHz, and as a marker on a 0 to 22.05 kHz track. The marker comes from the stored measurement. A verdict has a text label and does not use color alone.
 9. Virtualize the list with TanStack Virtual (Stack §A). Space toggles the focused row, Shift selects a range, and the selected count shows next to Start. A long file name shows in full on focus and on hover.
 10. Settle the drop path before the screen is built. Tauri 2 may intercept an OS file drop, so an HTML5 `drop` handler may never fire. This is inferred and not confirmed. Read the current Tauri documentation, pick the Tauri drag-drop event or the HTML5 path, and record the pick. The picker stays reachable from the keyboard.
+11. The batch report has a cancelled count, next to the restored, skipped, and failed counts. Amend SRS §9.5 (`docs/melomae-srs.md:97`) in the same change so that it names the cancelled files.
+12. Build one table. Do not build the Sources pane, the drawer, or the sort (backlog B-052).
 
-`tasks/ux/interface-proposal.md` section 3.2 proposes the layout, the labels, and the cutoff meter. It is a proposal until the owner accepts it.
+`tasks/ux/interface-proposal.md` section 3.2 proposes the layout, the labels, and the cutoff meter. Read its MVP ruling first. The ruling wins over the section.
 
 ## Out of scope
 
@@ -51,6 +53,7 @@ Run the tests. They fail because the screen does not exist.
 
 - [ ] A batch of three fixtures produces three outputs at their mirrored paths, with their tags.
 - [ ] A batch with one failed file still shows the other outputs and the failed row.
+- [ ] A batch with one cancelled file reports it as cancelled, and SRS §9.5 names that result.
 - [ ] `Outcome` records the drop path and the source that confirmed it.
 - [ ] The new tests failed first for the expected reason.
 - [ ] `pnpm verify` passes.

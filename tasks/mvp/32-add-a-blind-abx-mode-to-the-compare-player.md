@@ -22,7 +22,7 @@ Let the user test whether they can hear the restoration, without knowing which v
 5. The A, B, and X switch keeps the playback position and takes 50 ms or less (SRS §12.5).
 6. A session that ends with zero trials shows "No trials completed" and no p-value.
 
-`tasks/ux/interface-proposal.md` section 3.4 proposes the trial strip and the result copy. It is a proposal until the owner accepts it.
+`tasks/ux/interface-proposal.md` section 3.4 proposes the trial strip and the result copy. Read its MVP ruling first. The ruling wins over the section.
 
 ## Out of scope
 

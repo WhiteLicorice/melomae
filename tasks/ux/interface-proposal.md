@@ -2,7 +2,7 @@
 
 **Kind:** Proposal. This file is not a task record and has no board row.
 **Source:** The impeccable audit of 2026-11-11 at `master` `0220b19`. The audit read the source and the task records. It did not run the app.
-**Owner decision:** Not yet accepted.
+**Owner decision:** Ruled for the MVP on 2026-11-11. The owner asked the orchestrator to judge each part. The section "MVP ruling" holds the result, and the owner can amend any row.
 
 This document proposes the Melomae interface as a whole: the character, the frame, each screen, the states, the keyboard contract, and the copy. `docs/melomae-srs.md` still defines product behavior. Where this proposal adds to the SRS, section 11 lists the addition as an open decision.
 
@@ -12,9 +12,56 @@ Every color ratio in this file was computed from sRGB values. Nobody measured a 
 
 ## How to use this file
 
-1. The owner reads sections 1, 2, and 11, and records the decision in the line above.
-2. Task 39 turns the accepted sections 1 and 2 into `PRODUCT.md` and `DESIGN.md`.
-3. Tasks 18 to 25, 32, 40, and 41 cite the section that covers their screen.
+1. Read the MVP ruling first. It wins over every later section.
+2. Task 39 turns sections 1 and 2, as ruled, into `PRODUCT.md` and `DESIGN.md`.
+3. Tasks 18 to 25, 32, and 40 to 42 cite the section that covers their screen.
+
+## MVP ruling
+
+The test for each part: does the SRS need it, or does a user fail without it? A part that passes goes into a task. A part that only adds comfort waits in the backlog. A part with no data behind it is cut.
+
+### Promoted into a task
+
+| Part | Record | Reason |
+|---|---|---|
+| Plain verdict labels with a shape and a one-line explanation (section 1) | Task 24 | The user is non-technical (SRS §3.1) and decides per file (SRS §4.5). The label "Already full bandwidth" keeps "lossless" out of the visible copy (SRS §1.4). |
+| Cutoff meter in the triage row (section 3.2) | Task 24 | The cutoff is already measured and stored. The meter is one track and one marker. |
+| History screen (section 3.5) | Task 42, new | SRS §8.8 keeps a history, and task 23 opens the compare from it. No record built the screen. |
+| Cancel the whole batch (section 3.3) | Task 21 | SRS §9.3 requires it. No record had it. |
+| Cancelled as a fourth batch result (section 11, item 1) | Tasks 21 and 24 | A cancelled file is not restored, skipped, or failed. A report that hides it is wrong. Task 24 amends SRS §9.5. |
+| First run resumes at the first incomplete step (section 11, item 2) | Task 25 | Without the rule, a closed window skips the caveat or the output folder. |
+| Window: 1100 x 720 default, 800 x 600 minimum (section 2) | Task 19 | The triage table needs the width. The current window has no minimum. |
+| Color tokens with a separate control-edge token (section 2) | Task 39 | The text pairs compute to 4.5:1 or more. The `border` token fails as a control edge. |
+| Typed error, plain message first (section 11, item 3) | Tasks 18 and 21 | Already in the records. |
+| Compare length limit (section 11, item 4) | Task 23 | Already in the record. |
+| Empty, loading, and error states (section 5) | Tasks 21, 23, 24, 25, 42 | Already in the records. |
+| "Generated detail" label next to the restored side (section 1) | Task 23 | SRS §1.4. One static label. |
+| Copy deck (section 9) | Tasks 21 to 25, 32 | Starting copy. The benchmark numbers are examples. |
+
+### Changed for the MVP
+
+| Part | Change | Reason |
+|---|---|---|
+| Benchmark Skip (section 3.1) | No Skip. A failed benchmark shows Retry and Continue. | SRS §3.3 says that the flow measures the speed. A failure must not block a user. |
+| Fonts (section 2) | The system font stack. No bundled family. | A bundled family adds license notices and files for no MVP gain. The `Inter` name in the starter never loaded. |
+| Theme (section 3.6) | Follow the OS only. | Task 19 already says this. See B-051 for the override. |
+| Rail (section 2) | One fixed width that works at 800 px. No collapse, no footer. | A collapse is a second layout to test. Settings shows the device and the model state. |
+| Queue row (section 3.3) | The stage is a text label. No timeline, no batch groups. | SRS §9.4 needs the stage, the progress, the ETA, and the verdict. |
+| Restore screen (section 3.2) | One table. No Sources pane, no drawer, no sort. | Task 24 needs add, review, select, and start. See B-052. |
+| History (section 3.5) | A filter by file name only. | The date, result, verdict, and format filters wait for a real need. |
+| Keys (section 8) | Tab order, Space, Enter, Escape, and the arrow keys. In the compare player, A and B select a version. | The single-letter keys C, R, V, and M can fire by accident, and each one needs its own test. |
+| Crash recovery (section 4) | An interrupted job returns to `queued` and runs again. | Task 14 is done and works this way. The proposed "interrupted" state contradicts it. |
+
+### Cut
+
+| Part | Reason |
+|---|---|
+| Measured cutoff view in the compare player (section 3.4) | No task measures the cutoff of the restored file. The dashed line would be a drawing, not a measurement. B-003 owns the spectrogram. |
+| "Locate source" in the unavailable state (section 3.4) | SRS §10.8 needs the reason only. |
+| Density option (section 2) | See B-051. |
+| Diagnostics section (section 3.6) | The typed error detail has a copy action. |
+
+Section 11, items 5 to 8, are settled by the rows above. The later sections keep the original proposal text for reference.
 
 ## 1. Product character
 
@@ -223,7 +270,7 @@ Each field has a label, a hint, and a save state: Idle, Saving, Saved, or Failed
 
 **Compare unavailable.** The source moved or changed. The player shows why and links to History. The user can locate the source and try again (`docs/melomae-srs.md:108`).
 
-**Crash recovery.** On launch, the Queue reads the last known job state from the database and marks any job that was running as interrupted. The user can retry. This is grounded in the history record in `docs/melomae-srs.md:89` and the job store in task 14.
+**Crash recovery.** On launch, the app calls `recover_interrupted_jobs` once, and each job that was running returns to `queued` (task 14). This is grounded in the history record in `docs/melomae-srs.md:89` and the job store in task 14.
 
 ## 5. States matrix
 
@@ -339,7 +386,7 @@ A proposal has no board row. These records carry its work:
 | First run and About | Task 25 |
 | Starter leftovers | R-001 |
 
-The History screen (section 3.5) has no record yet. Task 19 names History in the sidebar, and no task builds its table. Write that record when the owner accepts this proposal.
+Task 42 builds the History screen (section 3.5). B-051 and B-052 hold the deferred parts.
 
 ## 11. SRS gaps this proposal exposes
 

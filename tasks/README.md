@@ -139,8 +139,9 @@ Task numbers record creation order. The executor still selects the lowest eligib
 | 39 | [Record the product and design context](mvp/39-record-the-product-and-design-context.md) | TODO | — |
 | 40 | [Add an accessibility gate to the UI tests](mvp/40-add-an-accessibility-gate-to-the-ui-tests.md) | TODO | 19 |
 | 41 | [Validate the output folder in Settings](mvp/41-validate-the-output-folder-in-settings.md) | TODO | 19 |
+| 42 | [Build the history screen](mvp/42-build-the-history-screen.md) | TODO | 19, 23, 31 |
 
-Tasks 39 to 41 come from the impeccable audit of 2026-11-11 at `master` `0220b19`. The same audit added scope, tests, and acceptance criteria to tasks 18, 19, 21, 23, 24, 25, and 32. The audit read the source and the records. It did not run the app. Task 39 waits for the owner decision on `tasks/ux/interface-proposal.md`.
+Tasks 39 to 42 come from the impeccable audit of 2026-11-11 at `master` `0220b19`. The same audit added scope, tests, and acceptance criteria to tasks 18, 19, 21, 23, 24, 25, and 32. The audit read the source and the records. It did not run the app. The MVP ruling in `tasks/ux/interface-proposal.md` decides which parts of the proposal these tasks build.
 
 ## Phase 5 — Packaging and release
 
@@ -231,6 +232,8 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 | B-048 | [Carry the payloads of mapped frames](backlog/B-048-carry-the-payloads-of-mapped-frames.md) | TODO | 15 |
 | B-049 | [Split ID3v2.3 slash values when confirmed](backlog/B-049-split-id3v2-3-slash-values-when-confirmed.md) | TODO | 15 |
 | B-050 | [Write repeated WOAR frames in WAV](backlog/B-050-write-repeated-woar-frames-in-wav.md) | TODO | 15 |
+| B-051 | [Add a theme override and a density option](backlog/B-051-add-a-theme-override-and-a-density-option.md) | TODO | 19 |
+| B-052 | [Add a sources pane and a file inspector to the Restore screen](backlog/B-052-add-a-sources-pane-and-a-file-inspector-to-the-restore-screen.md) | TODO | 24 |
 
 Each backlog record states why it does not block the MVP. Each record also states its promotion condition.
 
@@ -248,4 +251,4 @@ A proposal is a design document that is not yet work. Interface proposals live i
 
 | Proposal | Owner decision |
 | --- | --- |
-| [Interface proposal](ux/interface-proposal.md) | Not yet accepted |
+| [Interface proposal](ux/interface-proposal.md) | Ruled for the MVP on 2026-11-11. The owner can amend the ruling. |

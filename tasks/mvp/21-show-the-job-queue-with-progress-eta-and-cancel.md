@@ -30,8 +30,11 @@ On CPU, a 4-minute song restores in about 12.5 min on the dev machine (Stack §K
 9. Virtualize the list with TanStack Virtual (Stack §A). Apply progress events at most once per animation frame. Show the active, waiting, done, and failed counts outside the list.
 10. Show the user message of a failed job first (task 18). Put the technical detail behind a disclosure.
 11. A cancel moves the focus to the next job, or to the empty state.
+12. Add a "Cancel batch" action that cancels every waiting and active job (SRS §9.3). It asks for a confirmation. If task 18 has no command for it, add the command there first.
+13. A cancelled job shows the result "Cancelled", and the counts outside the list include a cancelled count.
+14. Show the stage as a text label. Do not build a stage timeline or batch groups.
 
-`tasks/ux/interface-proposal.md` section 3.3 proposes the row layout and the copy. It is a proposal until the owner accepts it.
+`tasks/ux/interface-proposal.md` section 3.3 proposes the row layout and the copy. Read its MVP ruling first. The ruling wins over the section.
 
 ## Out of scope
 
@@ -44,6 +47,7 @@ On CPU, a 4-minute song restores in about 12.5 min on the dev machine (Stack §K
 3. Component tests cover the empty queue, the connecting state, and a recorded stream that stops.
 4. A component test with a recorded 500-job stream renders only the visible rows.
 5. A component test finds the progress bar by its role and reads its value.
+6. An E2E test cancels a batch of three jobs and sees three "Cancelled" results and no output file.
 
 Run the tests. They fail because the screen does not exist.
 
