@@ -237,6 +237,14 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 | B-050 | [Write repeated WOAR frames in WAV](backlog/B-050-write-repeated-woar-frames-in-wav.md) | TODO | 15 |
 | B-051 | [Add a theme override and a density option](backlog/B-051-add-a-theme-override-and-a-density-option.md) | TODO | 19 |
 | B-052 | [Add a sources pane and a file inspector to the Restore screen](backlog/B-052-add-a-sources-pane-and-a-file-inspector-to-the-restore-screen.md) | TODO | 24 |
+| B-053 | [Decide the scope of live system-audio restore](backlog/B-053-decide-the-scope-of-live-system-audio-restore.md) | TODO | — |
+| B-054 | [Blind-test the restore on a streamed source with matched loudness](backlog/B-054-blind-test-the-restore-on-a-streamed-source-with-matched-loudness.md) | TODO | 07 |
+| B-055 | [Test whether Windows process loopback captures a muted app](backlog/B-055-test-whether-windows-process-loopback-captures-a-muted-app.md) | TODO | — |
+| B-056 | [Measure the time receptive field of the stock model](backlog/B-056-measure-the-time-receptive-field-of-the-stock-model.md) | TODO | 01 |
+| B-057 | [Export a stateful streaming model](backlog/B-057-export-a-stateful-streaming-model.md) | TODO | B-056 |
+| B-058 | [Measure live restore speed on the GPU](backlog/B-058-measure-live-restore-speed-on-the-gpu.md) | TODO | B-057, 08 |
+| B-059 | [Prototype live restore through a virtual cable on Windows](backlog/B-059-prototype-live-restore-through-a-virtual-cable-on-windows.md) | TODO | B-058 |
+| B-060 | [Choose the shipped Windows capture path](backlog/B-060-choose-the-shipped-windows-capture-path.md) | TODO | B-055, B-059 |
 | B-061 | [Stop the buffer copy when the sample rate already matches](backlog/B-061-stop-the-buffer-copy-when-the-sample-rate-already-matches.md) | TODO | 03, 05 |
 | B-062 | [Stop a second app instance from requeueing live jobs](backlog/B-062-stop-a-second-app-instance-from-requeueing-live-jobs.md) | TODO | 14, 17 |
 | B-063 | [Reject chunk settings that the crossfade cannot hold](backlog/B-063-reject-chunk-settings-that-the-crossfade-cannot-hold.md) | TODO | 04 |
@@ -248,6 +256,7 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 
 Each backlog record states why it does not block the MVP. Each record also states its promotion condition.
 
+B-053 to B-060 are one group: live restore of the audio that the machine plays. B-053 is the owner's scope decision, and it comes first. B-054 and B-055 are cheap tests that can run at any time. The group comes from a research handoff of 2026-10-30. Each record marks its unverified claims.
 
 Tasks 43 to 45, B-061 to B-068, and R-002 to R-005 come from the ponytail audit of 2026-11-11 at `master` `23f0bcf`. The audit read the code and ran nothing. Each record marks the claims that nobody measured.
 
@@ -269,4 +278,4 @@ A proposal is a design document that is not yet work. Interface proposals live i
 
 | Proposal | Owner decision |
 | --- | --- |
-| [Interface proposal](ux/interface-proposal.md) | Ruled for the MVP on 2026-11-11. The owner can amend the ruling. |
+| [Interface proposal](ux/interface-proposal.md) | Accepted with the MVP ruling on 2026-11-11. |
