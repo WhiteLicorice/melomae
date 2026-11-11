@@ -16,6 +16,8 @@ The app still carries parts of the Vite and Tauri starter. They do nothing for M
 - `src/App.css:36`: `will-change: filter` on the unused `.logo`.
 - `src-tauri/src/lib.rs:2-5` and `:11`: the `greet` command. No frontend code calls it.
 
+- The ponytail audit of 2026-11-11 found the same leftovers. It also proposed to remove `tauri-plugin-opener` (`src-tauri/Cargo.toml:23`, `src-tauri/src/lib.rs:10`, `src-tauri/capabilities/default.json:8`, `package.json:19`). No code calls the plugin today. Keep it: task 21 needs an "open file location" action. If task 21 opens the folder in another way, remove the plugin and its capability then.
+
 ## Why this is a refactor
 
 No user sees a defect. The window shows the title and one sentence. The change removes dead files, dead rules, and one dead command.

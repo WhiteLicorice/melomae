@@ -107,6 +107,7 @@ The validator rejects any other status value.
 | 37 | [Download the CUDA runtime on demand](mvp/37-download-the-cuda-runtime-on-demand.md) | TODO | 08, 38 |
 | 33 | [Load ONNX Runtime dynamically for the glibc 2.35 baseline](mvp/33-load-onnx-runtime-dynamically-on-linux.md) | DONE | 04 |
 | 34 | [Make test temporary directories unique](mvp/34-make-test-temporary-directories-unique.md) | DONE | 03 |
+| 45 | [Measure and stop the MP3 trim to an estimated length](mvp/45-measure-and-stop-the-mp3-trim-to-an-estimated-length.md) | TODO | 03 |
 
 ## Phase 2 — Metadata, triage, and provenance
 
@@ -115,6 +116,8 @@ The validator rejects any other status value.
 | 15 | [Preserve tags and pictures across formats](mvp/15-preserve-tags-and-pictures-across-formats.md) | DONE | 06 |
 | 16 | [Triage input files for restoration](mvp/16-triage-input-files-for-restoration.md) | DONE | 03, 14 |
 | 31 | [Record restore provenance in tags and history](mvp/31-record-restore-provenance-in-tags-and-history.md) | TODO | 14, 15 |
+| 43 | [Copy tags and pictures on the CLI restore path](mvp/43-copy-tags-and-pictures-on-the-cli-restore-path.md) | TODO | 07, 15 |
+| 44 | [Keep the triage scan running when a file or folder cannot be read](mvp/44-keep-the-triage-scan-running-when-a-file-or-folder-cannot-be-read.md) | TODO | 16 |
 
 ## Phase 3 — Jobs and pipeline
 
@@ -234,8 +237,19 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 | B-050 | [Write repeated WOAR frames in WAV](backlog/B-050-write-repeated-woar-frames-in-wav.md) | TODO | 15 |
 | B-051 | [Add a theme override and a density option](backlog/B-051-add-a-theme-override-and-a-density-option.md) | TODO | 19 |
 | B-052 | [Add a sources pane and a file inspector to the Restore screen](backlog/B-052-add-a-sources-pane-and-a-file-inspector-to-the-restore-screen.md) | TODO | 24 |
+| B-061 | [Stop the buffer copy when the sample rate already matches](backlog/B-061-stop-the-buffer-copy-when-the-sample-rate-already-matches.md) | TODO | 03, 05 |
+| B-062 | [Stop a second app instance from requeueing live jobs](backlog/B-062-stop-a-second-app-instance-from-requeueing-live-jobs.md) | TODO | 14, 17 |
+| B-063 | [Reject chunk settings that the crossfade cannot hold](backlog/B-063-reject-chunk-settings-that-the-crossfade-cannot-hold.md) | TODO | 04 |
+| B-064 | [Keep the real path when a file name is not valid Unicode](backlog/B-064-keep-the-real-path-when-a-file-name-is-not-valid-unicode.md) | TODO | 16 |
+| B-065 | [Treat mu-law and A-law WAV files as lossy](backlog/B-065-treat-mu-law-and-a-law-wav-files-as-lossy.md) | TODO | 16 |
+| B-066 | [Count the FLAC encoder buffer in the memory reserve](backlog/B-066-count-the-flac-encoder-buffer-in-the-memory-reserve.md) | TODO | 05, 06 |
+| B-067 | [Typecheck the Vite configuration files in the gate](backlog/B-067-typecheck-the-vite-configuration-files-in-the-gate.md) | TODO | 00 |
+| B-068 | [Put a timeout on the pinned downloads](backlog/B-068-put-a-timeout-on-the-pinned-downloads.md) | TODO | 00 |
 
 Each backlog record states why it does not block the MVP. Each record also states its promotion condition.
+
+
+Tasks 43 to 45, B-061 to B-068, and R-002 to R-005 come from the ponytail audit of 2026-11-11 at `master` `23f0bcf`. The audit read the code and ran nothing. Each record marks the claims that nobody measured.
 
 ## Refactor records
 
@@ -244,6 +258,10 @@ Refactor records describe a structural change with no confirmed visible defect. 
 | # | Task | Status | Depends on |
 | --- | --- | --- | --- |
 | R-001 | [Remove the Vite and Tauri starter leftovers](refactor/R-001-remove-the-vite-and-tauri-starter-leftovers.md) | TODO | — |
+| R-002 | [Give the store and triage tests one temporary-database helper](refactor/R-002-give-the-store-and-triage-tests-one-temporary-database-helper.md) | TODO | 34 |
+| R-003 | [Merge the three pinned-download scripts](refactor/R-003-merge-the-three-pinned-download-scripts.md) | TODO | 00 |
+| R-004 | [Read the job row once in transition_job](refactor/R-004-read-the-job-row-once-in-transition-job.md) | TODO | 14 |
+| R-005 | [Remove the unused melomae_core::VERSION constant](refactor/R-005-remove-the-unused-melomae-core-version-constant.md) | TODO | 00 |
 
 ## Proposals
 

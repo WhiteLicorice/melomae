@@ -23,7 +23,7 @@ Let the user find a past restore, read what Melomae did to the file, and open th
 ## Scope
 
 1. A table of the history rows, newest first: date, file name, verdict, output format, device, and result.
-2. Virtualize the table with TanStack Virtual (Stack §A).
+2. Virtualize the table with TanStack Virtual (Stack §A). Read the rows in pages, newest first. `Store::history` reads every row in insertion order with no limit (`crates/melomae-core/src/store/mod.rs:551-559`). Add a page query with a limit and a cursor, and keep `history` for the tests.
 3. A text field filters the rows by file name.
 4. A row opens its details: the input path, the output path, the input SHA-256, the settings, and the provenance value. The provenance value has a copy action.
 5. A row with a finished restore has a Compare action. It opens the task 23 player. The action is disabled, with the reason, when SRS §10.8 makes the compare unavailable.
@@ -45,6 +45,7 @@ Let the user find a past restore, read what Melomae did to the file, and open th
 4. A component test opens a row and copies the provenance value.
 5. A component test with a missing input file finds the Compare action disabled and reads the reason.
 6. An axe scan of the screen passes (task 40), when that task is done.
+7. A store test reads two pages and finds that they equal the newest rows of the full list, in order.
 
 Run the tests. They fail because the screen does not exist.
 
