@@ -2,7 +2,7 @@
 
 **Kind:** Proposal. This file is not a task record and has no board row.
 **Source:** The impeccable audit of 2026-11-11 at `master` `0220b19`. The audit read the source and the task records. It did not run the app.
-**Owner decision:** Ruled for the MVP on 2026-11-11. The owner asked the orchestrator to judge each part. The section "MVP ruling" holds the result, and the owner can amend any row.
+**Owner decision:** Ruled for the MVP on 2026-11-11. The owner asked the orchestrator to judge each part. The section "MVP ruling" holds the result. The owner accepted the ruling on 2026-11-11.
 
 This document proposes the Melomae interface as a whole: the character, the frame, each screen, the states, the keyboard contract, and the copy. `docs/melomae-srs.md` still defines product behavior. Where this proposal adds to the SRS, section 11 lists the addition as an open decision.
 
