@@ -8,3 +8,8 @@
 
 # Bash runs the skill sync scripts. A CRLF checkout breaks them.
 /.vendored/*.sh text eol=lf
+
+# Ignore vendored things
+.vendored/** linguist-vendored
+.claude/** linguist-vendored
+.agents/** linguist-vendored
