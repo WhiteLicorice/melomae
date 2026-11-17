@@ -116,6 +116,7 @@ fn cpu_dispatch(options: OnnxOptions) -> ort::ep::ExecutionProviderDispatch {
 /// `ort::Error` touches `ort`'s global API, which loads a default ONNX Runtime and
 /// panics when no runtime is set up yet.
 pub(crate) fn preload_cuda_dylibs(folder: &Path) -> Result<(), InferenceError> {
+    add_to_dll_search_path(folder);
     for name in ort::ep::cuda::CUDA_DYLIBS
         .iter()
         .chain(ort::ep::cuda::CUDNN_DYLIBS)
@@ -132,6 +133,36 @@ pub(crate) fn preload_cuda_dylibs(folder: &Path) -> Result<(), InferenceError> {
     }
     Ok(())
 }
+
+/// Put `folder` on the DLL search path, once per process (Windows).
+///
+/// [`preload_cuda_dylibs`] loads every library of `CUDA_DYLIBS` and `CUDNN_DYLIBS` by
+/// full path, but the cuDNN 9 frontend also loads `cudnn_engines_tensor_ir64_9.dll` at
+/// run time by bare name. Windows resolves a bare name through the search path, not
+/// through the folder of the library that asks for it, so the preload alone leaves the
+/// engine sublibrary out. Without this folder on the path, a GPU run then fails in the
+/// first `ConvTranspose` node with `CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED` (measured
+/// 2026-11-18).
+///
+/// Linux resolves a library this way through `LD_LIBRARY_PATH`, which only takes
+/// effect at process start, so this helper does nothing there. The Linux GPU path is
+/// backlog work.
+#[cfg(windows)]
+fn add_to_dll_search_path(folder: &Path) {
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    if std::env::split_paths(&current).any(|entry| entry == folder) {
+        return;
+    }
+    let mut paths = vec![folder.to_path_buf()];
+    paths.extend(std::env::split_paths(&current));
+    if let Ok(joined) = std::env::join_paths(paths) {
+        std::env::set_var("PATH", joined);
+    }
+}
+
+/// No-op off Windows; see the Windows version for the reason.
+#[cfg(not(windows))]
+fn add_to_dll_search_path(_folder: &Path) {}
 
 /// The version of the ONNX Runtime library at `library`.
 ///
