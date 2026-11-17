@@ -9,6 +9,7 @@
 #![allow(dead_code)]
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -238,6 +239,29 @@ impl Fixtures {
             "256k",
             &target.display().to_string(),
         ]);
+        target
+    }
+
+    /// Encode `source` as an MP3 that carries no Xing, Info, or VBRI header, so the container
+    /// states no frame count and a reader has to estimate the length.
+    ///
+    /// `rate_args` selects the bitrate mode: `["-b:a", "128k"]` for constant bitrate, or
+    /// `["-q:a", "4"]` for variable. ffmpeg still writes a leading ID3v2 tag, which every reader
+    /// skips before the audio. The source must make a variable bitrate vary, or the estimate is
+    /// right by construction.
+    pub fn headerless_mp3(&self, name: &str, source: &Path, rate_args: &[&str]) -> PathBuf {
+        let target = self.dir.join(name);
+        let mut args: Vec<String> = vec!["-i".to_string(), source.display().to_string()];
+        args.extend(rate_args.iter().map(|arg| (*arg).to_owned()));
+        args.extend([
+            "-c:a".to_string(),
+            "libmp3lame".to_string(),
+            "-write_xing".to_string(),
+            "0".to_string(),
+            target.display().to_string(),
+        ]);
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        run(&borrowed);
         target
     }
 
@@ -639,6 +663,44 @@ pub enum Padding {
     /// The first block of the first cluster becomes a `BlockGroup` with this padding, in
     /// nanoseconds; every other block keeps its form.
     Interior(i64),
+}
+
+/// Append a terminal APEv2 tag carrying one title to an MP3.
+///
+/// The tag is a 32-byte header, one item, and a 32-byte footer, written after the last frame, the
+/// way a tag editor writes one. A reader that measures the file's physical length from the first
+/// frame to the end of the file therefore counts the tag as audio. The CLI tests compile this
+/// module too and do not link lofty, so the tag is built here byte for byte.
+pub fn write_apev2_tag(path: &Path) {
+    const VERSION: u32 = 2000;
+    const HAS_HEADER: u32 = 0x8000_0000;
+    const IS_HEADER: u32 = 0x2000_0000;
+
+    let mut item = Vec::new();
+    item.extend_from_slice(&(b"Headerless VBR".len() as u32).to_le_bytes());
+    item.extend_from_slice(&0u32.to_le_bytes());
+    item.extend_from_slice(b"Title\0");
+    item.extend_from_slice(b"Headerless VBR");
+
+    // The tag size counts the items and the footer, not the header.
+    let tag_size = (item.len() + 32) as u32;
+    let mut footer = Vec::new();
+    footer.extend_from_slice(b"APETAGEX");
+    footer.extend_from_slice(&VERSION.to_le_bytes());
+    footer.extend_from_slice(&tag_size.to_le_bytes());
+    footer.extend_from_slice(&1u32.to_le_bytes());
+    footer.extend_from_slice(&HAS_HEADER.to_le_bytes());
+    footer.extend_from_slice(&[0u8; 8]);
+    let mut header = footer.clone();
+    header[20..24].copy_from_slice(&(HAS_HEADER | IS_HEADER).to_le_bytes());
+
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .expect("open the MP3 to tag");
+    file.write_all(&header).expect("write the APEv2 header");
+    file.write_all(&item).expect("write the APEv2 item");
+    file.write_all(&footer).expect("write the APEv2 footer");
 }
 
 /// Rewrite `source` into `target`, porting the reviewer's `rev03_inputs.py` packing: the EBML

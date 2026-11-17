@@ -16,6 +16,8 @@ use common::{
 };
 use setup::{Fixtures, TempDir};
 
+use std::path::{Path, PathBuf};
+
 /// One generated input, its source rate, and its channel count.
 const CASES: &[(&str, u32, usize)] = &[
     ("wav_44100.wav", 44_100, 2),
@@ -277,4 +279,118 @@ fn awkward_file_names_decode() {
         );
         assert!(decoded.frames() > 0, "{name}: decoded no frames");
     }
+}
+
+/// One MPEG-1 Layer III frame at 44.1 kHz is 1152 samples. A headerless MP3 may differ from the
+/// oracle by at most that much, which is the estimate's rounding, not lost audio.
+const MP3_FRAME: usize = 1_152;
+
+/// Decode `path` natively and read the ffmpeg oracle's count for the same file.
+///
+/// Returns both counts and prints the measurement, so the task record can carry the numbers
+/// before and after the change. The length assertion is separate, so a test that measures two
+/// files reports both numbers before either one fails.
+fn measure_mp3(fixtures: &Fixtures, path: &Path, label: &str) -> (usize, usize) {
+    let decoded = decode_file_native(path).unwrap_or_else(|e| panic!("{label}: {e}"));
+    let reference_frames = fixtures.reference_for(path, 44_100, 2, None).len() / 2;
+    eprintln!(
+        "measured: {label} decoded {} frames, oracle {reference_frames} frames, delta {} samples (one frame = {MP3_FRAME})",
+        decoded.frames(),
+        decoded.frames().abs_diff(reference_frames)
+    );
+    assert_eq!(decoded.sample_rate(), 44_100, "{label}: source rate");
+    assert_eq!(decoded.channel_count(), 2, "{label}: channel count");
+    (decoded.frames(), reference_frames)
+}
+
+/// Assert that a headerless MP3 decoded to the oracle's count, within one frame.
+fn assert_within_one_mp3_frame(label: &str, decoded: usize, reference: usize) {
+    let delta = decoded.abs_diff(reference);
+    assert!(
+        delta <= MP3_FRAME,
+        "{label}: decoded {decoded} frames, oracle {reference} frames, a loss of {delta} samples, \
+         more than one MP3 frame ({MP3_FRAME})"
+    );
+}
+
+/// Task 45: a headerless MP3 states no frame count, so Symphonia estimates one from the first
+/// frames' bitrate. The estimate is not a completeness proof, and using it as a trim bound cuts
+/// audio off the end. The constant bitrate estimate lands within a frame; it must stay there.
+#[test]
+fn headerless_cbr_mp3_decodes_every_frame_against_the_oracle() {
+    let fixtures = Fixtures::build();
+    let source = variable_rate_source(&fixtures);
+    let path = fixtures.headerless_mp3("headerless-cbr.mp3", &source, &["-b:a", "128k"]);
+    let (frames, reference) = measure_mp3(&fixtures, &path, "headerless CBR MP3");
+    assert_within_one_mp3_frame("headerless CBR MP3", frames, reference);
+}
+
+/// The variable bitrate case is the one an estimate gets wrong: the first frames need more bits
+/// than the average, so the estimated count lands short and the tail is cut.
+#[test]
+fn headerless_vbr_mp3_decodes_every_frame_against_the_oracle() {
+    let fixtures = Fixtures::build();
+    let source = variable_rate_source(&fixtures);
+    let path = fixtures.headerless_mp3("headerless-vbr.mp3", &source, &["-q:a", "4"]);
+    let (frames, reference) = measure_mp3(&fixtures, &path, "headerless VBR MP3");
+    assert_within_one_mp3_frame("headerless VBR MP3", frames, reference);
+}
+
+/// A terminal APEv2 tag is not audio, but it adds to the physical length that the bitrate
+/// estimate divides. It must not change the decoded count either way.
+#[test]
+fn headerless_vbr_mp3_with_a_terminal_apev2_tag_decodes_every_frame() {
+    let fixtures = Fixtures::build();
+    let source = variable_rate_source(&fixtures);
+    let plain = fixtures.headerless_mp3("headerless-vbr-plain.mp3", &source, &["-q:a", "4"]);
+    let tagged = fixtures.headerless_mp3("headerless-vbr-apev2.mp3", &source, &["-q:a", "4"]);
+    std::fs::copy(&plain, &tagged).expect("copy the headerless VBR MP3");
+    setup::write_apev2_tag(&tagged);
+
+    let (plain_frames, plain_reference) = measure_mp3(&fixtures, &plain, "headerless VBR MP3");
+    let (tagged_frames, tagged_reference) =
+        measure_mp3(&fixtures, &tagged, "headerless VBR MP3 with an APEv2 tag");
+    assert_eq!(
+        tagged_frames, plain_frames,
+        "the APEv2 tag changed the decoded count from {plain_frames} to {tagged_frames}"
+    );
+    assert_within_one_mp3_frame("headerless VBR MP3", plain_frames, plain_reference);
+    assert_within_one_mp3_frame(
+        "headerless VBR MP3 with an APEv2 tag",
+        tagged_frames,
+        tagged_reference,
+    );
+}
+
+/// The source for the headerless fixtures: six seconds of a sustained 440 Hz tone.
+///
+/// The frame layout is what matters, not the music. libmp3lame spends many bits on this source's
+/// first frames and about a fifth as many on the rest, so the first sixteen frames average far
+/// above the whole file. That is the case the bitrate estimate gets wrong. The project's usual
+/// source is stationary: its frames come out near-uniform, the estimate matches the count, and a
+/// test built on it stays green with the defect present.
+fn variable_rate_source(fixtures: &Fixtures) -> PathBuf {
+    let path = fixtures.dir().join("variable-rate-source.wav");
+    let frames = 44_100 * 6;
+    let tone = sine(44_100, 440.0, 0.5, frames);
+    write_wav_f32(&path, 44_100, &[tone.clone(), tone]);
+    path
+}
+
+/// An MP3 with a Xing, Info, or VBRI header declares its frame count, and that count excludes the
+/// encoder delay and padding. The decoder must keep trimming to it, so the padding stays out.
+#[test]
+fn mp3_with_a_xing_header_keeps_the_gapless_trim() {
+    let fixtures = Fixtures::build();
+    let decoded = decode_file_native(&fixtures.path("mp3_44100.mp3")).expect("decode the MP3");
+    let reference_frames = fixtures.reference("mp3_44100.mp3").len() / 2;
+    eprintln!(
+        "measured: Xing-header MP3 decoded {} frames, oracle {reference_frames} frames",
+        decoded.frames()
+    );
+    assert_eq!(
+        decoded.frames(),
+        reference_frames,
+        "the Xing-header MP3 no longer matches the oracle's gapless trim"
+    );
 }
