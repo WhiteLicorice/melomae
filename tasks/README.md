@@ -108,6 +108,7 @@ The validator rejects any other status value.
 | 33 | [Load ONNX Runtime dynamically for the glibc 2.35 baseline](mvp/33-load-onnx-runtime-dynamically-on-linux.md) | DONE | 04 |
 | 34 | [Make test temporary directories unique](mvp/34-make-test-temporary-directories-unique.md) | DONE | 03 |
 | 45 | [Measure and stop the MP3 trim to an estimated length](mvp/45-measure-and-stop-the-mp3-trim-to-an-estimated-length.md) | TODO | 03 |
+| 46 | [Stop the restore tests sizing from free memory](mvp/46-stop-the-restore-tests-sizing-from-free-memory.md) | TODO | 36 |
 
 ## Phase 2 — Metadata, triage, and provenance
 
