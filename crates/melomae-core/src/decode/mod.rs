@@ -317,37 +317,42 @@ fn decode_format(
     // timebase is the reciprocal of the sample rate, that is a frame count, and the difference
     // from the decoded total is the container's trailing encoder padding.
     let sample_time_base = track_time_base == TimeBase::try_from_recip(sample_rate);
-    let valid_frames = if sample_time_base {
+    // Symphonia fills `num_frames` from the container, but it is not always a declaration: for MP3
+    // with no Xing, Info, or VBRI header it estimates the count from the bitrate and the physical
+    // length. An estimate is not a completeness proof, and it can sit below the real count: the
+    // first frames' average length does not hold for a variable rate file, so a trim to it cuts
+    // audio off the end. Every other container here states an exact count (a WAV or AIFF data size,
+    // a FLAC STREAMINFO total, an Ogg granule, an MP4 track timespan), so only MP3 needs its first
+    // frame read.
+    let count_declared = format.format_info().short_name != "mp3" || mp3_declares_frame_count(path);
+    // Both the trim bound and the completeness check rest on that count, so both are skipped when
+    // nothing declares it: a headerless MP3 keeps every frame it decodes, including its encoder
+    // delay, because no header records how much of it to drop.
+    let valid_frames = if sample_time_base && count_declared {
         track_duration.and_then(|duration| usize::try_from(duration.get()).ok())
     } else {
         None
     };
-    // The container's frame count, in samples, when its timebase is one tick per sample. Symphonia
-    // fills `num_frames` from the container, but it is not always a declaration: for MP3 with no
-    // Xing, Info, or VBRI header it estimates the count from the bitrate and the physical length, so
-    // an estimate is not a completeness proof. Every other container here states an exact count (a
-    // WAV or AIFF data size, a FLAC STREAMINFO total, an Ogg granule, an MP4 track timespan), so
-    // only MP3 needs its first frame read. `None` means no count is declared, and the decoder keeps
-    // today's behavior.
-    let declared_frames = if !sample_time_base {
-        None
-    } else if format.format_info().short_name == "mp3" {
-        if mp3_declares_frame_count(path) {
-            track_frames
-        } else {
-            None
-        }
-    } else {
+    let declared_frames = if sample_time_base && count_declared {
         track_frames
+    } else {
+        None
     };
+    // An MP3 with no declared count also keeps its encoder delay: nothing records how much of it to
+    // drop. The decoder's own gapless trim would cut to the estimate, so it is off for such a file
+    // and on for every other one, where the count is exact and the padding must go.
+    let gapless = count_declared;
     decode_with_symphonia(
         path,
         &mut *format,
         track_id,
         sample_rate,
         audio,
-        valid_frames,
-        declared_frames,
+        Length {
+            valid_frames,
+            declared_frames,
+            gapless,
+        },
     )
 }
 
@@ -474,17 +479,31 @@ fn read_u32_be(data: &[u8], offset: usize) -> Option<u32> {
     ))
 }
 
+/// What the container states about the stream's length, and how the decoder must treat it.
+///
+/// All three fields come from one source: the container's frame count. When the container states
+/// none, nothing bounds the end, nothing checks completeness, and the decoder keeps every frame it
+/// produces.
+struct Length {
+    /// The end of the valid audio, in frames, when the container states it.
+    valid_frames: Option<usize>,
+    /// The declared count the decoder must reach, when the container states it.
+    declared_frames: Option<u64>,
+    /// Whether the decoder trims the encoder delay and padding that the count excludes.
+    gapless: bool,
+}
+
 fn decode_with_symphonia(
     path: &Path,
     format: &mut dyn FormatReader,
     track_id: u32,
     sample_rate: u32,
     params: &AudioCodecParameters,
-    valid_frames: Option<usize>,
-    declared_frames: Option<u64>,
+    length: Length,
 ) -> Result<AudioBuffer, DecodeError> {
+    let options = AudioDecoderOptions::default().gapless(length.gapless);
     let mut decoder = symphonia::default::get_codecs()
-        .make_audio_decoder(params, &AudioDecoderOptions::default())
+        .make_audio_decoder(params, &options)
         .map_err(|e| DecodeError::new(DecodeErrorKind::UnsupportedFormat, path, e.to_string()))?;
 
     let mut channels: Vec<Vec<f32>> = Vec::new();
@@ -564,7 +583,10 @@ fn decode_with_symphonia(
     // count and the decoded total are compared in the same terms, because the MP3 decoder trims its
     // packet delay and padding itself and the declared count excludes those frames. Do not pad or
     // clamp; report it.
-    if let Some(declared) = declared_frames.and_then(|declared| usize::try_from(declared).ok()) {
+    if let Some(declared) = length
+        .declared_frames
+        .and_then(|declared| usize::try_from(declared).ok())
+    {
         if decoded_frames < declared {
             return Err(DecodeError::new(
                 DecodeErrorKind::Malformed,
@@ -586,7 +608,7 @@ fn decode_with_symphonia(
     let start_trim = edit.map_or(0, |edit| edit.start);
     let valid_frames = match edit {
         Some(edit) => Some(start_trim.saturating_add(edit.duration)),
-        None => valid_frames,
+        None => length.valid_frames,
     };
     let end = valid_frames.unwrap_or(decoded_frames).min(decoded_frames);
     let start_trim = start_trim.min(end);
