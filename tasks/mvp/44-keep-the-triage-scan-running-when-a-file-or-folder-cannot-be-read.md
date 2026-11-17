@@ -1,12 +1,12 @@
 # 44 — Keep the triage scan running when a file or folder cannot be read
 
-**Status:** TODO
+**Status:** IN PROGRESS
 **Phase:** 2 — Metadata, triage, and provenance
 **Depends on:** 16
 **SRS:** §4
 **Stack:** §D
 **Assigned to:** Agent
-**Started:** —
+**Started:** `fd0606d`, clean worktree `C:\mt\w44` on branch `task/44`. The last recorded gate at `master` is task 35: board 66 records, tasks unittest 9, Vitest 1, cargo test 193 passed and 3 ignored, pytest 19. The triage suite baseline is in `C:\mt\reports\44-baseline-triage.txt`.
 **Outcome:** —
 
 ## Goal

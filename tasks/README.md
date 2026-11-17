@@ -126,7 +126,7 @@ The validator rejects any other status value.
 | 16 | [Triage input files for restoration](mvp/16-triage-input-files-for-restoration.md) | DONE | 03, 14 |
 | 31 | [Record restore provenance in tags and history](mvp/31-record-restore-provenance-in-tags-and-history.md) | TODO | 14, 15 |
 | 43 | [Copy tags and pictures on the CLI restore path](mvp/43-copy-tags-and-pictures-on-the-cli-restore-path.md) | TODO | 07, 15 |
-| 44 | [Keep the triage scan running when a file or folder cannot be read](mvp/44-keep-the-triage-scan-running-when-a-file-or-folder-cannot-be-read.md) | TODO | 16 |
+| 44 | [Keep the triage scan running when a file or folder cannot be read](mvp/44-keep-the-triage-scan-running-when-a-file-or-folder-cannot-be-read.md) | IN PROGRESS | 16 |
 
 ## Phase 3 — Jobs and pipeline
 

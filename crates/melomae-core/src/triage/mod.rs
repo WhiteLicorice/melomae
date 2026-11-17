@@ -87,8 +87,17 @@ impl From<StoreError> for TriageError {
     }
 }
 
+/// A path that a scan could not open, and the reason the operating system gave.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanSkip {
+    /// The folder or root that could not be opened.
+    pub path: PathBuf,
+    /// The reason from the operating system.
+    pub reason: String,
+}
+
 /// What one scan did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ScanReport {
     /// The files read and triaged in this scan.
     pub scanned: usize,
@@ -96,8 +105,10 @@ pub struct ScanReport {
     pub skipped: usize,
     /// The stored rows removed because their file no longer exists.
     pub removed: usize,
-    /// Of `scanned`, the files that did not decode.
+    /// Of `scanned`, the files that did not decode or could not be read.
     pub unreadable: usize,
+    /// The paths the walk could not open, with the reason. The scan continues past each one.
+    pub skipped_paths: Vec<ScanSkip>,
 }
 
 /// Triage one file and return its row. The file is opened read-only.
@@ -162,57 +173,151 @@ pub fn triage_file(path: &Path) -> Result<TriageItem, TriageError> {
 /// A root that is a file is triaged whatever its extension. A root that is a folder is searched
 /// recursively for [`AUDIO_EXTENSIONS`]. A file is read only when its size or modification time
 /// differs from the stored row. A stored row whose file is absent from `roots` is removed.
+///
+/// One file that cannot be read gets an `unreadable` row, and one folder that cannot be opened is
+/// a recorded skip. Either way the scan continues (SRS §4.3). The scan returns an error only when
+/// no root can be opened.
 pub fn scan_roots(store: &Store, roots: &[PathBuf]) -> Result<ScanReport, TriageError> {
-    let present = collect_files(roots)?;
+    let collected = collect_files(roots)?;
     let stored = store.triage_items()?;
     let stored_by_path: HashMap<&str, &TriageItem> = stored
         .iter()
         .map(|item| (item.path.as_str(), item))
         .collect();
 
-    let mut report = ScanReport::default();
-    for path in &present {
-        let metadata = fs::metadata(path).map_err(|source| TriageError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        let size_bytes = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
-        let modified_at = modified_at_nanos(&metadata);
+    let mut report = ScanReport {
+        skipped_paths: collected.skipped,
+        ..ScanReport::default()
+    };
+    for path in &collected.files {
         let key = path.to_string_lossy();
-
-        if let Some(existing) = stored_by_path.get(key.as_ref()) {
-            if existing.size_bytes == size_bytes && existing.modified_at == modified_at {
-                report.skipped += 1;
-                continue;
+        match visit(path, stored_by_path.get(key.as_ref()).copied()) {
+            Visit::Gone => {}
+            Visit::Unchanged => report.skipped += 1,
+            Visit::Row(item) => {
+                if item.verdict == Verdict::Unreadable {
+                    report.unreadable += 1;
+                }
+                store.upsert_triage_item(&item)?;
+                report.scanned += 1;
             }
         }
-
-        let item = triage_file(path)?;
-        if item.verdict == Verdict::Unreadable {
-            report.unreadable += 1;
-        }
-        store.upsert_triage_item(&item)?;
-        report.scanned += 1;
     }
 
-    let present_set: HashSet<String> = present
+    let present_set: HashSet<String> = collected
+        .files
         .iter()
         .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    let unopened: Vec<&Path> = report
+        .skipped_paths
+        .iter()
+        .map(|skip| skip.path.as_path())
         .collect();
     for item in &stored {
         if present_set.contains(&item.path) {
             continue;
         }
-        if roots
-            .iter()
-            .any(|root| Path::new(&item.path).starts_with(root))
-        {
+        let path = Path::new(&item.path);
+        // A file under a folder that could not be opened is not absent, so its row stays.
+        if unopened.iter().any(|folder| path.starts_with(folder)) {
+            continue;
+        }
+        if roots.iter().any(|root| path.starts_with(root)) {
             store.delete_triage_item(&item.path)?;
             report.removed += 1;
         }
     }
 
     Ok(report)
+}
+
+/// What a scan does with one collected path.
+enum Visit {
+    /// The path is gone, so the scan skips it. The removal pass drops any stored row.
+    Gone,
+    /// The size and modification time match the stored row, so the scan did not read the file.
+    Unchanged,
+    /// The scan read the file, or tried to, and this is its row.
+    Row(Box<TriageItem>),
+}
+
+/// Check one collected path against its stored row, then triage it.
+///
+/// A path that is gone between the walk and the read yields [`Visit::Gone`]. A path whose metadata
+/// or read fails yields [`Visit::Row`] with `unreadable` and the error text (SRS §4.3), so one bad
+/// file cannot stop the scan.
+fn visit(path: &Path, stored: Option<&TriageItem>) -> Visit {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(source) => {
+            if source.kind() == std::io::ErrorKind::NotFound {
+                return Visit::Gone;
+            }
+            let error = TriageError::Io {
+                path: path.to_path_buf(),
+                source,
+            };
+            return Visit::Row(Box::new(unreadable_row(path, 0, 0, error)));
+        }
+    };
+    let size_bytes = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
+    let modified_at = modified_at_nanos(&metadata);
+
+    if let Some(existing) = stored {
+        if existing.size_bytes == size_bytes && existing.modified_at == modified_at {
+            return Visit::Unchanged;
+        }
+    }
+
+    match triage_file(path) {
+        Ok(item) => Visit::Row(Box::new(item)),
+        Err(TriageError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            Visit::Gone
+        }
+        Err(error) => Visit::Row(Box::new(unreadable_row(
+            path,
+            size_bytes,
+            modified_at,
+            error,
+        ))),
+    }
+}
+
+/// The row for a path that could not be read.
+///
+/// The row keeps the file in the store with an `unreadable` verdict and the reason (SRS §4.3). A
+/// row with no size and no time is written again at each scan, which is right: the scan cannot
+/// tell whether such a file changed.
+fn unreadable_row(
+    path: &Path,
+    size_bytes: i64,
+    modified_at: i64,
+    error: TriageError,
+) -> TriageItem {
+    TriageItem {
+        path: path.to_string_lossy().into_owned(),
+        size_bytes,
+        modified_at,
+        container: None,
+        codec: None,
+        bitrate_kbps: None,
+        sample_rate_hz: None,
+        bit_depth: None,
+        duration_seconds: None,
+        spectral_cutoff_hz: None,
+        verdict: Verdict::Unreadable,
+        reason: Some(reason_text(&error)),
+        scanned_at: now_unix(),
+    }
+}
+
+/// The reason without the path, for a row that already names the path.
+fn reason_text(error: &TriageError) -> String {
+    match error {
+        TriageError::Io { source, .. } => source.to_string(),
+        TriageError::Store(error) => error.to_string(),
+    }
 }
 
 /// The container and codec facts triage reads without decoding the audio.
@@ -396,41 +501,104 @@ fn has_audio_extension(path: &Path) -> bool {
         })
 }
 
+/// The files a scan collected, and the paths it could not open.
+struct Collected {
+    files: Vec<PathBuf>,
+    skipped: Vec<ScanSkip>,
+}
+
 /// Collect the files under `roots`, deduplicated and sorted.
-fn collect_files(roots: &[PathBuf]) -> Result<Vec<PathBuf>, TriageError> {
+///
+/// A root that cannot be opened is recorded in `skipped`, and the walk continues with the other
+/// roots. An error comes back only when no root can be opened.
+fn collect_files(roots: &[PathBuf]) -> Result<Collected, TriageError> {
     let mut files = Vec::new();
+    let mut skipped = Vec::new();
     let mut seen = HashSet::new();
+    let mut opened = 0usize;
+    let mut first_failure: Option<TriageError> = None;
     for root in roots {
-        if root.is_file() {
-            if seen.insert(root.clone()) {
-                files.push(root.clone());
+        match fs::metadata(root) {
+            Ok(metadata) if metadata.is_file() => {
+                opened += 1;
+                if seen.insert(root.clone()) {
+                    files.push(root.clone());
+                }
             }
-        } else if root.is_dir() {
-            walk(root, &mut files, &mut seen)?;
+            Ok(metadata) if metadata.is_dir() => {
+                match walk(root, &mut files, &mut seen, &mut skipped) {
+                    Ok(()) => opened += 1,
+                    Err(error) => {
+                        first_failure.get_or_insert(error);
+                    }
+                }
+            }
+            // A reachable path that is neither a file nor a folder holds no audio.
+            Ok(_) => opened += 1,
+            Err(source) => {
+                let error = TriageError::Io {
+                    path: root.clone(),
+                    source,
+                };
+                skipped.push(ScanSkip {
+                    path: root.clone(),
+                    reason: error.to_string(),
+                });
+                first_failure.get_or_insert(error);
+            }
         }
     }
+    if opened == 0 && !roots.is_empty() {
+        return Err(first_failure.expect("an unopened root states its error"));
+    }
     files.sort();
-    Ok(files)
+    Ok(Collected { files, skipped })
 }
 
 /// Recursively collect the audio files under `dir`.
+///
+/// A folder that cannot be opened is one recorded skip: this function records it and returns the
+/// error, so the caller decides whether the failure is fatal. A subfolder that cannot be opened is
+/// recorded too, and the walk continues with the other entries.
 fn walk(
     dir: &Path,
     files: &mut Vec<PathBuf>,
     seen: &mut HashSet<PathBuf>,
+    skipped: &mut Vec<ScanSkip>,
 ) -> Result<(), TriageError> {
-    let entries = fs::read_dir(dir).map_err(|source| TriageError::Io {
-        path: dir.to_path_buf(),
-        source,
-    })?;
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(source) => {
+            let error = TriageError::Io {
+                path: dir.to_path_buf(),
+                source,
+            };
+            skipped.push(ScanSkip {
+                path: dir.to_path_buf(),
+                reason: error.to_string(),
+            });
+            return Err(error);
+        }
+    };
     for entry in entries {
-        let entry = entry.map_err(|source| TriageError::Io {
-            path: dir.to_path_buf(),
-            source,
-        })?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(source) => {
+                let error = TriageError::Io {
+                    path: dir.to_path_buf(),
+                    source,
+                };
+                skipped.push(ScanSkip {
+                    path: dir.to_path_buf(),
+                    reason: error.to_string(),
+                });
+                continue;
+            }
+        };
         let path = entry.path();
         if path.is_dir() {
-            walk(&path, files, seen)?;
+            // A subfolder that cannot be opened is one recorded skip. The walk continues.
+            let _ = walk(&path, files, seen, skipped);
         } else if path.is_file() && has_audio_extension(&path) && seen.insert(path.clone()) {
             files.push(path);
         }
@@ -540,6 +708,14 @@ mod tests {
     fn triage_reports_a_missing_file_with_a_named_error() {
         let error = triage_file(Path::new("does-not-exist.mp3")).expect_err("a missing file");
         assert!(error.to_string().contains("does-not-exist.mp3"));
+    }
+
+    #[test]
+    fn triage_skips_a_gone_file_not_stores_it() {
+        assert!(matches!(
+            visit(Path::new("does-not-exist.mp3"), None),
+            Visit::Gone
+        ));
     }
 
     #[test]
