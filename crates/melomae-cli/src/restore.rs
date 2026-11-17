@@ -89,6 +89,11 @@ pub struct RestoreArgs {
     /// The execution device.
     #[arg(long, value_enum, default_value = "auto")]
     pub device: Device,
+    /// The chunk duration in seconds. Overrides the memory-driven choice, so a
+    /// measurement or a test can fix the chunk settings. The app always lets the
+    /// chooser decide (SRS §6.4).
+    #[arg(long, value_name = "SECONDS")]
+    pub chunk_seconds: Option<f64>,
     /// The Apollo ONNX model. Defaults to `apollo.onnx` beside the executable.
     #[arg(long, value_name = "PATH")]
     pub model: Option<PathBuf>,
@@ -172,6 +177,9 @@ fn execute(args: &RestoreArgs) -> Result<(), Failure> {
     };
     let budget =
         choose_chunk_for_machine(shape).map_err(|error| Failure::Message(error.to_string()))?;
+    // A caller can fix the chunk for a measurement or a test. The app always uses the
+    // chooser, so the override only exists on the command line.
+    let chunk_seconds = args.chunk_seconds.unwrap_or(budget.chunk_seconds as f64);
 
     eprintln!(
         "melomae-cli: {} -> {} (format {}, device {}, {}s chunks)",
@@ -179,13 +187,13 @@ fn execute(args: &RestoreArgs) -> Result<(), Failure> {
         args.output.display(),
         args.format.label(),
         args.device.label(),
-        budget.chunk_seconds
+        chunk_seconds
     );
     eprintln!("melomae-cli: chunk budget: {budget}");
 
-    // The chosen chunk, with the fixed overlap and pad of task 05.
+    // The chunk, with the fixed overlap and pad of task 05.
     let settings = RestoreSettings {
-        chunk_seconds: Some(budget.chunk_seconds as f64),
+        chunk_seconds: Some(chunk_seconds),
         overlap_seconds: OVERLAP_SECONDS,
         chunk_pad_seconds: CHUNK_PAD_SECONDS,
     };

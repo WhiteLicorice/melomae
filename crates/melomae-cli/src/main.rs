@@ -61,6 +61,7 @@ mod tests {
         assert_eq!(args.device, Device::Auto);
         assert_eq!(args.model, None);
         assert_eq!(args.onnxruntime, None);
+        assert_eq!(args.chunk_seconds, None);
     }
 
     #[test]
@@ -74,6 +75,8 @@ mod tests {
             "opus",
             "--device",
             "cpu",
+            "--chunk-seconds",
+            "17",
             "--model",
             "apollo.onnx",
             "--onnxruntime",
@@ -83,6 +86,7 @@ mod tests {
         assert_eq!(args.output, Path::new("out.opus"));
         assert_eq!(args.format, Format::Opus);
         assert_eq!(args.device, Device::Cpu);
+        assert_eq!(args.chunk_seconds, Some(17.0));
         assert_eq!(args.model.as_deref(), Some(Path::new("apollo.onnx")));
         assert_eq!(
             args.onnxruntime.as_deref(),

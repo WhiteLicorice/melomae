@@ -169,6 +169,22 @@ fn run_restore(input: &Path, output: &Path, format: &str) -> Output {
         .expect("run the CLI")
 }
 
+/// Run `melomae-cli restore` at a fixed chunk length, with explicit model and runtime paths.
+fn run_restore_at_chunk(input: &Path, output: &Path, format: &str, seconds: &str) -> Output {
+    Command::new(cli())
+        .arg("restore")
+        .arg(input)
+        .arg(output)
+        .args(["--format", format, "--device", "cpu"])
+        .args(["--chunk-seconds", seconds])
+        .arg("--model")
+        .arg(model_path())
+        .arg("--onnxruntime")
+        .arg(setup::ort_library())
+        .output()
+        .expect("run the CLI")
+}
+
 /// Assert that a CLI run succeeded, with its stderr in the failure message.
 fn assert_success(output: &Output) {
     assert!(
@@ -256,7 +272,10 @@ fn e2e_restore_each_task03_fixture_decodes() {
 }
 
 /// Test-first plan item 2: the 44.1 kHz WAV output matches the task 04 golden within
-/// the §12.1 tolerances.
+/// the §12.1 tolerances at fixed chunk settings.
+///
+/// Task 36 scope 3: the chunk is fixed, so free memory cannot move it, and the 17 s chunk
+/// that failed on 2026-10-14 runs beside the golden's 6 s.
 #[test]
 fn e2e_restore_wav_matches_golden() {
     let input_path = repo_root()
@@ -271,36 +290,38 @@ fn e2e_restore_wav_matches_golden() {
     let _engine = engine_lock();
     let dir = TempDir::new("melomae-cli-golden");
     let input = build_tiled_input(&dir, 3, 2, "input_18s.wav");
-    let output = dir.join("restored.wav");
 
-    let result = run_restore(&input, &output, "wav");
-    assert_success(&result);
+    for chunk in ["6", "17"] {
+        let output = dir.join(&format!("restored-{chunk}s.wav"));
+        let result = run_restore_at_chunk(&input, &output, "wav", chunk);
+        assert_success(&result);
 
-    let restored = decode_file(&output).expect("decode the restored WAV");
-    let golden = decode_file(&golden_path).expect("decode the golden");
-    assert_eq!(restored.sample_rate(), SAMPLE_RATE);
-    assert_eq!(restored.channel_count(), golden.channel_count());
-    for (channel, (got, want)) in restored
-        .channels()
-        .iter()
-        .zip(golden.channels())
-        .enumerate()
-    {
-        assert_eq!(got.len(), want.len(), "channel {channel} length");
-        let max_abs = max_abs_diff(got, want);
-        let error = rmse(got, want);
-        println!(
-            "channel {channel}: max abs {max_abs:.6e}, RMSE {error:.6e}, \
-             limits {MAX_ABS_LIMIT:.0e} and {RMSE_LIMIT:.0e}"
-        );
-        assert!(
-            max_abs <= MAX_ABS_LIMIT,
-            "channel {channel} max abs {max_abs:e} exceeds {MAX_ABS_LIMIT:e}"
-        );
-        assert!(
-            error <= RMSE_LIMIT,
-            "channel {channel} RMSE {error:e} exceeds {RMSE_LIMIT:e}"
-        );
+        let restored = decode_file(&output).expect("decode the restored WAV");
+        let golden = decode_file(&golden_path).expect("decode the golden");
+        assert_eq!(restored.sample_rate(), SAMPLE_RATE);
+        assert_eq!(restored.channel_count(), golden.channel_count());
+        for (channel, (got, want)) in restored
+            .channels()
+            .iter()
+            .zip(golden.channels())
+            .enumerate()
+        {
+            assert_eq!(got.len(), want.len(), "channel {channel} length");
+            let max_abs = max_abs_diff(got, want);
+            let error = rmse(got, want);
+            println!(
+                "{chunk} s chunk, channel {channel}: max abs {max_abs:.6e}, RMSE {error:.6e}, \
+                 limits {MAX_ABS_LIMIT:.0e} and {RMSE_LIMIT:.0e}"
+            );
+            assert!(
+                max_abs <= MAX_ABS_LIMIT,
+                "{chunk} s chunk, channel {channel} max abs {max_abs:e} exceeds {MAX_ABS_LIMIT:e}"
+            );
+            assert!(
+                error <= RMSE_LIMIT,
+                "{chunk} s chunk, channel {channel} RMSE {error:e} exceeds {RMSE_LIMIT:e}"
+            );
+        }
     }
 }
 

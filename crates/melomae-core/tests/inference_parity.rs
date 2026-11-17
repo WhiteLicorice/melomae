@@ -20,6 +20,7 @@ mod setup;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use sha2::{Digest, Sha256};
 
@@ -44,6 +45,10 @@ const RMSE_LIMIT: f64 = 1e-4;
 const CHUNK_SECONDS: f64 = 6.0;
 const OVERLAP_SECONDS: f64 = 1.0;
 const CHUNK_PAD_SECONDS: f64 = 1.0;
+
+/// The chunk lengths around the input length that the restore must agree on (task 36
+/// scope 4). The golden's own 6 s setting is the sibling test above.
+const CHUNK_LENGTH_MATRIX: [f64; 4] = [16.0, 17.0, 18.0, 19.0];
 
 /// The Git LFS pointer header. A checked-out pointer starts with this line.
 const LFS_POINTER: &[u8] = b"version https://git-lfs.github.com/spec/v1";
@@ -170,19 +175,19 @@ fn tiled_18s(source: &[Vec<f32>]) -> Vec<Vec<f32>> {
         .collect()
 }
 
-#[test]
-fn inference_parity_with_stock_apollo_on_the_18s_input() {
-    let input_path = repo_root()
-        .join("tools")
-        .join("parity")
-        .join("input_wav.wav");
-    let golden_path = repo_root().join("tools").join("parity").join("golden.wav");
+/// Hold one heavy restore at a time.
+///
+/// A restore uses several GB, so two test threads would otherwise exhaust a small
+/// machine's memory.
+fn engine_lock() -> MutexGuard<'static, ()> {
+    static ENGINE: Mutex<()> = Mutex::new(());
+    ENGINE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
-    let input_bytes = committed_bytes(&input_path);
-    check_sidecar(&input_path, &input_bytes);
-    let golden_bytes = committed_bytes(&golden_path);
-    check_sidecar(&golden_path, &golden_bytes);
-
+/// The Apollo ONNX model, after the committed-file checks.
+fn model_path() -> PathBuf {
     let model_path = env::var_os("MELOMAE_APOLLO_ONNX")
         .map(PathBuf::from)
         .unwrap_or_else(|| repo_root().join("models").join("apollo.onnx"));
@@ -193,6 +198,24 @@ fn inference_parity_with_stock_apollo_on_the_18s_input() {
         MODEL_SHA256,
         "the model does not match the task 01 artifact"
     );
+    model_path
+}
+
+/// The 18 s input and the stock golden, both planar at 44.1 kHz.
+///
+/// The input is three copies of the committed source, written to a temporary WAV
+/// and decoded again, so the test reads the same samples the golden tool read.
+fn load_parity_fixture() -> (Vec<Vec<f32>>, Vec<Vec<f32>>) {
+    let input_path = repo_root()
+        .join("tools")
+        .join("parity")
+        .join("input_wav.wav");
+    let golden_path = repo_root().join("tools").join("parity").join("golden.wav");
+
+    let input_bytes = committed_bytes(&input_path);
+    check_sidecar(&input_path, &input_bytes);
+    let golden_bytes = committed_bytes(&golden_path);
+    check_sidecar(&golden_path, &golden_bytes);
 
     let (rate, channels, interleaved) = read_float_wav(&golden_bytes);
     assert_eq!(rate, SAMPLE_RATE);
@@ -211,10 +234,15 @@ fn inference_parity_with_stock_apollo_on_the_18s_input() {
         &tiled[..],
         "the 18 s input must round-trip through the WAV writer"
     );
-    let input = audio.channels().to_vec();
+    (audio.channels().to_vec(), golden)
+}
 
+#[test]
+fn inference_parity_with_stock_apollo_on_the_18s_input() {
+    let _engine = engine_lock();
+    let (input, golden) = load_parity_fixture();
     let backend =
-        load_onnx_backend(setup::ort_library(), &model_path).expect("load the Apollo ONNX model");
+        load_onnx_backend(setup::ort_library(), &model_path()).expect("load the Apollo ONNX model");
     let settings = RestoreSettings {
         chunk_seconds: Some(CHUNK_SECONDS),
         overlap_seconds: OVERLAP_SECONDS,
@@ -251,4 +279,60 @@ fn inference_parity_with_stock_apollo_on_the_18s_input() {
             "channel {channel} RMSE {channel_rmse:e} exceeds {RMSE_LIMIT:e}"
         );
     }
+}
+
+/// Task 36: the restored audio must not depend on the chunk length.
+///
+/// Every chunk length around the 18 s input length must match the stock golden within
+/// the SRS §12.1 limits. The 6 s golden setting is the sibling test above.
+#[test]
+fn inference_parity_holds_across_chunk_lengths() {
+    let _engine = engine_lock();
+    let (input, golden) = load_parity_fixture();
+    let backend =
+        load_onnx_backend(setup::ort_library(), &model_path()).expect("load the Apollo ONNX model");
+
+    let mut failures = Vec::new();
+    for chunk_seconds in CHUNK_LENGTH_MATRIX {
+        let settings = RestoreSettings {
+            chunk_seconds: Some(chunk_seconds),
+            overlap_seconds: OVERLAP_SECONDS,
+            chunk_pad_seconds: CHUNK_PAD_SECONDS,
+        };
+        let outcome = backend
+            .restore(
+                &input,
+                &settings,
+                &mut |_| {},
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap_or_else(|error| panic!("the {chunk_seconds} s restore failed: {error}"));
+        let restored = match outcome {
+            RestoreOutcome::Complete(channels) => channels,
+            RestoreOutcome::Cancelled => panic!("the {chunk_seconds} s run must not cancel"),
+        };
+
+        assert_eq!(restored.len(), golden.len(), "channel count");
+        for (channel, (got, want)) in restored.iter().zip(&golden).enumerate() {
+            assert_eq!(got.len(), want.len(), "channel {channel} length");
+            let max_abs = max_abs_diff(got, want);
+            let channel_rmse = rmse(got, want);
+            println!(
+                "{chunk_seconds} s chunk, channel {channel}: max abs {max_abs:.6e}, \
+                 RMSE {channel_rmse:.6e}, limits {MAX_ABS_LIMIT:.0e} and {RMSE_LIMIT:.0e}"
+            );
+            if max_abs > MAX_ABS_LIMIT || channel_rmse > RMSE_LIMIT {
+                failures.push(format!(
+                    "{chunk_seconds} s chunk, channel {channel}: max abs {max_abs:e}, \
+                     RMSE {channel_rmse:e}"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "the restored audio must not depend on the chunk length (SRS §12.1):\n{}",
+        failures.join("\n")
+    );
 }

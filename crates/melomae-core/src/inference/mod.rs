@@ -11,7 +11,8 @@
 //! (https://github.com/JusperLee/Apollo/blob/e84bcac/inference.py),
 //! by Kai Li, Yi Luo, and the Apollo contributors, licensed CC BY-SA 4.0
 //! (https://creativecommons.org/licenses/by-sa/4.0/). Changes: translated
-//! from Python to Rust, with batch size one. This file is licensed
+//! from Python to Rust, with batch size one, and the last segment stops at the
+//! file end instead of padding with silence. This file is licensed
 //! GPL-3.0-only under CC BY-SA 4.0 Section 3(b)(1).
 //!
 //! [`RestoreBackend`] is the file-level entry the pipeline calls. It takes one
@@ -399,25 +400,24 @@ fn run_chunked<M: Model>(
         let valid = end - start;
         // Real audio pads each side. The file's own edges take none: the first
         // padded chunk begins at the file start, and the last ends at the file
-        // end, extending further left instead.
+        // end, extending further left instead. When the padded chunk is longer
+        // than the file, the last segment is shorter than the padded chunk. The
+        // engine never pads with silence past the file end, because silence
+        // there measurably degrades the last second of the output (task 36).
         let mut padded_start = start.saturating_sub(sizes.pad);
         if sizes.pad > 0 && end == total {
             padded_start = total.saturating_sub(padded_chunk);
         }
+        let segment_end = (padded_start + padded_chunk).min(total);
+        let segment = &samples[padded_start..segment_end];
 
-        // Build the padded segment. Samples past the file end stay zero, which
-        // matches `F.pad`.
-        let mut segment = vec![0.0f32; padded_chunk];
-        let take = (total - padded_start).min(padded_chunk);
-        segment[..take].copy_from_slice(&samples[padded_start..padded_start + take]);
-
-        let output = model.infer(&segment)?;
+        let output = model.infer(segment)?;
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);
         }
-        if output.len() < padded_chunk {
+        if output.len() < segment.len() {
             return Err(InferenceError::ShortOutput {
-                expected: padded_chunk,
+                expected: segment.len(),
                 got: output.len(),
             });
         }
@@ -842,6 +842,38 @@ mod tests {
         .expect("the run must succeed");
         assert_eq!(model.lengths, vec![800], "one call with the whole file");
         assert_eq!(result, Some(samples));
+    }
+
+    #[test]
+    fn the_last_segment_never_pads_past_the_file_end() {
+        // 1000 samples with 600-sample chunks and 300 samples of pad: the padded
+        // chunk is 1200, longer than the file, so the last segment must stop at
+        // the file end instead of padding with silence.
+        let samples = ramp(1_000);
+        let mut model = RecordingModel {
+            identity: IdentityModel,
+            lengths: Vec::new(),
+        };
+        let sizes = settings(600, 100, 300)
+            .resolve_chunking()
+            .expect("valid settings")
+            .expect("chunking is on");
+        let result = run_channel(
+            &mut model,
+            &samples,
+            Some(sizes),
+            0,
+            &mut |_, _| {},
+            &AtomicBool::new(false),
+        )
+        .expect("the run must succeed");
+        assert_eq!(
+            model.lengths,
+            vec![1_000, 1_000],
+            "no segment may run past the file end"
+        );
+        let restored = result.expect("the run must return a channel");
+        assert_close(&restored, &samples, 1e-6);
     }
 
     #[test]

@@ -1,12 +1,12 @@
 # 36 — Fix the restore output when a chunk is shorter than the input
 
-**Status:** TODO
+**Status:** IN PROGRESS
 **Phase:** 1 — Restoration engine
 **Depends on:** 04, 05, 07
 **SRS:** §6, §12
 **Stack:** §C
 **Assigned to:** Agent
-**Started:** —
+**Started:** 2026-11-18 at `fd0606d`, clean tree, no gate run. The golden test fails at a fixed 17 s chunk (max abs 6.710718e-1 on channel 0).
 **Outcome:** —
 
 ## Goal
