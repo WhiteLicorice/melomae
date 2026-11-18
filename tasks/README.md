@@ -117,6 +117,8 @@ The validator rejects any other status value.
 | 52 | [Test the CUDA download script](mvp/52-test-the-cuda-download-script.md) | TODO | 08 |
 | 53 | [Size the GPU chunk from free video memory](mvp/53-size-the-gpu-chunk-from-free-video-memory.md) | TODO | 08 |
 | 54 | [Measure the GPU speed in a release build](mvp/54-measure-the-gpu-speed-in-a-release-build.md) | TODO | 08 |
+| 55 | [Retry an unreadable file on the next scan](mvp/55-retry-an-unreadable-file-on-the-next-scan.md) | TODO | 44 |
+| 56 | [Keep the rows under a folder the scan cannot stat](mvp/56-keep-the-rows-under-a-folder-the-scan-cannot-stat.md) | TODO | 44 |
 
 ## Phase 2 — Metadata, triage, and provenance
 
