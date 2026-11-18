@@ -150,7 +150,7 @@ Task numbers record creation order. The executor still selects the lowest eligib
 | 24 | [Add folders and review the triage](mvp/24-add-folders-and-review-the-triage.md) | TODO | 07, 16, 21 |
 | 25 | [Add the first-run setup and the attribution screen](mvp/25-add-the-first-run-setup-and-the-attribution-screen.md) | TODO | 08, 19 |
 | 32 | [Add a blind ABX mode to the compare player](mvp/32-add-a-blind-abx-mode-to-the-compare-player.md) | TODO | 23 |
-| 39 | [Record the product and design context](mvp/39-record-the-product-and-design-context.md) | IN PROGRESS | — |
+| 39 | [Record the product and design context](mvp/39-record-the-product-and-design-context.md) | DONE | — |
 | 40 | [Add an accessibility gate to the UI tests](mvp/40-add-an-accessibility-gate-to-the-ui-tests.md) | TODO | 19 |
 | 41 | [Validate the output folder in Settings](mvp/41-validate-the-output-folder-in-settings.md) | TODO | 19 |
 | 42 | [Build the history screen](mvp/42-build-the-history-screen.md) | TODO | 19, 23, 31 |
