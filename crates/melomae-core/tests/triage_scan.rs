@@ -360,17 +360,25 @@ mod deny {
 
     #[cfg(unix)]
     impl DeniedPath {
+        /// Keep a folder listable but not traversable.
+        ///
+        /// Mode `0400` lets the process read the folder's names but refuses `stat` on each entry,
+        /// which is the shape that lost every file inside it (B1).
+        pub fn traversal(dir: &Path) -> DeniedPath {
+            DeniedPath::apply_mode(dir, 0o400)
+        }
+
         /// Stop the process from listing the folder.
         pub fn listing(dir: &Path) -> DeniedPath {
-            DeniedPath::apply(dir)
+            DeniedPath::apply_mode(dir, 0o000)
         }
 
         /// Stop the process from reading the file's data.
         pub fn read(file: &Path) -> DeniedPath {
-            DeniedPath::apply(file)
+            DeniedPath::apply_mode(file, 0o000)
         }
 
-        fn apply(path: &Path) -> DeniedPath {
+        fn apply_mode(path: &Path, bits: u32) -> DeniedPath {
             use std::fs;
             use std::os::unix::fs::PermissionsExt;
 
@@ -378,8 +386,8 @@ mod deny {
                 .expect("stat the path to deny")
                 .permissions()
                 .mode();
-            fs::set_permissions(path, fs::Permissions::from_mode(0o000))
-                .expect("clear the mode bits");
+            fs::set_permissions(path, fs::Permissions::from_mode(bits))
+                .expect("set the mode bits");
             DeniedPath {
                 path: path.to_path_buf(),
                 mode,
@@ -577,4 +585,89 @@ fn triage_scan_records_a_missing_root_beside_a_readable_one() {
     assert_eq!(report.scanned, 1, "the readable root is still triaged");
     assert_eq!(report.skipped_paths.len(), 1);
     assert_eq!(report.skipped_paths[0].path, missing);
+}
+
+// --- Round 2: B1 and N1 ----------------------------------------------------------------------
+
+/// A folder whose names can be listed but whose entries cannot be `stat`ed.
+///
+/// Mode `0400` on a folder grants the read bit and not the execute bit, so `read_dir` returns the
+/// names while `fs::metadata` on each entry fails with `PermissionDenied`. `Path::is_file` and
+/// `Path::is_dir` both answer `false` to that failure, which is how the walk lost every file the
+/// folder holds (B1). A root user ignores the mode, so the test skips there.
+#[cfg(unix)]
+#[test]
+fn triage_scan_reports_the_files_of_a_folder_it_cannot_traverse() {
+    if !deny::deny_blocks_this_user() {
+        eprintln!("skip: this user ignores a mode, so the folder stays traversable");
+        return;
+    }
+    let dir = TempDir::new("melomae-triage-notraverse");
+    write_fixture(&dir, "ok.wav", 44_100, 0.4);
+    write_fixture_at(&dir.path().join("locked").join("hidden.wav"), 44_100, 0.4);
+    let hidden = dir.path().join("locked").join("hidden.wav");
+
+    let db = TempDb::new("notraverse");
+    let store = Store::open(db.path()).unwrap();
+    let roots = [dir.path().to_path_buf()];
+
+    let first = scan_roots(&store, &roots).expect("the first scan must not fail");
+    assert_eq!(first.scanned, 2, "both files are triaged while the folder opens");
+
+    let _denied = deny::DeniedPath::traversal(&dir.join("locked"));
+    let second = scan_roots(&store, &roots).expect("the scan must not fail");
+
+    assert_eq!(
+        second.removed, 0,
+        "a folder whose entries cannot be stat'ed is not a deletion"
+    );
+    let row = store
+        .triage_item(&hidden.to_string_lossy())
+        .unwrap()
+        .expect("the row of a file in the untraversable folder stays");
+    assert_eq!(
+        row.verdict,
+        Verdict::Unreadable,
+        "the scan reports the file it cannot stat as unreadable"
+    );
+    assert!(
+        row.reason.is_some_and(|reason| !reason.is_empty()),
+        "the row carries the operating system's reason"
+    );
+}
+
+/// A file root that was deleted is a deletion, not a folder that could not be opened.
+///
+/// The stored row used to survive forever: `collect_files` records the missing root as a skip, and
+/// the removal pass read every skip as an unopened folder (N1).
+#[test]
+fn triage_scan_removes_the_row_of_a_deleted_file_root() {
+    let dir = TempDir::new("melomae-triage-gone-root");
+    write_fixture(&dir, "one.wav", 44_100, 0.4);
+    write_fixture(&dir, "ok.wav", 44_100, 0.4);
+    let gone = dir.join("one.wav");
+    let ok = dir.join("ok.wav");
+
+    let db = TempDb::new("gone-root");
+    let store = Store::open(db.path()).unwrap();
+    let roots = [gone.clone(), ok.clone()];
+
+    let first = scan_roots(&store, &roots).expect("the first scan must not fail");
+    assert_eq!(first.scanned, 2);
+
+    fs::remove_file(&gone).unwrap();
+    let second = scan_roots(&store, &roots).expect("one readable root is enough");
+
+    assert_eq!(
+        second.removed, 1,
+        "the deleted file root's row is a deletion"
+    );
+    assert!(
+        store.triage_item(&gone.to_string_lossy()).unwrap().is_none(),
+        "the deleted file root's row is gone"
+    );
+    assert!(
+        store.triage_item(&ok.to_string_lossy()).unwrap().is_some(),
+        "the readable file keeps its row"
+    );
 }

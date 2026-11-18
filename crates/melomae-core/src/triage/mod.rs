@@ -178,6 +178,18 @@ pub fn triage_file(path: &Path) -> Result<TriageItem, TriageError> {
 /// a recorded skip. Either way the scan continues (SRS §4.3). The scan returns an error only when
 /// no root can be opened.
 pub fn scan_roots(store: &Store, roots: &[PathBuf]) -> Result<ScanReport, TriageError> {
+    scan_roots_with(store, roots, visit)
+}
+
+/// The scan, with the per-path check supplied by the caller.
+///
+/// The seam exists so a test can make one path vanish between the walk and the read. Nothing but
+/// [`scan_roots`] and the tests calls it.
+fn scan_roots_with(
+    store: &Store,
+    roots: &[PathBuf],
+    visit: impl Fn(&Path, Option<&TriageItem>) -> Visit,
+) -> Result<ScanReport, TriageError> {
     let collected = collect_files(roots)?;
     let stored = store.triage_items()?;
     let stored_by_path: HashMap<&str, &TriageItem> = stored
@@ -189,33 +201,38 @@ pub fn scan_roots(store: &Store, roots: &[PathBuf]) -> Result<ScanReport, Triage
         skipped_paths: collected.skipped,
         ..ScanReport::default()
     };
+    // Only a path the scan read, or found unchanged, is still there. A path that returned
+    // `Gone` is absent, so the removal pass below drops its row in this scan (N2).
+    let mut present: HashSet<String> = HashSet::new();
     for path in &collected.files {
-        let key = path.to_string_lossy();
-        match visit(path, stored_by_path.get(key.as_ref()).copied()) {
+        let key = path.to_string_lossy().into_owned();
+        match visit(path, stored_by_path.get(key.as_str()).copied()) {
             Visit::Gone => {}
-            Visit::Unchanged => report.skipped += 1,
+            Visit::Unchanged => {
+                present.insert(key);
+                report.skipped += 1;
+            }
             Visit::Row(item) => {
                 if item.verdict == Verdict::Unreadable {
                     report.unreadable += 1;
                 }
                 store.upsert_triage_item(&item)?;
+                present.insert(key);
                 report.scanned += 1;
             }
         }
     }
 
-    let present_set: HashSet<String> = collected
-        .files
-        .iter()
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect();
     let unopened: Vec<&Path> = report
         .skipped_paths
         .iter()
         .map(|skip| skip.path.as_path())
+        // A skip holds its rows back only when the path is still a folder the process can see.
+        // A missing root, or a deleted file root, is a deletion, not an unopened folder (N1).
+        .filter(|path| path.is_dir())
         .collect();
     for item in &stored {
-        if present_set.contains(&item.path) {
+        if present.contains(&item.path) {
             continue;
         }
         let path = Path::new(&item.path);
@@ -234,7 +251,7 @@ pub fn scan_roots(store: &Store, roots: &[PathBuf]) -> Result<ScanReport, Triage
 
 /// What a scan does with one collected path.
 enum Visit {
-    /// The path is gone, so the scan skips it. The removal pass drops any stored row.
+    /// The path is gone, so the scan skips it. The removal pass drops the stored row in this scan.
     Gone,
     /// The size and modification time match the stored row, so the scan did not read the file.
     Unchanged,
@@ -596,11 +613,41 @@ fn walk(
             }
         };
         let path = entry.path();
-        if path.is_dir() {
-            // A subfolder that cannot be opened is one recorded skip. The walk continues.
-            let _ = walk(&path, files, seen, skipped);
-        } else if path.is_file() && has_audio_extension(&path) && seen.insert(path.clone()) {
-            files.push(path);
+        // One `metadata` call decides what the entry is. `Path::is_dir` and `Path::is_file`
+        // answer `false` to every error, which drops a file the process may not `stat` without a
+        // row and without a skip, and lets the removal pass delete its stored row (B1).
+        match fs::metadata(&path) {
+            Ok(metadata) if metadata.is_dir() => {
+                // A subfolder that cannot be opened is one recorded skip. The walk continues.
+                let _ = walk(&path, files, seen, skipped);
+            }
+            Ok(metadata) if metadata.is_file() => {
+                if has_audio_extension(&path) && seen.insert(path.clone()) {
+                    files.push(path);
+                }
+            }
+            // A reachable path that is neither a file nor a folder holds no audio.
+            Ok(_) => {}
+            // A path that is gone between the listing and the `metadata` is not a failure.
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                let error = TriageError::Io {
+                    path: path.clone(),
+                    source,
+                };
+                if has_audio_extension(&path) {
+                    // `visit` cannot `stat` it either, so it writes the `unreadable` row with
+                    // size 0 and time 0. Collecting the path also keeps the row it already has.
+                    if seen.insert(path.clone()) {
+                        files.push(path);
+                    }
+                } else {
+                    skipped.push(ScanSkip {
+                        path,
+                        reason: error.to_string(),
+                    });
+                }
+            }
         }
     }
     Ok(())
@@ -716,6 +763,51 @@ mod tests {
             visit(Path::new("does-not-exist.mp3"), None),
             Visit::Gone
         ));
+    }
+
+    /// A temporary folder that the test removes when it ends.
+    fn temp_dir(tag: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default();
+        let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "melomae-triage-{tag}-{}-{nanos}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("create the temporary folder");
+        path
+    }
+
+    #[test]
+    fn a_path_that_vanishes_mid_scan_loses_its_row_in_the_same_scan() {
+        let dir = temp_dir("vanished");
+        let file = dir.join("a.wav");
+        fs::write(&file, b"not an audio stream").expect("write the file");
+        let store = Store::open(dir.join("rows.db")).expect("open the store");
+        let roots = vec![dir.clone()];
+
+        let first = scan_roots(&store, &roots).expect("the first scan stores the row");
+        assert_eq!(first.scanned, 1);
+
+        // The walk still collects the file, but the read finds it gone.
+        let second = scan_roots_with(&store, &roots, |_, _| Visit::Gone).expect("the second scan");
+
+        assert_eq!(
+            second.removed, 1,
+            "the row of a path that returned Gone must go in this scan, not the next"
+        );
+        assert!(store
+            .triage_item(&file.to_string_lossy())
+            .expect("read the row")
+            .is_none());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
