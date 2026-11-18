@@ -124,6 +124,7 @@ The validator rejects any other status value.
 | 59 | [Give the engine lock its real reason](mvp/59-give-the-engine-lock-its-real-reason.md) | TODO | 46 |
 | 60 | [Print the chunk the fixed peak uses](mvp/60-print-the-chunk-the-fixed-peak-uses.md) | TODO | 46 |
 | 61 | [Compare the four-minute peak with its total](mvp/61-compare-the-four-minute-peak-with-its-total.md) | TODO | 46 |
+| 62 | [Fetch ONNX Runtime from a live source](mvp/62-fetch-onnx-runtime-from-a-live-source.md) | TODO | — |
 
 ## Phase 2 — Metadata, triage, and provenance
 
