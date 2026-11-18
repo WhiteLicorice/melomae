@@ -119,6 +119,8 @@ The validator rejects any other status value.
 | 54 | [Measure the GPU speed in a release build](mvp/54-measure-the-gpu-speed-in-a-release-build.md) | TODO | 08 |
 | 55 | [Retry an unreadable file on the next scan](mvp/55-retry-an-unreadable-file-on-the-next-scan.md) | TODO | 44 |
 | 56 | [Keep the rows under a folder the scan cannot stat](mvp/56-keep-the-rows-under-a-folder-the-scan-cannot-stat.md) | TODO | 44 |
+| 57 | [Make the contrast test fail on a weakened row](mvp/57-make-the-contrast-test-fail-on-a-weakened-row.md) | TODO | 39 |
+| 58 | [Give the progress bar a contrast token](mvp/58-give-the-progress-bar-a-contrast-token.md) | TODO | 39 |
 
 ## Phase 2 — Metadata, triage, and provenance
 
