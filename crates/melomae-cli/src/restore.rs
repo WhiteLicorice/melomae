@@ -19,7 +19,8 @@ use clap::{Args, ValueEnum};
 use melomae_core::decode::{decode_file, AudioBuffer};
 use melomae_core::encode::{encode_with_cancel, EncodeResult, OutputFormat as EncodeFormat};
 use melomae_core::inference::chunk_budget::{
-    choose_chunk_for_machine, choose_gpu_chunk, FileShape,
+    choose_chunk_for_machine, choose_gpu_chunk, file_reserve_bytes, predicted_gpu_peak_bytes,
+    predicted_peak_bytes, ChunkBudget, FileShape,
 };
 use melomae_core::inference::{
     gpu_provider_available, load_onnx_backend, load_onnx_backend_on_device, restore_on_device,
@@ -191,6 +192,86 @@ pub struct RestoreArgs {
 /// within one chunk when it is set (SRS §6.6).
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 
+/// The chunk a run uses.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ChunkChoice {
+    /// The caller fixed the chunk with `--chunk-seconds`. The free-memory chooser did not run.
+    Fixed(f64),
+    /// The memory chooser picked the chunk at job start.
+    Chosen(ChunkBudget),
+}
+
+impl ChunkChoice {
+    /// The chunk duration the engine runs with, in seconds.
+    fn seconds(self) -> f64 {
+        match self {
+            Self::Fixed(seconds) => seconds,
+            Self::Chosen(budget) => budget.chunk_seconds as f64,
+        }
+    }
+
+    /// The `chunk budget:` line, which describes the chunk the run uses.
+    ///
+    /// A fixed chunk has no budget or available-memory numbers to report, because the run
+    /// never read the free memory. The line keeps the file reserve and the predicted peak of
+    /// the fixed chunk, so a measurement still states the memory it ran at. A GPU run names the
+    /// GPU peak, because that is the memory the device will use (task 08 scope 5).
+    fn describe(self, shape: FileShape, device: CoreDevice) -> String {
+        match self {
+            Self::Chosen(budget) => budget.to_string(),
+            Self::Fixed(seconds) => {
+                let reserve = file_reserve_bytes(shape);
+                // The memory fit takes whole seconds, so the line rounds the fixed chunk to one.
+                let peak = match device {
+                    CoreDevice::Gpu => predicted_gpu_peak_bytes,
+                    _ => predicted_peak_bytes,
+                };
+                let predicted = peak(seconds.round() as u64);
+                format!(
+                    "chunk {seconds}s: reserve {reserve} bytes, predicted inference peak \
+                     {predicted} bytes, total {} bytes, fixed by --chunk-seconds",
+                    reserve + predicted
+                )
+            }
+        }
+    }
+}
+
+/// The chunk a run uses: the caller's fixed value, or the chooser's pick.
+///
+/// `choose` is the free-memory chooser. It runs only when `--chunk-seconds` is absent, so a
+/// fixed chunk cannot fail from the machine's free memory. Test 46 passes its own budget
+/// instead of reading the machine's memory.
+fn chunk_choice(
+    override_seconds: Option<f64>,
+    choose: impl FnOnce() -> Result<ChunkBudget, InferenceError>,
+) -> Result<ChunkChoice, InferenceError> {
+    match override_seconds {
+        Some(seconds) => Ok(ChunkChoice::Fixed(seconds)),
+        None => choose().map(ChunkChoice::Chosen),
+    }
+}
+
+/// The restore settings for one device, and its `chunk budget:` line.
+///
+/// `choose` is the device's free-memory chooser. It runs only when `--chunk-seconds` is absent,
+/// so a fixed chunk skips the chooser on the CPU and on the GPU. The line describes the chunk
+/// the run uses with that device's own predicted peak.
+fn chunk_settings(
+    override_seconds: Option<f64>,
+    shape: FileShape,
+    device: CoreDevice,
+    choose: impl FnOnce() -> Result<ChunkBudget, InferenceError>,
+) -> Result<(RestoreSettings, String), InferenceError> {
+    let choice = chunk_choice(override_seconds, choose)?;
+    let settings = RestoreSettings {
+        chunk_seconds: Some(choice.seconds()),
+        overlap_seconds: OVERLAP_SECONDS,
+        chunk_pad_seconds: CHUNK_PAD_SECONDS,
+    };
+    Ok((settings, choice.describe(shape, device)))
+}
+
 /// The crossfade duration between chunks (task 05 scope 4).
 const OVERLAP_SECONDS: f64 = 1.0;
 
@@ -259,7 +340,6 @@ fn execute(args: &RestoreArgs) -> Result<(), Failure> {
         frames: audio.frames() as u64,
         channels: audio.channel_count() as u64,
     };
-
     eprintln!(
         "melomae-cli: {} -> {} (format {}, device {})",
         args.input.display(),
@@ -273,19 +353,13 @@ fn execute(args: &RestoreArgs) -> Result<(), Failure> {
     // numbers when a device is opened, and a fallback chooses the CPU numbers for its own run.
     let opener = OnnxBackends { runtime, model };
     let settings_for = |device: CoreDevice| -> Result<RestoreSettings, InferenceError> {
-        let budget = match device {
-            CoreDevice::Gpu => choose_gpu_chunk(vram_bytes(), shape)?,
-            _ => choose_chunk_for_machine(shape)?,
-        };
-        // A caller can fix the chunk for a measurement or a test. The app always uses the
-        // chooser, so the override only exists on the command line.
-        let chunk_seconds = args.chunk_seconds.unwrap_or(budget.chunk_seconds as f64);
-        eprintln!("melomae-cli: chunk budget: {budget}");
-        Ok(RestoreSettings {
-            chunk_seconds: Some(chunk_seconds),
-            overlap_seconds: OVERLAP_SECONDS,
-            chunk_pad_seconds: CHUNK_PAD_SECONDS,
-        })
+        let (settings, budget_line) =
+            chunk_settings(args.chunk_seconds, shape, device, || match device {
+                CoreDevice::Gpu => choose_gpu_chunk(vram_bytes(), shape),
+                _ => choose_chunk_for_machine(shape),
+            })?;
+        eprintln!("melomae-cli: chunk budget: {budget_line}");
+        Ok(settings)
     };
 
     let channels = audio.channel_count();
@@ -613,5 +687,102 @@ mod tests {
         } else {
             assert_eq!(DEFAULT_RUNTIME_NAME, "libonnxruntime.so");
         }
+    }
+
+    /// One gibibyte, as a binary multiple.
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    /// The fixed chunk the tests in this module use, in seconds.
+    const FIXED_CHUNK_SECONDS: f64 = 6.0;
+
+    /// A stereo file of `seconds` seconds at 44.1 kHz.
+    fn stereo_shape(seconds: u64) -> FileShape {
+        FileShape {
+            frames: 44_100 * seconds,
+            channels: 2,
+        }
+    }
+
+    #[test]
+    fn a_fixed_chunk_never_calls_the_free_memory_chooser() {
+        // Acceptance item 1: `--chunk-seconds` must skip the chooser, so a machine with less
+        // free memory than the chooser needs cannot fail a fixed-chunk run.
+        let shape = stereo_shape(13);
+        let choice = chunk_choice(Some(FIXED_CHUNK_SECONDS), || {
+            panic!("the chooser must not run when --chunk-seconds is given")
+        })
+        .expect("a fixed chunk always resolves");
+        assert_eq!(choice, ChunkChoice::Fixed(FIXED_CHUNK_SECONDS));
+        assert_eq!(choice.seconds(), FIXED_CHUNK_SECONDS);
+
+        // The budget line describes the chunk the run uses, not the chooser's.
+        let line = choice.describe(shape, CoreDevice::Cpu);
+        assert!(line.contains("chunk 6s"), "{line}");
+        assert!(
+            line.contains(&predicted_peak_bytes(6).to_string()),
+            "the line must name the fixed chunk's predicted peak: {line}"
+        );
+        assert!(
+            line.contains(&file_reserve_bytes(shape).to_string()),
+            "the line must name the file reserve: {line}"
+        );
+        assert!(line.contains("fixed by --chunk-seconds"), "{line}");
+        assert!(
+            !line.contains("available"),
+            "a fixed chunk reads no free memory: {line}"
+        );
+    }
+
+    #[test]
+    fn a_fixed_gpu_chunk_never_calls_the_gpu_chooser() {
+        // A GPU run with a fixed chunk must skip the GPU chooser, which task 53 makes read the
+        // free VRAM. A panicking chooser proves it never ran, and the budget line must name the
+        // GPU peak of the chunk the run uses, not the CPU peak.
+        let shape = stereo_shape(13);
+        let (settings, line) =
+            chunk_settings(Some(FIXED_CHUNK_SECONDS), shape, CoreDevice::Gpu, || {
+                panic!("the GPU chooser must not run when --chunk-seconds is given")
+            })
+            .expect("a fixed chunk always resolves");
+        assert_eq!(settings.chunk_seconds, Some(FIXED_CHUNK_SECONDS));
+        assert!(line.contains("chunk 6s"), "{line}");
+        assert!(
+            line.contains(&predicted_gpu_peak_bytes(6).to_string()),
+            "a fixed GPU run must name the GPU peak: {line}"
+        );
+        assert!(
+            !line.contains(&predicted_peak_bytes(6).to_string()),
+            "a fixed GPU run must not name the CPU peak: {line}"
+        );
+        assert!(line.contains("fixed by --chunk-seconds"), "{line}");
+        assert!(
+            !line.contains("available"),
+            "a fixed chunk reads no free memory: {line}"
+        );
+
+        // `auto` may open either device, so it skips the chooser the same way.
+        chunk_settings(Some(FIXED_CHUNK_SECONDS), shape, CoreDevice::Auto, || {
+            panic!("the chooser must not run for a fixed chunk on any device")
+        })
+        .expect("a fixed chunk always resolves");
+    }
+
+    #[test]
+    fn the_chooser_picks_the_chunk_from_the_budget_the_caller_gives() {
+        // The one test that covers the chooser, with a budget the test sets. 8 GiB picks 5 s
+        // for a 13 s stereo file, so the machine's memory cannot move it.
+        let shape = stereo_shape(13);
+        let available = 8 * GIB;
+        let choice = chunk_choice(None, || {
+            melomae_core::inference::chunk_budget::choose_chunk(available, shape)
+        })
+        .expect("8 GiB fits the smallest chunk");
+        let ChunkChoice::Chosen(budget) = choice else {
+            panic!("no override must use the chooser's chunk");
+        };
+        assert_eq!(budget.chunk_seconds, 5);
+        assert_eq!(budget.available_bytes, available);
+        assert_eq!(choice.seconds(), 5.0);
+        assert_eq!(choice.describe(shape, CoreDevice::Cpu), budget.to_string());
     }
 }
