@@ -1,12 +1,12 @@
 # 46 — Stop the restore tests sizing from free memory
 
-**Status:** TODO
+**Status:** IN PROGRESS
 **Phase:** 1 — Restoration engine
 **Depends on:** 36
 **SRS:** §6, §12
 **Stack:** §C
 **Assigned to:** Agent
-**Started:** —
+**Started:** 2026-11-18. Base `b5ec0c4` on branch `task/46` from `master`, clean tree, target `C:\mt\t46`. No gate ran at the base. The last recorded gate, at `fd0606d`, failed twice from free memory (see Evidence). `.cache` copied from `C:\mt\w36`.
 **Outcome:** —
 
 ## Goal
