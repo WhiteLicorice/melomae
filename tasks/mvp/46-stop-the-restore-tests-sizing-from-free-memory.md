@@ -23,14 +23,16 @@ The owner ranked this task high on 2026-11-18 because the gate is the bottleneck
 - One `melomae-cli` from these tests took 6.8 GB of private memory on the same day.
 - The `restore_e2e` binary took 465.63 s with its 4 tests in parallel.
 - The orchestrator set `RUST_TEST_THREADS=1` for the gate as a stopgap. It stops the failures but runs the restore tests one after another.
+- The task 36 review (2026-11-18) found that `--chunk-seconds` doesn't stop the free-memory check. `choose_chunk_for_machine(shape)?` at `crates/melomae-cli/src/restore.rs:179` runs first and fails the run when it rejects. Only `:182` replaces its result with the flag's value. The `chunk budget:` line at `:192` then describes the chooser's chunk, not the chunk the run uses. So a test with a fixed chunk still fails on a machine with less than about 6.9 GB free.
 - Inferred, not confirmed: at a fixed 6 s chunk (the core parity setting, `crates/melomae-core/tests/inference_parity.rs:44`) each CLI needs well under 1 GB, so the tests fit in parallel. A measured peak per test confirms or rejects this.
 
 ## Scope
 
-1. Give every CLI restore test (`restore_e2e`, `restore_signals`, `restore_args` where it runs a restore) fixed chunk settings, through the chunk flag that task 36 adds or an equivalent CLI option. No test may depend on free memory.
-2. Keep at least one test that covers the free-memory chooser on purpose, with a budget the test sets, not the machine's.
-3. Measure the peak memory of one restore test and the wall time of each restore binary, before and after.
-4. Remove the `RUST_TEST_THREADS=1` stopgap from the orchestration notes when the gate passes without it.
+1. When `--chunk-seconds` is given, skip `choose_chunk_for_machine` and print the predicted peak of the chunk the run uses (`restore.rs:178-192`).
+2. Give every CLI restore test (`restore_e2e`, `restore_signals`, `restore_args` where it runs a restore) fixed chunk settings, through the chunk flag that task 36 adds or an equivalent CLI option. No test may depend on free memory.
+3. Keep at least one test that covers the free-memory chooser on purpose, with a budget the test sets, not the machine's.
+4. Measure the peak memory of one restore test and the wall time of each restore binary, before and after.
+5. Remove the `RUST_TEST_THREADS=1` stopgap from the orchestration notes when the gate passes without it.
 
 ## Out of scope
 
@@ -43,6 +45,7 @@ The owner ranked this task high on 2026-11-18 because the gate is the bottleneck
 
 ## Acceptance criteria
 
+- [ ] A run with `--chunk-seconds` never calls the free-memory chooser, and its budget line describes the chunk it uses.
 - [ ] No CLI restore test reads free memory, except the one test that covers the chooser with its own budget.
 - [ ] `cargo test -p melomae-cli` passes with the tests in parallel, with no `RUST_TEST_THREADS` setting.
 - [ ] The record states the peak memory per restore test and the wall time of each restore binary, before and after.
