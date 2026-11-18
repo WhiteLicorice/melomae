@@ -1,13 +1,13 @@
 # 46 — Stop the restore tests sizing from free memory
 
-**Status:** IN PROGRESS
+**Status:** DONE
 **Phase:** 1 — Restoration engine
 **Depends on:** 36
 **SRS:** §6, §12
 **Stack:** §C
 **Assigned to:** Agent
 **Started:** 2026-11-18. Base `b5ec0c4` on branch `task/46` from `master`, clean tree, target `C:\mt\t46`. No gate ran at the base. The last recorded gate, at `fd0606d`, failed twice from free memory (see Evidence). `.cache` copied from `C:\mt\w36`.
-**Outcome:** —
+**Outcome:** DONE. `--chunk-seconds` now resolves before the free-memory chooser: `chunk_choice` (`crates/melomae-cli/src/restore.rs:158`) returns `ChunkChoice::Fixed` and never calls the chooser, `ChunkChoice::describe` (`:136`) prints the used chunk's file reserve and predicted peak with `fixed by --chunk-seconds`, and `execute` (`:236`) runs `choice.seconds()`. Red first in `46-red.txt` at base `b5ec0c4`: with 0.22 GB free, `e2e_restore_wav_matches_golden` at `--chunk-seconds 6` failed inside `choose_chunk_for_machine` with "needs at least 3474624533 bytes, more than the 278769664-byte budget" (exit 101), and `a_fixed_chunk_never_calls_the_free_memory_chooser` failed with "the chooser must not run when --chunk-seconds is given". Every restore test now passes a fixed chunk — `restore_e2e` 6 s (`restore_e2e.rs:39`, golden keeps its 6 s and 17 s cases at `:291`, progress input 18 s at `:338`, the ignored four-minute test at 6 s) and `restore_signals` 4 s (`restore_signals.rs:33`, used at `:166` and `:248`) — and the one chooser test passes its own 8 GiB budget (`restore.rs:592`). Measured peak working set of one CLI on the 18 s input: 4 s 3.42 GB, 6 s 4.50 GB, 17 s 9.23 GB; so each `restore_signals` test peaks at 3.42 GB, the three 6 s `restore_e2e` tests at 4.50 GB, and the golden test's 17 s case at 9.23 GB, where before the chooser picked 19 s here (predicted 11.58 GB) and the chunk moved with free memory. Wall time per binary, before -> after: unit 0.00 -> 0.00 s, `restore_args` 0.17 -> 0.17 s, `restore_e2e` 465.63 -> 581.37 s (the fixed 6 s chunk runs three passes over the 18 s input instead of one), `restore_signals` 2 of 3 failed -> 185.26 s for three in parallel. `cargo test -p melomae-cli` with no `RUST_TEST_THREADS`: 31 passed, 1 ignored, peak summed working set 9.22 GB with up to four CLIs at once (`46-cargo-test.txt`). All-targets Clippy and `cargo fmt --check` clean (`46-clippy.txt`). Gate `pnpm verify` with no `RUST_TEST_THREADS`, exit 0 (`46-verify.txt`): board 122 records; unittest 12 passed; Vitest 1 passed; cargo 274 passed, 0 failed, 4 ignored across 36 binaries; pytest 45 passed, 1 pre-existing FutureWarning. Not verified: a gate on a machine with less free memory than this one (about 23 GB); the tests no longer read free memory, but four CLIs at 4.5 to 9.2 GB each still need the RAM to be there.
 
 ## Goal
 
@@ -45,9 +45,9 @@ The owner ranked this task high on 2026-11-18 because the gate is the bottleneck
 
 ## Acceptance criteria
 
-- [ ] A run with `--chunk-seconds` never calls the free-memory chooser, and its budget line describes the chunk it uses.
-- [ ] No CLI restore test reads free memory, except the one test that covers the chooser with its own budget.
-- [ ] `cargo test -p melomae-cli` passes with the tests in parallel, with no `RUST_TEST_THREADS` setting.
-- [ ] The record states the peak memory per restore test and the wall time of each restore binary, before and after.
-- [ ] The new tests failed first for the expected reason.
-- [ ] `pnpm verify` passes.
+- [x] A run with `--chunk-seconds` never calls the free-memory chooser, and its budget line describes the chunk it uses.
+- [x] No CLI restore test reads free memory, except the one test that covers the chooser with its own budget.
+- [x] `cargo test -p melomae-cli` passes with the tests in parallel, with no `RUST_TEST_THREADS` setting.
+- [x] The record states the peak memory per restore test and the wall time of each restore binary, before and after.
+- [x] The new tests failed first for the expected reason.
+- [x] `pnpm verify` passes.
