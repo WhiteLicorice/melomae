@@ -386,8 +386,7 @@ mod deny {
                 .expect("stat the path to deny")
                 .permissions()
                 .mode();
-            fs::set_permissions(path, fs::Permissions::from_mode(bits))
-                .expect("set the mode bits");
+            fs::set_permissions(path, fs::Permissions::from_mode(bits)).expect("set the mode bits");
             DeniedPath {
                 path: path.to_path_buf(),
                 mode,
@@ -612,7 +611,10 @@ fn triage_scan_reports_the_files_of_a_folder_it_cannot_traverse() {
     let roots = [dir.path().to_path_buf()];
 
     let first = scan_roots(&store, &roots).expect("the first scan must not fail");
-    assert_eq!(first.scanned, 2, "both files are triaged while the folder opens");
+    assert_eq!(
+        first.scanned, 2,
+        "both files are triaged while the folder opens"
+    );
 
     let _denied = deny::DeniedPath::traversal(&dir.join("locked"));
     let second = scan_roots(&store, &roots).expect("the scan must not fail");
@@ -663,7 +665,10 @@ fn triage_scan_removes_the_row_of_a_deleted_file_root() {
         "the deleted file root's row is a deletion"
     );
     assert!(
-        store.triage_item(&gone.to_string_lossy()).unwrap().is_none(),
+        store
+            .triage_item(&gone.to_string_lossy())
+            .unwrap()
+            .is_none(),
         "the deleted file root's row is gone"
     );
     assert!(
