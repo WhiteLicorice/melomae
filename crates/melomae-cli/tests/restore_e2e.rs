@@ -413,6 +413,7 @@ fn e2e_restore_device_gpu_falls_back_to_cpu() {
         .arg(&input)
         .arg(&output)
         .args(["--format", "flac", "--device", "gpu"])
+        .args(["--chunk-seconds", TEST_CHUNK_SECONDS])
         .arg("--model")
         .arg(model_path())
         .arg("--onnxruntime")
