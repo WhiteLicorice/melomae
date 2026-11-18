@@ -1,13 +1,13 @@
 # 36 — Fix the restore output when a chunk is shorter than the input
 
-**Status:** IN PROGRESS
+**Status:** DONE
 **Phase:** 1 — Restoration engine
 **Depends on:** 04, 05, 07
 **SRS:** §6, §12
 **Stack:** §C
 **Assigned to:** Agent
 **Started:** 2026-11-18 at `fd0606d`, clean tree, no gate run. The golden test fails at a fixed 17 s chunk (max abs 6.710718e-1 on channel 0).
-**Outcome:** —
+**Outcome:** DONE. The cause was the padded segment at `crates/melomae-core/src/inference/mod.rs:411`: the last chunk built a `padded_chunk`-long buffer and zero-filled the samples past the file end, so a 17 s chunk on the 18 s input appended silence that the model heard. The segment is now `samples[padded_start..min(padded_start + padded_chunk, total)]`, the `ShortOutput` check compares against `segment.len()`, and the module header records the departure from `inference.py` (whose `F.pad` keeps that silence). Red first: `36-red.txt` — the 17 s case on the pre-fix binary fails with channel 0 max abs 6.710718e-1 and RMSE 1.951308e-2 (exit 101). Green: the new `inference_parity_holds_across_chunk_lengths` matrix over 16, 17, 18, and 19 s plus the 6 s golden sibling (`36-green-core.txt`, 613 s) and the CLI golden at fixed `--chunk-seconds 6` and `17` (`36-cli-golden.txt`, 725 s) all pass within the §12.1 tolerances, every test binary under `C:\mt\t36\debug\deps`. Gate `pnpm verify` exit 0 (`36-verify.txt`): board 119 records; unittest 12 passed; tsc, eslint, and vite build clean; Vitest 1 passed; `cargo fmt --check` and `cargo clippy --workspace -- -D warnings` clean; `cargo test --workspace` 272 passed, 0 failed, 4 ignored across 36 binaries; notices and licenses current; pytest 45 passed, 1 pre-existing FutureWarning. `cargo clippy --workspace --all-targets -- -D warnings` is also clean (`36-clippy.txt`). The 08:05 withdrawal of the shared build folder invalidated the 07:10 Clippy run and the 07:48 gate attempt, which ran `C:\mt\shared\debug\deps\restore_e2e-….exe`; both were re-run from a from-scratch `C:\mt\t36` build, and only those logs are cited. Not verified: the upstream Python run at 17 s, because `C:\Lab\Apollo` no longer exists; the reference source was read from GitHub at `e84bcac`, which keeps the trailing silence, so shortening the last segment is a deliberate, recorded departure that matches the owner's golden.
 
 ## Goal
 
@@ -38,7 +38,7 @@ Make the restored audio independent of the chunk length that the chooser picks, 
 
 ## Acceptance criteria
 
-- [ ] Every chunk length in the matrix matches the reference within the §12.1 tolerances.
-- [ ] The CLI golden test no longer depends on free memory.
-- [ ] The new tests failed first for the expected reason.
-- [ ] `pnpm verify` passes.
+- [x] Every chunk length in the matrix matches the reference within the §12.1 tolerances.
+- [x] The CLI golden test no longer depends on free memory.
+- [x] The new tests failed first for the expected reason.
+- [x] `pnpm verify` passes.
