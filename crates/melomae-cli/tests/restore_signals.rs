@@ -25,6 +25,13 @@ use melomae_core::inference::SAMPLE_RATE;
 use common::write_wav_f32;
 use setup::TempDir;
 
+/// The fixed chunk every cancel test runs with, in seconds.
+///
+/// A fixed chunk keeps the free-memory chooser out of the tests. This binary has no engine
+/// lock, so its three tests run in parallel: 4 s peaks at about 3.2 GB per CLI, which fits
+/// three at once (task 46).
+const TEST_CHUNK_SECONDS: &str = "4";
+
 /// The repository root, from the CLI crate's manifest directory.
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -156,6 +163,7 @@ fn spawn_restore(input: &Path, output: &Path) -> Child {
         .arg(input)
         .arg(output)
         .args(["--format", "flac", "--device", "cpu"])
+        .args(["--chunk-seconds", TEST_CHUNK_SECONDS])
         .arg("--model")
         .arg(model_path())
         .arg("--onnxruntime")
@@ -237,6 +245,7 @@ fn e2e_restore_cancel_exits_130_and_leaves_no_output() {
         .arg(&input)
         .arg(&output)
         .args(["--format", "flac", "--device", "cpu"])
+        .args(["--chunk-seconds", TEST_CHUNK_SECONDS])
         .arg("--model")
         .arg(model_path())
         .arg("--onnxruntime")

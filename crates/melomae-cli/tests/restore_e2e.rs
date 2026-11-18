@@ -31,6 +31,13 @@ const MAX_ABS_LIMIT: f32 = 1e-3;
 /// The SRS §12.1 parity limit on the root-mean-square error.
 const RMSE_LIMIT: f64 = 1e-4;
 
+/// The fixed chunk every restore test in this binary runs with, in seconds.
+///
+/// A fixed chunk keeps the free-memory chooser out of the tests: a run holds the same
+/// memory on a loaded machine as on an idle one (task 46). 6 s is the core parity
+/// setting, and it peaks at about 4.5 GB per CLI.
+const TEST_CHUNK_SECONDS: &str = "6";
+
 /// The repository root, from the CLI crate's manifest directory.
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -154,19 +161,9 @@ fn number_after(text: &str, marker: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
-/// Run `melomae-cli restore` with explicit model and runtime paths.
+/// Run `melomae-cli restore` at the fixed test chunk, with explicit model and runtime paths.
 fn run_restore(input: &Path, output: &Path, format: &str) -> Output {
-    Command::new(cli())
-        .arg("restore")
-        .arg(input)
-        .arg(output)
-        .args(["--format", format, "--device", "cpu"])
-        .arg("--model")
-        .arg(model_path())
-        .arg("--onnxruntime")
-        .arg(setup::ort_library())
-        .output()
-        .expect("run the CLI")
+    run_restore_at_chunk(input, output, format, TEST_CHUNK_SECONDS)
 }
 
 /// Run `melomae-cli restore` at a fixed chunk length, with explicit model and runtime paths.
@@ -328,17 +325,17 @@ fn e2e_restore_wav_matches_golden() {
 /// Scope item 2: one progress line per temporal chunk, on stderr, naming the chunk index, the
 /// chunk count, and the elapsed time. Stdout stays empty.
 ///
-/// The input is 36 s, longer than the 30 s maximum chunk (task 05 scope 4), so the run always has
-/// more than one chunk whatever the memory. The expected line count is computed from the decoded
-/// frame count, the chosen chunk, and the core `chunk_starts` helper, not read from the output's
-/// own denominator. Both a mono and a stereo input are checked.
+/// The input is 18 s, three tiles of the 6 s parity input, so the fixed 6 s chunk runs more
+/// than one chunk on any machine. The expected line count is computed from the decoded frame
+/// count, the fixed chunk, and the core `chunk_starts` helper, not read from the output's own
+/// denominator. Both a mono and a stereo input are checked.
 #[test]
 fn e2e_restore_reports_one_progress_line_per_chunk() {
     require_lfs(&model_path());
     let _engine = engine_lock();
-    for (channels, name) in [(1usize, "input_36s_mono.wav"), (2, "input_36s_stereo.wav")] {
+    for (channels, name) in [(1usize, "input_18s_mono.wav"), (2, "input_18s_stereo.wav")] {
         let dir = TempDir::new("melomae-cli-progress");
-        let input = build_tiled_input(&dir, 6, channels, name);
+        let input = build_tiled_input(&dir, 3, channels, name);
         let output = dir.join("restored.flac");
 
         let result = run_restore(&input, &output, "flac");
@@ -359,7 +356,7 @@ fn e2e_restore_reports_one_progress_line_per_chunk() {
             "the restore must report progress: {stderr}"
         );
 
-        // The chosen chunk, from the budget line, and the expected chunk count.
+        // The chunk the run used, from the budget line, and the expected chunk count.
         let budget = stderr
             .lines()
             .find(|line| line.contains("chunk budget"))
@@ -446,9 +443,9 @@ fn e2e_restore_device_gpu_falls_back_to_cpu() {
 ///
 /// It runs the real model for minutes and uses several GB, so it is ignored by default.
 /// Run it while holding the gate slot (`cargo test --release -p melomae-cli -- --ignored`).
-/// The printed line carries the wall time, the end-to-end RTF, the chosen chunk, the
-/// available memory, the predicted memory, and the process peak, read the way task 05
-/// read it (`PeakWorkingSetSize`).
+/// The printed line carries the wall time, the end-to-end RTF, the fixed chunk, the
+/// predicted memory of that chunk, and the process peak, read the way task 05 read it
+/// (`PeakWorkingSetSize`).
 #[test]
 #[ignore = "runs the real model for minutes and several GB; run in the gate slot"]
 fn e2e_restore_four_minutes_on_cpu() {
@@ -464,6 +461,7 @@ fn e2e_restore_four_minutes_on_cpu() {
         .arg(&input)
         .arg(&output)
         .args(["--format", "flac", "--device", "cpu"])
+        .args(["--chunk-seconds", TEST_CHUNK_SECONDS])
         .arg("--model")
         .arg(model_path())
         .arg("--onnxruntime")
@@ -500,8 +498,7 @@ fn e2e_restore_four_minutes_on_cpu() {
         .find(|line| line.contains("chunk budget"))
         .unwrap_or_default();
     let chunk = number_after(budget, "chunk budget: chunk ").unwrap_or(0);
-    let available = number_after(budget, "available ").unwrap_or(0);
-    let predicted = number_after(budget, "total ").unwrap_or(0);
+    let predicted = number_after(budget, "predicted inference peak ").unwrap_or(0);
     let audio_seconds = 40.0 * 6.0;
     let error_percent = if predicted == 0 {
         f64::NAN
@@ -510,8 +507,8 @@ fn e2e_restore_four_minutes_on_cpu() {
     };
     println!(
         "four-minute restore: wall {:.1}s, audio {audio_seconds}s, end-to-end RTF {:.4}, \
-         chunk {chunk}s, available {available} bytes, predicted {predicted} bytes, \
-         peak {peak} bytes, error {error_percent:.2}%, SRS §12.2 baseline torch CPU RTF 2.70",
+         chunk {chunk}s, predicted {predicted} bytes, peak {peak} bytes, \
+         error {error_percent:.2}%, SRS §12.2 baseline torch CPU RTF 2.70",
         elapsed.as_secs_f64(),
         elapsed.as_secs_f64() / audio_seconds
     );
