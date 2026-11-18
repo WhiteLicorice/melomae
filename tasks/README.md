@@ -107,7 +107,7 @@ The validator rejects any other status value.
 | 37 | [Download the CUDA runtime on demand](mvp/37-download-the-cuda-runtime-on-demand.md) | TODO | 08, 38 |
 | 33 | [Load ONNX Runtime dynamically for the glibc 2.35 baseline](mvp/33-load-onnx-runtime-dynamically-on-linux.md) | DONE | 04 |
 | 34 | [Make test temporary directories unique](mvp/34-make-test-temporary-directories-unique.md) | DONE | 03 |
-| 45 | [Measure and stop the MP3 trim to an estimated length](mvp/45-measure-and-stop-the-mp3-trim-to-an-estimated-length.md) | TODO | 03 |
+| 45 | [Measure and stop the MP3 trim to an estimated length](mvp/45-measure-and-stop-the-mp3-trim-to-an-estimated-length.md) | DONE | 03 |
 | 46 | [Stop the restore tests sizing from free memory](mvp/46-stop-the-restore-tests-sizing-from-free-memory.md) | TODO | 36 |
 | 47 | [Cap the chunk-seconds override](mvp/47-cap-the-chunk-seconds-override.md) | TODO | 36 |
 | 48 | [Guard the last-chunk clamp with tests](mvp/48-guard-the-last-chunk-clamp-with-tests.md) | TODO | 36 |
