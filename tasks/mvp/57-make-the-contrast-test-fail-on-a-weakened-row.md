@@ -15,7 +15,7 @@ Make `tests/design.test.ts` fail when a row of the `DESIGN.md` contrast table lo
 
 ## Evidence
 
-- The task 39 review (2026-11-18, `C:\mt\reports\39-review.md` findings 1 and 2) changed the body-text row's minimum from 4.5 to 1. The suite stayed green, 5 of 5. Only the 3:1 floor is pinned (`tests/design.test.ts:117`). Text pairs check against their own row (`:138-142`).
+- The task 39 review (2026-11-18, `.claygo/mt-evidence/reports/39-review.md` findings 1 and 2) changed the body-text row's minimum from 4.5 to 1. The suite stayed green, 5 of 5. Only the 3:1 floor is pinned (`tests/design.test.ts:117`). Text pairs check against their own row (`:138-142`).
 - Removing a trailing pipe from a row drops that pair from both themes with no error (`:54-60`). The presence check needs `control-edge` only once (`:121-123`), so the surface row can disappear.
 
 ## Scope

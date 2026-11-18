@@ -15,7 +15,7 @@ Retry a job on the CPU when the GPU fails during inference, not only when the pr
 
 ## Evidence
 
-- The task 08 review (2026-11-18, `C:\mt\reports\08-review.md` findings 1 and 2) found that every `session.run` error becomes `InferenceError::Model` (`crates/melomae-core/src/inference/onnx.rs:199-201`, `:217-219`). `falls_back_to_cpu` matches only `ProviderStart` and `OutOfMemory` (`inference/mod.rs:212-214`).
+- The task 08 review (2026-11-18, `.claygo/mt-evidence/reports/08-review.md` findings 1 and 2) found that every `session.run` error becomes `InferenceError::Model` (`crates/melomae-core/src/inference/onnx.rs:199-201`, `:217-219`). `falls_back_to_cpu` matches only `ProviderStart` and `OutOfMemory` (`inference/mod.rs:212-214`).
 - With the CUDA DLL-path fix removed, the GPU e2e test fails at the first `ConvTranspose` with `Model("... CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED")`. The job exits and does not retry on the CPU.
 - Production never constructs `OutOfMemory`. Only two test fakes do (`inference/device.rs:328`, `:452`). So the out-of-memory retry in task 08 scope 4 never runs.
 

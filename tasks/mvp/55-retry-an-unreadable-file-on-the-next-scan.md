@@ -15,7 +15,7 @@ Give a verdict to a file that was unreadable and is readable again, on the next 
 
 ## Evidence
 
-- The task 44 round 2 review (2026-11-18, `C:\mt\reports\44-review.md` finding 1): a read failure stores an unreadable row with the file's real size and time (`crates/melomae-core/src/triage/mod.rs:295-300`). The next scan sees the same size and time and returns `Unchanged` (`:284-288`) without a read.
+- The task 44 round 2 review (2026-11-18, `.claygo/mt-evidence/reports/44-review.md` finding 1): a read failure stores an unreadable row with the file's real size and time (`crates/melomae-core/src/triage/mod.rs:295-300`). The next scan sees the same size and time and returns `Unchanged` (`:284-288`) without a read.
 - A scratch test denied `(R)`, scanned, lifted the deny, and scanned again. The verdict stayed `Unreadable`, with `scanned=0 skipped=1`.
 
 ## Scope
