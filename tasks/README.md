@@ -111,6 +111,7 @@ The validator rejects any other status value.
 | 46 | [Stop the restore tests sizing from free memory](mvp/46-stop-the-restore-tests-sizing-from-free-memory.md) | TODO | 36 |
 | 47 | [Cap the chunk-seconds override](mvp/47-cap-the-chunk-seconds-override.md) | TODO | 36 |
 | 48 | [Guard the last-chunk clamp with tests](mvp/48-guard-the-last-chunk-clamp-with-tests.md) | TODO | 36 |
+| 49 | [Make the Xing MP3 test detect the padding trim](mvp/49-make-the-xing-mp3-test-detect-the-padding-trim.md) | TODO | 45 |
 
 ## Phase 2 — Metadata, triage, and provenance
 
