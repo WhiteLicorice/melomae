@@ -1,12 +1,12 @@
 # 39 — Record the product and design context
 
-**Status:** TODO
+**Status:** IN PROGRESS
 **Phase:** 4 — Desktop UI
 **Depends on:** —
 **SRS:** §1, §3
 **Stack:** §A
 **Assigned to:** Agent
-**Started:** —
+**Started:** 2026-11-18. Base `68c2491` on `task/39`, tree clean. No gate had run on this branch. The base has no `PRODUCT.md`, no `DESIGN.md`, and no design test.
 **Outcome:** —
 
 ## Goal
