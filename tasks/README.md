@@ -112,6 +112,11 @@ The validator rejects any other status value.
 | 47 | [Cap the chunk-seconds override](mvp/47-cap-the-chunk-seconds-override.md) | TODO | 36 |
 | 48 | [Guard the last-chunk clamp with tests](mvp/48-guard-the-last-chunk-clamp-with-tests.md) | TODO | 36 |
 | 49 | [Make the Xing MP3 test detect the padding trim](mvp/49-make-the-xing-mp3-test-detect-the-padding-trim.md) | TODO | 45 |
+| 50 | [Fall back to the CPU when a GPU run fails](mvp/50-fall-back-to-the-cpu-when-a-gpu-run-fails.md) | TODO | 08 |
+| 51 | [Check host memory for the fixed GPU chunk](mvp/51-check-host-memory-for-the-fixed-gpu-chunk.md) | TODO | 08 |
+| 52 | [Test the CUDA download script](mvp/52-test-the-cuda-download-script.md) | TODO | 08 |
+| 53 | [Size the GPU chunk from free video memory](mvp/53-size-the-gpu-chunk-from-free-video-memory.md) | TODO | 08 |
+| 54 | [Measure the GPU speed in a release build](mvp/54-measure-the-gpu-speed-in-a-release-build.md) | TODO | 08 |
 
 ## Phase 2 — Metadata, triage, and provenance
 
@@ -257,6 +262,7 @@ After a board edit, run `python tasks/validate_board.py`. The task file and its 
 | B-066 | [Count the FLAC encoder buffer in the memory reserve](backlog/B-066-count-the-flac-encoder-buffer-in-the-memory-reserve.md) | TODO | 05, 06 |
 | B-067 | [Typecheck the Vite configuration files in the gate](backlog/B-067-typecheck-the-vite-configuration-files-in-the-gate.md) | TODO | 00 |
 | B-068 | [Put a timeout on the pinned downloads](backlog/B-068-put-a-timeout-on-the-pinned-downloads.md) | TODO | 00 |
+| B-069 | [Run the GPU path on Linux](backlog/B-069-run-the-gpu-path-on-linux.md) | TODO | 08 |
 
 Each backlog record states why it does not block the MVP. Each record also states its promotion condition.
 
