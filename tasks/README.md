@@ -121,6 +121,9 @@ The validator rejects any other status value.
 | 56 | [Keep the rows under a folder the scan cannot stat](mvp/56-keep-the-rows-under-a-folder-the-scan-cannot-stat.md) | TODO | 44 |
 | 57 | [Make the contrast test fail on a weakened row](mvp/57-make-the-contrast-test-fail-on-a-weakened-row.md) | TODO | 39 |
 | 58 | [Give the progress bar a contrast token](mvp/58-give-the-progress-bar-a-contrast-token.md) | TODO | 39 |
+| 59 | [Give the engine lock its real reason](mvp/59-give-the-engine-lock-its-real-reason.md) | TODO | 46 |
+| 60 | [Print the chunk the fixed peak uses](mvp/60-print-the-chunk-the-fixed-peak-uses.md) | TODO | 46 |
+| 61 | [Compare the four-minute peak with its total](mvp/61-compare-the-four-minute-peak-with-its-total.md) | TODO | 46 |
 
 ## Phase 2 — Metadata, triage, and provenance
 
