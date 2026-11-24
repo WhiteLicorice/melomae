@@ -50,7 +50,7 @@ SPDX_TEXT_DIR = Path(__file__).resolve().parent / "spdx_texts"
 # The bundled ONNX Runtime release. `tools/fetch_onnxruntime.py` fetches this
 # archive; the generator reads its own `LICENSE` and `ThirdPartyNotices.txt`
 # from the extracted folder and fails when either is missing.
-RUNTIME_VERSION = "1.28.3"
+RUNTIME_VERSION = "1.28.0"
 RUNTIME_TAG = f"v{RUNTIME_VERSION}"
 RUNTIME_DIR = REPO_ROOT / ".cache" / "onnxruntime" / RUNTIME_TAG
 
