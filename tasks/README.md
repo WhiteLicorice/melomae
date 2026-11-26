@@ -125,7 +125,7 @@ The validator rejects any other status value.
 | 60 | [Print the chunk the fixed peak uses](mvp/60-print-the-chunk-the-fixed-peak-uses.md) | TODO | 46 |
 | 61 | [Compare the four-minute peak with its total](mvp/61-compare-the-four-minute-peak-with-its-total.md) | TODO | 46 |
 | 62 | [Fetch ONNX Runtime from a live source](mvp/62-fetch-onnx-runtime-from-a-live-source.md) | DONE | — |
-| 63 | [Move to ONNX Runtime 1.31 and ort rc.15](mvp/63-move-to-onnx-runtime-1-31-and-ort-rc-15.md) | IN PROGRESS | 62 |
+| 63 | [Move to ONNX Runtime 1.31 and ort rc.15](mvp/63-move-to-onnx-runtime-1-31-and-ort-rc-15.md) | DONE | 62 |
 
 ## Phase 2 — Metadata, triage, and provenance
 
