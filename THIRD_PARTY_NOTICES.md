@@ -596,7 +596,7 @@ full, below.
 | Component | Version | License | Note |
 | --- | --- | --- | --- |
 | Apollo model (apollo.onnx) | c68bd80f | CC-BY-SA-4.0 | The restoration model. See models/NOTICE.md. |
-| onnxruntime | 1.28.3 | MIT | The shared library the installer bundles (Stack section J). |
+| onnxruntime | 1.28.0 | MIT | The shared library the installer bundles (Stack section J). |
 
 ## License and notice texts
 
@@ -2589,7 +2589,7 @@ at your option.
 
 Components covered by this text:
 
-- onnxruntime 1.28.3 (`ThirdPartyNotices.txt`)
+- onnxruntime 1.28.0 (`ThirdPartyNotices.txt`)
 
 ```
 THIRD PARTY SOFTWARE NOTICES AND INFORMATION
@@ -21062,7 +21062,7 @@ SOFTWARE.
 
 Components covered by this text:
 
-- onnxruntime 1.28.3 (`LICENSE`)
+- onnxruntime 1.28.0 (`LICENSE`)
 
 ```
 MIT License
