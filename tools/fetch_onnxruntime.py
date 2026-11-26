@@ -8,12 +8,11 @@ statically. The tests and development use the library this script fetches.
     python tools/fetch_onnxruntime.py
 
 This script holds one pin: the Microsoft ONNX Runtime release whose C API matches the
-pinned `ort` crate. `ort` 2.0.0-rc.13 uses ONNX Runtime 1.28 (ORT API version 27), so the
-pin is the `1.28.0` release of that minor line. The pin was `v1.28.3` from the GitHub
-release, until `github.com/microsoft/onnxruntime` began to return 404 (task 62). The 1.28
-patch releases were published on GitHub only, so the pin moved to 1.28.0, the newest 1.28
-build that Microsoft still publishes. The source is the `Microsoft.ML.OnnxRuntime` package
-on nuget.org, which carries both platforms:
+pinned `ort` crate. `ort` 2.0.0-rc.15 is built for ONNX Runtime 1.31 (ORT API version 31),
+so the pin is `1.31.1`, the newest patch of that minor line (task 63). The pin was `v1.28.3`
+from the GitHub release, until `github.com/microsoft/onnxruntime` began to return 404 (task
+62). The source is the `Microsoft.ML.OnnxRuntime` package on nuget.org, which carries both
+platforms:
 
     win-x64    runtimes/win-x64/native/onnxruntime.dll
     linux-x64  runtimes/linux-x64/native/libonnxruntime.so
@@ -23,8 +22,8 @@ package's `LICENSE` and `ThirdPartyNotices.txt` into `<tag>/<folder>/`. The Rust
 `tools/generate_notices.py` read that layout.
 
 The Linux library keeps the glibc 2.35 baseline of SRS §2. A read of
-`libonnxruntime.so` 1.28.0 shows its newest glibc requirement is `GLIBC_2.27`, and it holds
-no `__isoc23_*` symbol (task 62). The glibc 2.35 of Ubuntu 22.04 is therefore sufficient.
+`libonnxruntime.so` 1.31.1 shows its newest glibc requirement is `GLIBC_2.28`, and it holds
+no `__isoc23_*` symbol (task 63). The glibc 2.35 of Ubuntu 22.04 is therefore sufficient.
 The pyke.io binary that `ort`'s default features download is built with a newer toolchain,
 and its `__isoc23_strtol`, `__isoc23_strtoll`, and `__isoc23_strtoull` need glibc 2.38.
 That is why this script pins the Microsoft build.
@@ -46,11 +45,11 @@ from pathlib import Path
 
 # One pin: a Microsoft ONNX Runtime release that matches the pinned `ort` API. One package
 # serves both platforms. The SHA-256 is of the `.nupkg` file that nuget.org serves, measured
-# on 2026-11-24 (task 62).
-VERSION = "1.28.0"
+# on 2026-11-26 (task 63).
+VERSION = "1.31.1"
 TAG = f"v{VERSION}"
 PACKAGE = f"microsoft.ml.onnxruntime.{VERSION}.nupkg"
-PACKAGE_SHA256 = "769d1d3ea8ab6cd69f737c9dd4d4462aa4ad0ccfa106eaf506efc40d7bead5db"
+PACKAGE_SHA256 = "6871ccbc97f3d5bdb4095a1dcec33aa78d56f6ed8de5980ef5fa1d9f2e7c679a"
 ASSETS = {
     "win-x64": (PACKAGE, PACKAGE_SHA256),
     "linux-x64": (PACKAGE, PACKAGE_SHA256),

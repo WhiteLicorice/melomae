@@ -17,8 +17,8 @@ folder is what the engine preloads, so the CUDA provider finds its dependencies.
 Two pins:
 
 1. The Microsoft ONNX Runtime release whose C API matches the pinned `ort` crate,
-   built for CUDA 12.x. `ort` 2.0.0-rc.13 uses ONNX Runtime 1.28 (ORT API 27). The
-   source is the `Microsoft.ML.OnnxRuntime.Gpu.Windows` 1.28.0 package on Microsoft's
+   built for CUDA 12.x. `ort` 2.0.0-rc.15 is built for ONNX Runtime 1.31 (ORT API 31).
+   The source is the `Microsoft.ML.OnnxRuntime.Gpu.Windows` 1.31.1 package on Microsoft's
    `onnxruntime-cuda-12` Azure Artifacts feed, whose libraries sit under
    `runtimes/win-x64/native/`. The package of the same name on nuget.org is a CUDA 13
    build from 1.27 on: its CUDA provider needs `cublasLt64_13.dll`. The ONNX Runtime
@@ -53,16 +53,18 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-# The CUDA major the pinned `ort` crate preloads on Windows
-# (`ort::ep::cuda::CUDA_DYLIBS`: cudart64_12, cublasLt64_12, cublas64_12, cufft64_11).
+# The CUDA major the engine preloads on Windows (`CUDA_DYLIBS` in
+# `crates/melomae-core/src/inference/onnx.rs`: cudart64_12, cublasLt64_12, cublas64_12,
+# cufft64_11). `ort` 2.0.0-rc.15 lists the CUDA 13 names, so the engine keeps its own list
+# (task 63).
 CUDA_MAJOR = 12
 
 # The Microsoft GPU build whose C API matches the pinned `ort` version.
-# The SHA-256 is of the `.nupkg` file that the feed serves, measured on 2026-11-25.
-ORT_VERSION = "1.28.0"
+# The SHA-256 is of the `.nupkg` file that the feed serves, measured on 2026-11-26 (task 63).
+ORT_VERSION = "1.31.1"
 ORT_TAG = f"v{ORT_VERSION}"
 ORT_ASSET = f"microsoft.ml.onnxruntime.gpu.windows.{ORT_VERSION}.nupkg"
-ORT_SHA256 = "1aa6f7daca8d33f33affe25c65dfacc2d2519d9fb7304ef8c9fafaa7273f3d3b"
+ORT_SHA256 = "bf578833d5e15f593ce54dd504abcd2195d44b0761da0ff47cd249984c034a7f"
 ORT_URL = (
     "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/"
     f"nuget/v3/flat2/microsoft.ml.onnxruntime.gpu.windows/{ORT_VERSION}/{ORT_ASSET}"

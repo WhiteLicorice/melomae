@@ -545,7 +545,7 @@ fn find_binary(tag_dir: &Path) -> Option<PathBuf> {
 }
 
 /// The pinned Microsoft ONNX Runtime release. Keep this in step with `tools/fetch_onnxruntime.py`.
-pub const ORT_TAG: &str = "v1.28.0";
+pub const ORT_TAG: &str = "v1.31.1";
 
 /// The ONNX Runtime shared library the tests load: the pinned release fetched into
 /// `.cache/onnxruntime/<tag>/`.

@@ -36,7 +36,7 @@ def make_component(directory: Path, name: str, version: str, license: str, files
 
 def make_runtime(directory: Path, with_third_party: bool = True) -> Path:
     """A fixture that stands in for the extracted ONNX Runtime archive."""
-    inner = directory / "onnxruntime-fake-1.28.0"
+    inner = directory / "onnxruntime-fake-1.31.1"
     inner.mkdir(parents=True)
     (inner / "LICENSE").write_text("Fake runtime license text.\n", encoding="utf-8")
     if with_third_party:
@@ -147,7 +147,7 @@ def test_the_check_mode_reports_a_stale_file(tmp_path, monkeypatch) -> None:
 def test_the_committed_notice_names_the_bundled_components() -> None:
     text = OUTPUT.read_text(encoding="utf-8")
     for expected in (
-        "| onnxruntime | 1.28.0 | MIT |",
+        "| onnxruntime | 1.31.1 | MIT |",
         "| Apollo model (apollo.onnx) | c68bd80f | CC-BY-SA-4.0 |",
         "| symphonia | 0.6.1 | MPL-2.0 |",
         "| opusic-c | 1.6.1 | BSD-3-Clause |",
@@ -279,7 +279,7 @@ def test_the_bundled_runtime_documents_are_kept_and_required(tmp_path, monkeypat
 
     assert "Fake runtime license text." in output
     assert "Fake third party notices for the runtime." in output
-    assert "onnxruntime 1.28.0" in section_with(output, "Fake third party notices")
+    assert "onnxruntime 1.31.1" in section_with(output, "Fake third party notices")
 
 
 def test_a_missing_runtime_document_fails_the_generator(tmp_path, monkeypatch) -> None:

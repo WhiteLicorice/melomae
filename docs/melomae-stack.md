@@ -28,7 +28,7 @@ This document defines how Melomae is built. `docs/melomae-srs.md` defines what i
 
 ## §C — Inference
 
-- ONNX Runtime through the `ort` crate (2.0.0-rc.13 on 2026-09-24).
+- ONNX Runtime through the `ort` crate (2.0.0-rc.15 on 2026-11-26, task 63), on ONNX Runtime 1.31.1. The GPU path stays on CUDA 12, so the engine keeps its own CUDA 12 library list instead of the CUDA 13 list in `ort` 2.0.0-rc.15.
 - `tools/export` (a uv Python project) builds `apollo.onnx` from the official checkpoint. It vendors the upstream model files `look2hear/models/apollo.py` and `base_model.py` unmodified from `JusperLee/Apollo@e84bcac`.
 - Checkpoint: `JusperLee/Apollo` `pytorch_model.bin`, 66,541,845 bytes, SHA-256 `99d9af7f1ff20e63c393035513a655392818d66b4d7fc23d658175c1f15e8d76`. The export verifies this hash.
 - Model constants: `sr=44100`, `win=20` ms (882 samples), hop 441, 80 bands, `feature_dim=256`, 6 layers (`apollo.py:207-247`).

@@ -31,7 +31,7 @@ def test_the_pin_names_the_microsoft_cuda_12_gpu_nuget_package() -> None:
         "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/"
         f"nuget/v3/flat2/microsoft.ml.onnxruntime.gpu.windows/{version}/{module.ORT_ASSET}"
     )
-    assert version.startswith("1.28")
+    assert version.startswith("1.31")
     assert module.CUDA_MAJOR == 12
 
 

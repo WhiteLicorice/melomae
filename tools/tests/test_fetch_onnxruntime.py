@@ -37,7 +37,7 @@ def test_the_pin_names_the_microsoft_nuget_package_for_both_platforms() -> None:
         assert len(digest) == 64 and all(c in "0123456789abcdef" for c in digest), name
     assert module.BASE_URL.startswith("https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/")
     # The whole point of the pin: a release that matches the pinned ort API.
-    assert version.startswith("1.28")
+    assert version.startswith("1.31")
 
 
 def nupkg(path: Path) -> str:

@@ -530,7 +530,14 @@ enum RuntimeState {
     /// No load has been attempted.
     NotTried,
     /// The runtime loaded from this resolved library path.
-    Loaded(PathBuf),
+    Loaded {
+        /// The resolved library path.
+        path: PathBuf,
+        /// The process's one ONNX Runtime environment. `ort` 2.0.0-rc.15 builds at most one
+        /// environment per process, and every session needs it, so it lives here for the
+        /// rest of the process.
+        environment: ort::environment::Environment,
+    },
     /// The runtime failed to load from this resolved path, with the error text.
     Failed {
         /// The resolved path that failed.
@@ -555,19 +562,27 @@ enum RuntimeState {
 /// A path that is not a file returns [`InferenceError::Runtime`] before ONNX
 /// Runtime is touched, so the caller can correct it. After ONNX Runtime itself
 /// fails, the failure is remembered. Every later call returns the same
-/// [`InferenceError::Runtime`] and never touches ONNX Runtime again. ONNX Runtime
-/// 2.0.0-rc.13 marks its dylib slot as used even when a load fails, so a second
+/// [`InferenceError::Runtime`] and never touches ONNX Runtime again. `ort`
+/// 2.0.0-rc.15 marks its dylib slot as used even when a load fails, so a second
 /// load reads uninitialized data and aborts the process. Restart the process to
 /// retry the load after a failure.
 pub fn init_runtime(library: &Path) -> Result<(), InferenceError> {
+    runtime_environment(library).map(|_| ())
+}
+
+/// Load the runtime as [`init_runtime`] does, and return the process's environment.
+fn runtime_environment(library: &Path) -> Result<ort::environment::Environment, InferenceError> {
     static STATE: Mutex<RuntimeState> = Mutex::new(RuntimeState::NotTried);
     let mut state = STATE
         .lock()
         .map_err(|_| InferenceError::Runtime("the runtime lock was poisoned".to_string()))?;
     match &*state {
-        RuntimeState::Loaded(loaded) => {
+        RuntimeState::Loaded {
+            path: loaded,
+            environment,
+        } => {
             if std::fs::canonicalize(library).ok().as_deref() == Some(loaded.as_path()) {
-                return Ok(());
+                return Ok(environment.clone());
             }
             return Err(InferenceError::Runtime(format!(
                 "ONNX Runtime is already loaded from `{}`, so the requested library `{}` is not used",
@@ -595,14 +610,18 @@ pub fn init_runtime(library: &Path) -> Result<(), InferenceError> {
             library.display()
         ))
     })?;
-    match ort::init_from(&resolved) {
-        Ok(builder) => {
-            builder.commit();
-            *state = RuntimeState::Loaded(resolved);
-            Ok(())
+    match ort::init_from(&resolved)
+        .map_err(|error| error.to_string())
+        .and_then(|builder| builder.build().map_err(|error| error.to_string()))
+    {
+        Ok(environment) => {
+            *state = RuntimeState::Loaded {
+                path: resolved,
+                environment: environment.clone(),
+            };
+            Ok(environment)
         }
-        Err(error) => {
-            let message = error.to_string();
+        Err(message) => {
             let failure = InferenceError::Runtime(format!(
                 "ONNX Runtime failed to load from `{}`: {message}",
                 resolved.display()
@@ -637,9 +656,11 @@ pub fn load_onnx_backend_with_options(
     model: &Path,
     options: OnnxOptions,
 ) -> Result<OnnxBackend, InferenceError> {
-    init_runtime(runtime_library)?;
+    let environment = runtime_environment(runtime_library)?;
     Ok(ChunkedInference::new(onnx::OnnxModel::load_with_options(
-        model, options,
+        &environment,
+        model,
+        options,
     )?))
 }
 
@@ -660,7 +681,7 @@ pub fn gpu_provider_available(runtime_library: &Path, cuda_folder: &Path) -> boo
     if init_runtime(runtime_library).is_err() {
         return false;
     }
-    ort::ep::CUDA::default().is_available().unwrap_or(false)
+    ort::ep::CUDA::is_available().unwrap_or(false)
 }
 
 /// Load the Apollo ONNX model on a device from a caller-given runtime library.
@@ -678,8 +699,9 @@ pub fn load_onnx_backend_on_device(
     device: Device,
     cuda_folder: Option<&Path>,
 ) -> Result<OnnxBackend, InferenceError> {
-    init_runtime(runtime_library)?;
+    let environment = runtime_environment(runtime_library)?;
     Ok(ChunkedInference::new(onnx::OnnxModel::load_on_device(
+        &environment,
         model,
         OnnxOptions::default(),
         device,
