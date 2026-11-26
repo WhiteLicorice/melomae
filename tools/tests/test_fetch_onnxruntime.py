@@ -26,15 +26,68 @@ def load_module():
     return module
 
 
-def test_the_pin_names_a_microsoft_release_and_both_assets() -> None:
+def test_the_pin_names_the_microsoft_nuget_package_for_both_platforms() -> None:
     module = load_module()
-    # A GitHub release tag from microsoft/onnxruntime: "v" and a semantic version.
     assert re.fullmatch(r"v\d+\.\d+\.\d+", module.TAG), module.TAG
     assert set(module.ASSETS) == {"win-x64", "linux-x64"}
+    version = module.TAG.lstrip("v")
     for name, digest in module.ASSETS.values():
+        # The Microsoft-published package on nuget.org (task 62).
+        assert name == f"microsoft.ml.onnxruntime.{version}.nupkg", name
         assert len(digest) == 64 and all(c in "0123456789abcdef" for c in digest), name
+    assert module.BASE_URL.startswith("https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/")
     # The whole point of the pin: a release that matches the pinned ort API.
-    assert module.TAG.lstrip("v").startswith("1.28")
+    assert version.startswith("1.31")
+
+
+def nupkg(path: Path) -> str:
+    """Write a NuGet-shaped package with two platforms and return its SHA-256."""
+    import hashlib
+    import zipfile
+
+    with zipfile.ZipFile(path, "w") as handle:
+        handle.writestr("LICENSE", "license text\n")
+        handle.writestr("ThirdPartyNotices.txt", "notices text\n")
+        handle.writestr("Microsoft.ML.OnnxRuntime.nuspec", "<package/>\n")
+        handle.writestr("runtimes/win-x64/native/onnxruntime.dll", "win-x64 runtime")
+        handle.writestr("runtimes/win-x64/native/onnxruntime_providers_shared.dll", "win-x64 shared")
+        handle.writestr("runtimes/linux-x64/native/libonnxruntime.so", "linux-x64 runtime")
+        handle.writestr("runtimes/win-arm64/native/onnxruntime.dll", "win-arm64 runtime")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("rid", "library_name", "content"),
+    [
+        ("win-x64", "onnxruntime.dll", b"win-x64 runtime"),
+        ("linux-x64", "libonnxruntime.so", b"linux-x64 runtime"),
+    ],
+)
+def test_a_nuget_package_installs_one_platform_with_its_documents(
+    tmp_path: Path, rid: str, library_name: str, content: bytes
+) -> None:
+    module = load_module()
+    package = tmp_path / "package.nupkg"
+    digest = nupkg(package)
+    tag_dir = tmp_path / "onnxruntime" / module.TAG
+
+    module.install(
+        tag_dir, package.name, digest, url="stub", rid=rid, fetch=lambda url: package.read_bytes()
+    )
+
+    found = module.library(tag_dir)
+    assert found is not None and found.name == library_name
+    assert found.read_bytes() == content
+    # The Rust tests and the notice generator read `<tag>/<folder>/lib/` and
+    # `<tag>/<folder>/{LICENSE,ThirdPartyNotices.txt}`.
+    folder = found.parent.parent
+    assert found.parent.name == "lib" and folder.parent == tag_dir
+    assert (folder / "LICENSE").read_text(encoding="utf-8") == "license text\n"
+    assert (folder / "ThirdPartyNotices.txt").read_text(encoding="utf-8") == "notices text\n"
+    # Only the requested platform's libraries are installed.
+    other = {"win-x64": "libonnxruntime.so", "linux-x64": "onnxruntime.dll"}[rid]
+    assert not (found.parent / other).exists()
+    assert module.is_complete(tag_dir)
 
 
 def test_a_checksum_mismatch_is_rejected_and_leaves_no_partial_folder(tmp_path: Path) -> None:

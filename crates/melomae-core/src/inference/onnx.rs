@@ -6,6 +6,7 @@
 
 use std::path::Path;
 
+use ort::environment::Environment;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::Tensor;
@@ -35,16 +36,21 @@ pub struct OnnxModel {
 impl OnnxModel {
     /// Load the model from a file path.
     ///
-    /// The caller passes the resource path of the shipped app.
-    pub fn load(path: &Path) -> Result<Self, InferenceError> {
-        Self::load_with_options(path, OnnxOptions::default())
+    /// The caller passes the process's ONNX Runtime environment and the resource path of
+    /// the shipped app.
+    pub fn load(environment: &Environment, path: &Path) -> Result<Self, InferenceError> {
+        Self::load_with_options(environment, path, OnnxOptions::default())
     }
 
     /// Load the model with explicit session options.
     ///
     /// A measurement uses this to compare the CPU memory arena on and off.
-    pub fn load_with_options(path: &Path, options: OnnxOptions) -> Result<Self, InferenceError> {
-        Self::load_on_device(path, options, Device::Cpu, None)
+    pub fn load_with_options(
+        environment: &Environment,
+        path: &Path,
+        options: OnnxOptions,
+    ) -> Result<Self, InferenceError> {
+        Self::load_on_device(environment, path, options, Device::Cpu, None)
     }
 
     /// Load the model on the device that will run it (task 08).
@@ -56,12 +62,13 @@ impl OnnxModel {
     /// that cannot start returns [`InferenceError::ProviderStart`] instead of
     /// falling back silently; the caller then retries on the CPU (SRS §6.3).
     pub fn load_on_device(
+        environment: &Environment,
         path: &Path,
         options: OnnxOptions,
         device: Device,
         cuda_folder: Option<&Path>,
     ) -> Result<Self, InferenceError> {
-        let mut builder = Session::builder()
+        let mut builder = Session::builder(environment)
             .map_err(model_error)?
             .with_optimization_level(GraphOptimizationLevel::Level3)
             .map_err(model_error)?;
@@ -103,6 +110,30 @@ fn cpu_dispatch(options: OnnxOptions) -> ort::ep::ExecutionProviderDispatch {
         .build()
 }
 
+/// The CUDA 12 libraries the CUDA execution provider needs (task 63).
+///
+/// The engine runs the CUDA 12 build of ONNX Runtime with the CUDA 12 wheels that
+/// `tools/fetch_cuda.py` pins. `ort` 2.0.0-rc.15 lists the CUDA 13 names in
+/// `ort::ep::cuda::CUDA_DYLIBS`, so the engine keeps the CUDA 12 names that `ort`
+/// 2.0.0-rc.13 listed. The cuDNN 9 names still come from `ort::ep::cuda::CUDNN_DYLIBS`.
+#[cfg(windows)]
+pub(crate) const CUDA_DYLIBS: &[&str] = &[
+    "cudart64_12.dll",
+    "cublasLt64_12.dll",
+    "cublas64_12.dll",
+    "cufft64_11.dll",
+];
+/// The CUDA 12 libraries the CUDA execution provider needs; see the Windows list.
+#[cfg(not(windows))]
+pub(crate) const CUDA_DYLIBS: &[&str] = &[
+    "libcudart.so.12",
+    "libcublasLt.so.12",
+    "libcublas.so.12",
+    "libnvrtc.so.12",
+    "libcurand.so.10",
+    "libcufft.so.11",
+];
+
 /// Preload the CUDA and cuDNN libraries the CUDA execution provider needs.
 ///
 /// `folder` holds the CUDA and cuDNN dynamic libraries. The GPU ONNX Runtime build
@@ -117,10 +148,7 @@ fn cpu_dispatch(options: OnnxOptions) -> ort::ep::ExecutionProviderDispatch {
 /// panics when no runtime is set up yet.
 pub(crate) fn preload_cuda_dylibs(folder: &Path) -> Result<(), InferenceError> {
     add_to_dll_search_path(folder);
-    for name in ort::ep::cuda::CUDA_DYLIBS
-        .iter()
-        .chain(ort::ep::cuda::CUDNN_DYLIBS)
-    {
+    for name in CUDA_DYLIBS.iter().chain(ort::ep::cuda::CUDNN_DYLIBS) {
         let path = folder.join(name);
         let library = unsafe { libloading::Library::new(path.as_os_str()) }.map_err(|error| {
             InferenceError::ProviderStart(format!(
@@ -136,7 +164,7 @@ pub(crate) fn preload_cuda_dylibs(folder: &Path) -> Result<(), InferenceError> {
 
 /// Put `folder` on the DLL search path, once per process (Windows).
 ///
-/// [`preload_cuda_dylibs`] loads every library of `CUDA_DYLIBS` and `CUDNN_DYLIBS` by
+/// [`preload_cuda_dylibs`] loads every library of [`CUDA_DYLIBS`] and `CUDNN_DYLIBS` by
 /// full path, but the cuDNN 9 frontend also loads `cudnn_engines_tensor_ir64_9.dll` at
 /// run time by bare name. Windows resolves a bare name through the search path, not
 /// through the folder of the library that asks for it, so the preload alone leaves the

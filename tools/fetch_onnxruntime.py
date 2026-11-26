@@ -8,18 +8,25 @@ statically. The tests and development use the library this script fetches.
     python tools/fetch_onnxruntime.py
 
 This script holds one pin: the Microsoft ONNX Runtime release whose C API matches the
-pinned `ort` crate. `ort` 2.0.0-rc.13 uses ONNX Runtime 1.28 (ORT API version 27), so the
-pin is the `v1.28.3` patch of that minor line. The release assets:
+pinned `ort` crate. `ort` 2.0.0-rc.15 is built for ONNX Runtime 1.31 (ORT API version 31),
+so the pin is `1.31.1`, the newest patch of that minor line (task 63). The pin was `v1.28.3`
+from the GitHub release, until `github.com/microsoft/onnxruntime` began to return 404 (task
+62). The source is the `Microsoft.ML.OnnxRuntime` package on nuget.org, which carries both
+platforms:
 
-    linux-x64  onnxruntime-linux-x64-1.28.3.tgz
-    win-x64    onnxruntime-win-x64-1.28.3.zip
+    win-x64    runtimes/win-x64/native/onnxruntime.dll
+    linux-x64  runtimes/linux-x64/native/libonnxruntime.so
 
-The Linux library keeps the glibc 2.35 baseline of SRS §2. A direct read of the ELF
-version-need table of `libonnxruntime.so.1.28.3` shows its newest glibc requirement is
-`GLIBC_2.27`, and it holds no `__isoc23_*` symbol. The glibc 2.35 of Ubuntu 22.04 is
-therefore sufficient. The pyke.io binary that `ort`'s default features download is built
-with a newer toolchain, and its `__isoc23_strtol`, `__isoc23_strtoll`, and
-`__isoc23_strtoull` need glibc 2.38. That is why this script pins the Microsoft build.
+The script installs the current platform's libraries into `<tag>/<folder>/lib/` and the
+package's `LICENSE` and `ThirdPartyNotices.txt` into `<tag>/<folder>/`. The Rust tests and
+`tools/generate_notices.py` read that layout.
+
+The Linux library keeps the glibc 2.35 baseline of SRS §2. A read of
+`libonnxruntime.so` 1.31.1 shows its newest glibc requirement is `GLIBC_2.28`, and it holds
+no `__isoc23_*` symbol (task 63). The glibc 2.35 of Ubuntu 22.04 is therefore sufficient.
+The pyke.io binary that `ort`'s default features download is built with a newer toolchain,
+and its `__isoc23_strtol`, `__isoc23_strtoll`, and `__isoc23_strtoull` need glibc 2.38.
+That is why this script pins the Microsoft build.
 
 It is idempotent: when the pinned build is already installed it does nothing. It checks
 the SHA-256 before it extracts, and it leaves no partial folder when the check fails.
@@ -31,26 +38,25 @@ from __future__ import annotations
 import hashlib
 import shutil
 import sys
-import tarfile
 import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
 
-# One pin: a Microsoft ONNX Runtime release that matches the pinned `ort` API. The SHA-256
-# values come from the release assets on GitHub. Confirm them with `gh release view v1.28.3`.
-TAG = "v1.28.3"
+# One pin: a Microsoft ONNX Runtime release that matches the pinned `ort` API. One package
+# serves both platforms. The SHA-256 is of the `.nupkg` file that nuget.org serves, measured
+# on 2026-11-26 (task 63).
+VERSION = "1.31.1"
+TAG = f"v{VERSION}"
+PACKAGE = f"microsoft.ml.onnxruntime.{VERSION}.nupkg"
+PACKAGE_SHA256 = "6871ccbc97f3d5bdb4095a1dcec33aa78d56f6ed8de5980ef5fa1d9f2e7c679a"
 ASSETS = {
-    "win-x64": (
-        "onnxruntime-win-x64-1.28.3.zip",
-        "1d6fab48e85f948436af7c8c971d2c145cf224e2c444755dec894f8b0de11a83",
-    ),
-    "linux-x64": (
-        "onnxruntime-linux-x64-1.28.3.tgz",
-        "db14e4863bd37893fc59729d986ab2a0d043d10b7d44da1913c4982b7e3d009c",
-    ),
+    "win-x64": (PACKAGE, PACKAGE_SHA256),
+    "linux-x64": (PACKAGE, PACKAGE_SHA256),
 }
-BASE_URL = f"https://github.com/microsoft/onnxruntime/releases/download/{TAG}"
+BASE_URL = f"https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/{VERSION}"
+# The package's own documents, which the notice generator reads.
+DOCUMENTS = ("LICENSE", "ThirdPartyNotices.txt")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TAG_DIR = REPO_ROOT / ".cache" / "onnxruntime" / TAG
 COMPLETE_MARKER = ".complete"
@@ -60,13 +66,18 @@ class ChecksumError(RuntimeError):
     """The downloaded asset does not match the pinned SHA-256."""
 
 
+def platform_rid() -> str:
+    """The NuGet runtime identifier of the current platform."""
+    if sys.platform.startswith("win"):
+        return "win-x64"
+    if sys.platform.startswith("linux"):
+        return "linux-x64"
+    raise SystemExit(f"no pinned ONNX Runtime asset for this platform: {sys.platform}")
+
+
 def platform_asset() -> tuple[str, str]:
     """The (asset name, sha256) for the current platform."""
-    if sys.platform.startswith("win"):
-        return ASSETS["win-x64"]
-    if sys.platform.startswith("linux"):
-        return ASSETS["linux-x64"]
-    raise SystemExit(f"no pinned ONNX Runtime asset for this platform: {sys.platform}")
+    return ASSETS[platform_rid()]
 
 
 def sha256_of(path: Path) -> str:
@@ -92,14 +103,27 @@ def is_complete(tag_dir: Path) -> bool:
     return (tag_dir / COMPLETE_MARKER).is_file() and library(tag_dir) is not None
 
 
-def extract(archive: Path, dest: Path) -> None:
-    """Extract a `.zip` or `.tgz` archive into `dest`."""
-    if archive.suffix == ".zip":
-        with zipfile.ZipFile(archive) as handle:
-            handle.extractall(dest)
-    else:
-        with tarfile.open(archive) as handle:
-            handle.extractall(dest, filter="data")
+def extract(archive: Path, dest: Path, rid: str) -> None:
+    """Install one platform of a NuGet package into `dest/onnxruntime-<rid>-<version>/`.
+
+    The platform's libraries under `runtimes/<rid>/native/` go into `lib/`, and the
+    package's documents go beside it. Every other member is left out.
+    """
+    folder = dest / f"onnxruntime-{rid}-{VERSION}"
+    lib = folder / "lib"
+    lib.mkdir(parents=True)
+    native = f"runtimes/{rid}/native/"
+    with zipfile.ZipFile(archive) as handle:
+        for member in handle.infolist():
+            name = member.filename
+            if name.startswith(native) and not member.is_dir() and "/" not in name[len(native):]:
+                target = lib / name[len(native):]
+            elif name in DOCUMENTS:
+                target = folder / name
+            else:
+                continue
+            with handle.open(member) as source:
+                target.write_bytes(source.read())
 
 
 def download(url: str) -> bytes:
@@ -114,6 +138,7 @@ def install(
     expected_sha256: str,
     *,
     url: str,
+    rid: str | None = None,
     fetch=download,
 ) -> Path:
     """Install the asset into `tag_dir`, or return it unchanged when it is already complete.
@@ -135,7 +160,7 @@ def install(
 
         unpacked = staging / "unpacked"
         unpacked.mkdir()
-        extract(archive, unpacked)
+        extract(archive, unpacked, rid or platform_rid())
         (unpacked / COMPLETE_MARKER).write_text(f"{asset_name}\n{expected_sha256}\n", encoding="utf-8")
 
         if tag_dir.exists():

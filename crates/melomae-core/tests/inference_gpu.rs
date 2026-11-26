@@ -31,7 +31,7 @@ use melomae_core::inference::{
 use common::max_abs_diff;
 
 /// The pinned CUDA tag. Keep this in step with `tools/fetch_cuda.py`.
-const CUDA_TAG: &str = "v1.28.3-cuda12";
+const CUDA_TAG: &str = "v1.31.1-cuda12";
 
 /// The SRS §12.1 parity limit on the maximum absolute difference.
 const MAX_ABS_LIMIT: f32 = 1e-3;

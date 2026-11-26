@@ -17,8 +17,16 @@ folder is what the engine preloads, so the CUDA provider finds its dependencies.
 Two pins:
 
 1. The Microsoft ONNX Runtime release whose C API matches the pinned `ort` crate,
-   built for CUDA 12.x. `ort` 2.0.0-rc.13 uses ONNX Runtime 1.28 (ORT API 27). The
-   release asset is `onnxruntime-win-x64-gpu_cuda12-1.28.3.zip`.
+   built for CUDA 12.x. `ort` 2.0.0-rc.15 is built for ONNX Runtime 1.31 (ORT API 31).
+   The source is the `Microsoft.ML.OnnxRuntime.Gpu.Windows` 1.31.1 package on Microsoft's
+   `onnxruntime-cuda-12` Azure Artifacts feed, whose libraries sit under
+   `runtimes/win-x64/native/`. The package of the same name on nuget.org is a CUDA 13
+   build from 1.27 on: its CUDA provider needs `cublasLt64_13.dll`. The ONNX Runtime
+   CUDA execution provider page states this ("Starting with version 1.27, GPU packages
+   published to PyPI and NuGet are built with CUDA 13.0 by default"), checked
+   2026-11-25. The pin was the GitHub release asset
+   `onnxruntime-win-x64-gpu_cuda12-1.28.3.zip` until `github.com/microsoft/onnxruntime`
+   began to return 404 (task 62).
 2. The NVIDIA Python wheels that carry the CUDA and cuDNN runtime libraries for
    Windows. The ONNX Runtime CUDA execution provider page states the CUDA 12.x
    build needs CUDA 12.8 or newer and cuDNN 9.x:
@@ -26,7 +34,7 @@ Two pins:
    table "CUDA 12.x", checked 2026-10-14. The pinned wheels are CUDA 12.9 and
    cuDNN 9.27.
 
-The wheels and the release asset publish a SHA-256. The script checks the SHA-256
+The wheels publish a SHA-256, and task 62 measured the package's. The script checks the SHA-256
 of every archive before it extracts, and it leaves no partial folder when a check
 fails. It is idempotent: when the pinned build is already installed it does
 nothing. Standard library only. It never writes outside `.cache/cuda`.
@@ -45,15 +53,22 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-# The CUDA major the pinned `ort` crate preloads on Windows
-# (`ort::ep::cuda::CUDA_DYLIBS`: cudart64_12, cublasLt64_12, cublas64_12, cufft64_11).
+# The CUDA major the engine preloads on Windows (`CUDA_DYLIBS` in
+# `crates/melomae-core/src/inference/onnx.rs`: cudart64_12, cublasLt64_12, cublas64_12,
+# cufft64_11). `ort` 2.0.0-rc.15 lists the CUDA 13 names, so the engine keeps its own list
+# (task 63).
 CUDA_MAJOR = 12
 
 # The Microsoft GPU build whose C API matches the pinned `ort` version.
-ORT_TAG = "v1.28.3"
-ORT_ASSET = "onnxruntime-win-x64-gpu_cuda12-1.28.3.zip"
-ORT_SHA256 = "65d7f956649df80a8ccdcafa7843e4b02f38bfc9e6de28711ed8384508040330"
-ORT_URL = f"https://github.com/microsoft/onnxruntime/releases/download/{ORT_TAG}/{ORT_ASSET}"
+# The SHA-256 is of the `.nupkg` file that the feed serves, measured on 2026-11-26 (task 63).
+ORT_VERSION = "1.31.1"
+ORT_TAG = f"v{ORT_VERSION}"
+ORT_ASSET = f"microsoft.ml.onnxruntime.gpu.windows.{ORT_VERSION}.nupkg"
+ORT_SHA256 = "bf578833d5e15f593ce54dd504abcd2195d44b0761da0ff47cd249984c034a7f"
+ORT_URL = (
+    "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/"
+    f"nuget/v3/flat2/microsoft.ml.onnxruntime.gpu.windows/{ORT_VERSION}/{ORT_ASSET}"
+)
 
 # The NVIDIA runtime wheels for Windows x86_64. Each entry is
 # (wheel file name, download URL, SHA-256). The hashes come from the PyPI JSON
@@ -156,11 +171,12 @@ def is_complete(tag_dir: Path) -> bool:
 def extract_libraries(archive: Path, dest: Path) -> None:
     """Extract every dynamic library of a `.zip` archive into `dest`, flattened.
 
-    The ONNX Runtime release keeps its libraries under `<name>/lib/`. A wheel keeps
-    the NVIDIA libraries under `nvidia/<component>/bin/`. Both are flattened to the
-    bare file name, so the engine finds every library in one folder. Only members
-    under a `lib/` or `bin/` directory are read; a wheel's headers and metadata are
-    skipped.
+    The ONNX Runtime package keeps its libraries under `runtimes/win-x64/native/`. A
+    wheel keeps the NVIDIA libraries under `nvidia/<component>/bin/`. Both are
+    flattened to the bare file name, so the engine finds every library in one folder.
+    Only members under a `lib/`, `bin/`, or `native/` directory are read; a wheel's
+    headers and metadata are skipped. A package member under `runtimes/<rid>/` for any
+    other platform is skipped, so its library never replaces the x64 one.
     """
     with zipfile.ZipFile(archive) as handle:
         for member in handle.infolist():
@@ -170,7 +186,9 @@ def extract_libraries(archive: Path, dest: Path) -> None:
             name = parts[-1]
             if not name.lower().endswith(SUFFIXES):
                 continue
-            if not any(part.lower() in ("lib", "bin") for part in parts[:-1]):
+            if not any(part.lower() in ("lib", "bin", "native") for part in parts[:-1]):
+                continue
+            if len(parts) > 1 and parts[0] == "runtimes" and parts[1] != "win-x64":
                 continue
             with handle.open(member) as source:
                 (dest / name).write_bytes(source.read())
